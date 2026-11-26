@@ -39,69 +39,187 @@ const RAY_ORIGIN_EPS_MM = 0.02;
 
 const warnedNoMeshModelIds = new Set<string>();
 
-export function linePassesMeshClearance(posA: Vec3, posB: Vec3, modelId: string, diameterMm: number): boolean {
-    const radius = diameterMm / 2;
-    const meshEntries = getAllMeshEntriesForAutoBrace();
+type CachedWorldBox = {
+    geometry: THREE.BufferGeometry;
+    posAttr: THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined;
+    matrixElements: Float64Array;
+    positionVersion: number;
+    box: THREE.Box3;
+};
 
-    const entry = meshEntries.get(modelId);
-    if (!entry) {
-        // No mesh registered → can't check → allow, but surface the silent pass once per model.
+const worldBoxCache = new WeakMap<THREE.Mesh, CachedWorldBox>();
+
+function matrixMatches(a: Float64Array, b: ArrayLike<number>): boolean {
+    for (let i = 0; i < 16; i += 1) {
+        if (a[i] !== b[i]) return false;
+    }
+    return true;
+}
+
+function getMeshWorldBox(mesh: THREE.Mesh): THREE.Box3 | null {
+    const geometry = mesh.geometry as THREE.BufferGeometry;
+    const posAttr = geometry.getAttribute('position') as
+        | THREE.BufferAttribute
+        | THREE.InterleavedBufferAttribute
+        | undefined;
+    const posVersion = posAttr && 'version' in posAttr ? posAttr.version : -1;
+    const mw = mesh.matrixWorld.elements;
+
+    const cached = worldBoxCache.get(mesh);
+    if (
+        cached &&
+        cached.geometry === geometry &&
+        cached.posAttr === posAttr &&
+        cached.positionVersion === posVersion &&
+        matrixMatches(cached.matrixElements, mw)
+    ) {
+        return cached.box;
+    }
+
+    if (
+        !geometry.boundingBox ||
+        (cached !== undefined &&
+            cached.geometry === geometry &&
+            (cached.posAttr !== posAttr || cached.positionVersion !== posVersion))
+    ) {
+        geometry.computeBoundingBox();
+    }
+    if (!geometry.boundingBox || geometry.boundingBox.isEmpty()) {
+        return null;
+    }
+
+    const box = geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld);
+    const matrixElements = new Float64Array(16);
+    for (let i = 0; i < 16; i += 1) matrixElements[i] = mw[i];
+    worldBoxCache.set(mesh, { geometry, posAttr, matrixElements, positionVersion: posVersion, box });
+    return box;
+}
+
+let scopedAllowedModelIds: ReadonlySet<string> | undefined;
+
+export function withScopedAutoBraceModels<T>(
+    allowedModelIds: ReadonlySet<string>,
+    fn: () => T,
+): T {
+    const prev = scopedAllowedModelIds;
+    scopedAllowedModelIds = allowedModelIds;
+    try {
+        return fn();
+    } finally {
+        scopedAllowedModelIds = prev;
+    }
+}
+
+const scratchStart = new THREE.Vector3();
+const scratchDir = new THREE.Vector3();
+const scratchOrigin = new THREE.Vector3();
+const scratchPerp1 = new THREE.Vector3();
+const scratchPerp2 = new THREE.Vector3();
+const scratchRaycaster = new THREE.Raycaster();
+
+export function linePassesMeshClearance(
+    posA: Vec3,
+    posB: Vec3,
+    modelId: string,
+    diameterMm: number,
+    allowedModelIds?: ReadonlySet<string>,
+): boolean {
+    const dx = posB.x - posA.x;
+    const dy = posB.y - posA.y;
+    const dz = posB.z - posA.z;
+    const lengthSq = dx * dx + dy * dy + dz * dz;
+    if (lengthSq < 0.01) return true; // degenerate segment (< 0.1mm) → allow
+
+    const meshEntries = getAllMeshEntriesForAutoBrace();
+    const effectiveAllowed = allowedModelIds ?? scopedAllowedModelIds;
+
+    const primaryAllowed = !effectiveAllowed || effectiveAllowed.has(modelId);
+    const primaryEntry = primaryAllowed ? meshEntries.get(modelId) : undefined;
+    if (primaryAllowed && !primaryEntry) {
         if (!warnedNoMeshModelIds.has(modelId)) {
             warnedNoMeshModelIds.add(modelId);
             console.warn(
                 `[AutoBrace] No mesh registered for model '${modelId}'; skipping mesh clearance check for its braces.`,
             );
         }
-        return true;
+        if (!effectiveAllowed) return true;
     }
 
-    const mesh = entry.mesh;
+    const radius = diameterMm / 2;
+    const segMinX = Math.min(posA.x, posB.x) - radius;
+    const segMaxX = Math.max(posA.x, posB.x) + radius;
+    const segMinY = Math.min(posA.y, posB.y) - radius;
+    const segMaxY = Math.max(posA.y, posB.y) + radius;
+    const segMinZ = Math.min(posA.z, posB.z) - radius;
+    const segMaxZ = Math.max(posA.z, posB.z) + radius;
 
-    // Build direction and length
-    const startVec = new THREE.Vector3(posA.x, posA.y, posA.z);
-    const direction = new THREE.Vector3(posB.x - posA.x, posB.y - posA.y, posB.z - posA.z);
-    const length = direction.length();
+    let frameInitialized = false;
+    let eps = 0;
 
-    if (length < 0.1) return true; // degenerate segment → allow
-
-    direction.multiplyScalar(1 / length);
-
-    // Offset origin slightly forward to avoid self-intersections
-    const eps = Math.min(RAY_ORIGIN_EPS_MM, Math.max(0, length * 0.1));
-    const maxRayDistance = Math.max(0, length - eps);
-
-    const raycaster = new THREE.Raycaster();
-    raycaster.near = 0;
-    raycaster.far = maxRayDistance;
-
-    const rayOrigin = new THREE.Vector3();
-
-    const castRay = (ox: number, oy: number, oz: number): boolean => {
-        rayOrigin.set(
-            startVec.x + ox + direction.x * eps,
-            startVec.y + oy + direction.y * eps,
-            startVec.z + oz + direction.z * eps,
-        );
-        raycaster.set(rayOrigin, direction);
-        const intersections = raycaster.intersectObject(mesh, false);
-        return intersections.length > 0;
+    const ensureRayFrame = (): void => {
+        if (frameInitialized) return;
+        frameInitialized = true;
+        const length = Math.sqrt(lengthSq);
+        scratchStart.set(posA.x, posA.y, posA.z);
+        scratchDir.set(dx / length, dy / length, dz / length);
+        eps = Math.min(RAY_ORIGIN_EPS_MM, Math.max(0, length * 0.1));
+        scratchRaycaster.near = 0;
+        scratchRaycaster.far = Math.max(0, length - eps);
+        const arbitrary = Math.abs(scratchDir.dot(WORLD_UP)) > 0.9 ? WORLD_RIGHT : WORLD_UP;
+        scratchPerp1.crossVectors(scratchDir, arbitrary).normalize();
+        scratchPerp2.crossVectors(scratchDir, scratchPerp1).normalize();
     };
 
-    // 1. Center ray
-    if (castRay(0, 0, 0)) return false;
+    const passesSingleMesh = (mesh: THREE.Mesh): boolean => {
+        const worldBox = getMeshWorldBox(mesh);
+        if (
+            worldBox &&
+            (segMaxX < worldBox.min.x ||
+                segMinX > worldBox.max.x ||
+                segMaxY < worldBox.min.y ||
+                segMinY > worldBox.max.y ||
+                segMaxZ < worldBox.min.z ||
+                segMinZ > worldBox.max.z)
+        ) {
+            return true;
+        }
 
-    // 2. Perimeter whisker rays
-    // Build a perpendicular coordinate frame from the direction vector
-    const arbitrary = Math.abs(direction.dot(WORLD_UP)) > 0.9 ? WORLD_RIGHT : WORLD_UP;
-    const perp1 = new THREE.Vector3().crossVectors(direction, arbitrary).normalize();
-    const perp2 = new THREE.Vector3().crossVectors(direction, perp1).normalize();
+        ensureRayFrame();
 
-    for (const off of WHISKER_OFFSETS) {
-        const ox = (perp1.x * off.u + perp2.x * off.v) * radius;
-        const oy = (perp1.y * off.u + perp2.y * off.v) * radius;
-        const oz = (perp1.z * off.u + perp2.z * off.v) * radius;
+        const castRay = (ox: number, oy: number, oz: number): boolean => {
+            scratchOrigin.set(
+                scratchStart.x + ox + scratchDir.x * eps,
+                scratchStart.y + oy + scratchDir.y * eps,
+                scratchStart.z + oz + scratchDir.z * eps,
+            );
+            scratchRaycaster.set(scratchOrigin, scratchDir);
+            return scratchRaycaster.intersectObject(mesh, false).length > 0;
+        };
 
-        if (castRay(ox, oy, oz)) return false;
+        if (castRay(0, 0, 0)) return false;
+
+        for (const off of WHISKER_OFFSETS) {
+            const ox = (scratchPerp1.x * off.u + scratchPerp2.x * off.v) * radius;
+            const oy = (scratchPerp1.y * off.u + scratchPerp2.y * off.v) * radius;
+            const oz = (scratchPerp1.z * off.u + scratchPerp2.z * off.v) * radius;
+            if (castRay(ox, oy, oz)) return false;
+        }
+
+        return true;
+    };
+
+    if (primaryEntry && !passesSingleMesh(primaryEntry.mesh)) {
+        return false;
+    }
+
+    if (effectiveAllowed) {
+        for (const candidateModelId of effectiveAllowed) {
+            if (candidateModelId === modelId) continue;
+            const siblingEntry = meshEntries.get(candidateModelId);
+            if (siblingEntry && !passesSingleMesh(siblingEntry.mesh)) {
+                return false;
+            }
+        }
     }
 
     return true;

@@ -1,20 +1,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import * as THREE from 'three';
+import { initializeBVH, accelerateGeometry } from '../../utils/bvh';
 import {
     sizeParameters,
     presetForArea,
     activeSizingBand,
+    modelSizingFactors,
     resolvedSizingBandsForRun,
     setResolvedSizingBands,
     HEIGHT_REFERENCE_MM,
+    TIP_CONTACT_MIN_SHAFT_RATIO,
+    STRUCTURE_SHAFT_HEADROOM_MM,
+    estimateHostCount,
 } from '../autoSupport/parameterSizing';
+import { computeAutoSupportPlan } from '../autoSupport/autoPlace';
 import type { ModelSizingContext } from '../autoSupport/parameterSizing';
 import { setSettings, getSettings, updateAutoSupportSettings } from '../Settings/state';
 import { createPreset, deletePreset, getPresetById } from '../Settings/presets';
 import { createDefaultSettings } from '../Settings/types';
 import type { CandidatePoint } from '../autoSupport/types';
-import { AUTO_SUPPORT_CONSTRAINTS, SIZING_BANDS } from '../autoSupport/settings';
+import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
+import { AUTO_SUPPORT_CONSTRAINTS, createDefaultAutoSupportSettings, SIZING_BANDS } from '../autoSupport/settings';
 import type { AutoSupportSettings, SizingBand } from '../autoSupport/settings';
 
 function makeCandidate(over: Partial<CandidatePoint> = {}): CandidatePoint {
@@ -111,9 +119,9 @@ test('density-grid cell sits FLAT at the active band', () => {
         const s = sizeParameters(makeCandidate({ islandAreaMm2: 8, zHeight: 10 }));
         assert.equal(s.shaftDiameterMm, 1.4, 'a cell reads exactly the tier band — not the cell area');
         assert.equal(s.rootsDiameterMm, 2.3);
-        // The 30%-of-shaft floor binds at factory band ratios (0.4 < 1.4/3).
-        assert.ok(Math.abs(s.tipContactDiameterMm! - 0.42) < 1e-9,
-            `flat ceiling contact floored at 30% of shaft (${s.tipContactDiameterMm})`);
+        // With the 20%-of-shaft floor (1.4 * 0.2 = 0.28 <= 0.40), flat ceiling reads the true anchor band contact.
+        assert.ok(Math.abs(s.tipContactDiameterMm! - 0.4) < 1e-9,
+            `flat ceiling contact reads true anchor band (${s.tipContactDiameterMm})`);
     });
 });
 
@@ -219,11 +227,11 @@ test('a bigger print gets thicker trunks than a small one', () => {
     const large = sizeParameters(candidate, 1, ctx(400))!;
     assert.deepEqual(mini, sizeParameters(candidate), 'a mini is the band, exactly');
     assert.ok(mid.shaftDiameterMm! > mini.shaftDiameterMm!, 'mid-size model is thicker');
-    assert.ok(large.shaftDiameterMm! > mid.shaftDiameterMm!, 'larger model is thicker again');
-    assert.ok(
-        large.shaftDiameterMm! <= mini.shaftDiameterMm! * AUTO_SUPPORT_CONSTRAINTS.modelSizeFactorCap.defaultValue * AUTO_SUPPORT_CONSTRAINTS.modelLoadFactorCap.defaultValue + 1e-9,
-        'the factors bound the growth',
-    );
+    // The curve stops at the structure band + headroom; a larger model past
+    // that point is not a fatter pole, it is more bracing (stress loop).
+    assert.equal(large.shaftDiameterMm, mid.shaftDiameterMm, 'structure curve saturates at the headroom cap');
+    assert.ok(large.shaftDiameterMm! <= activeSizingBand().shaftDiameterMm + STRUCTURE_SHAFT_HEADROOM_MM + 1e-9,
+        'the structure shaft cap holds');
     assert.ok(large.rootsDiameterMm! > mini.rootsDiameterMm!, 'the pad scales with the trunk');
     assert.ok(large.tipContactDiameterMm! > mini.tipContactDiameterMm!, 'the tip floor rides the shaft');
 });
@@ -247,20 +255,24 @@ test('sizing without a model context is exactly the band', () => {
     assert.equal(s.rootsDiameterMm, activeSizingBand().rootDiameterMm, 'roots too');
 });
 
-test('tip contact never drops below 30% of the shaft', () => {
-    // At factory band ratios the 30% floor binds before the angle factor
-    // differentiates — the floor is the guarantee that matters.
-    withBand(SIZING_BANDS.structure, () => {
+test('tip contact never drops below TIP_CONTACT_MIN_SHAFT_RATIO (25%) of the shaft', () => {
+    const heavyShaftBand: SizingBand = {
+        ...SIZING_BANDS.structure,
+        shaftDiameterMm: 1.6,
+        tipContactDiameterMm: 0.28,
+    };
+    withBand(heavyShaftBand, () => {
+        const expectedFloor = 1.6 * TIP_CONTACT_MIN_SHAFT_RATIO;
         const flat = sizeParameters(makeCandidate({ islandAreaMm2: 8, tipNormal: { x: 0, y: 0, z: -1 } }))!;
         const slope = sizeParameters(makeCandidate({
             islandAreaMm2: 8,
             tipNormal: { x: 0, y: -0.5, z: -0.866 }, // 30° from straight-down
         }))!;
-        assert.ok(Math.abs(flat.tipContactDiameterMm! - 0.3) < 1e-9,
-            `flat contact at the floor (${flat.tipContactDiameterMm})`);
-        assert.ok(Math.abs(slope.tipContactDiameterMm! - 0.3) < 1e-9,
+        assert.ok(Math.abs(flat.tipContactDiameterMm! - expectedFloor) < 1e-9,
+            `flat contact at the 25% floor (${flat.tipContactDiameterMm})`);
+        assert.ok(Math.abs(slope.tipContactDiameterMm! - expectedFloor) < 1e-9,
             `slope contact floored identically (${slope.tipContactDiameterMm})`);
-        assert.ok(slope.tipContactDiameterMm! >= 1.0 * 0.3 - 1e-9, 'floor = 30% of shaft');
+        assert.ok(slope.tipContactDiameterMm! >= expectedFloor - 1e-9, 'floor = 25% of shaft');
     });
 });
 
@@ -279,7 +291,7 @@ test('sizing is deterministic', () => {
 
 test('per-point tip override bypasses band and floor', () => {
     // Explicit 0.22 tip on a structure shaft: kept as-is even though the
-    // 30%-of-shaft floor (0.3) and the band contact (0.28) both exceed it.
+    // band contact (0.28) exceeds it.
     const s = sizeParameters(makeCandidate({ islandAreaMm2: 8, zHeight: 10, tipDiameterMm: 0.22 }));
     assert.equal(s.tipContactDiameterMm, 0.22, 'explicit tip wins over band and floor');
     assert.equal(s.tipBodyDiameterMm, s.shaftDiameterMm, 'shaft untouched by the tip override');
@@ -287,7 +299,7 @@ test('per-point tip override bypasses band and floor', () => {
 
 test('absent override keeps band × angle with floor', () => {
     const s = sizeParameters(makeCandidate({ islandAreaMm2: 8, zHeight: 10 }));
-    assert.ok(s.tipContactDiameterMm! >= s.shaftDiameterMm! * 0.3 - 1e-9, 'floor holds without override');
+    assert.ok(s.tipContactDiameterMm! >= s.shaftDiameterMm! * TIP_CONTACT_MIN_SHAFT_RATIO - 1e-9, 'floor holds without override');
 });
 
 // ---------------------------------------------------------------------------
@@ -302,9 +314,13 @@ test('modelSizeFactorCap bounds the size factor', () => {
     const candidate = makeCandidate({ islandAreaMm2: 0.001, zHeight: 10 });
     const band = activeSizingBand().shaftDiameterMm;
 
+    assert.equal(modelSizingFactors(ctx).sizeFactor, AUTO_SUPPORT_CONSTRAINTS.modelSizeFactorCap.defaultValue,
+        'default cap 1.45 is the size factor');
     const defaulted = sizeParameters(candidate, 1, ctx)!;
-    assert.equal(defaulted.shaftDiameterMm, band * AUTO_SUPPORT_CONSTRAINTS.modelSizeFactorCap.defaultValue,
-        'default cap 1.45 is the sized size factor');
+    // The factor is 1.45 but the structure shaft curve stops at band+0.4;
+    // the cap is still visible on the factor and on a larger band.
+    assert.equal(defaulted.shaftDiameterMm, band + STRUCTURE_SHAFT_HEADROOM_MM,
+        'structure curve caps at 1.4 mm');
 
     const capped = withAutoSupport({ modelSizeFactorCap: 1.0 }, () => sizeParameters(candidate, 1, ctx)!);
     assert.equal(capped.shaftDiameterMm, band, 'cap 1.0 removes the size factor entirely');
@@ -394,14 +410,164 @@ test('a run naming a custom Support Studio preset sizes with its numbers, not th
     updateAutoSupportSettings({ sizingPreset: 'structure' });
 });
 
-test('the three model factors together are capped at the documented 1.85', () => {
+test('the run factors stay individually capped and the shaft curve stops at the headroom', () => {
     const band = activeSizingBand().shaftDiameterMm;
     const candidate = makeCandidate({ islandAreaMm2: 8, zHeight: 100 });
     // Large part (size cap 1.45), heavy share (load cap 1.3) and a tall
     // support (height cap 1.35): 2.54 if multiplied freely.
     const ctx: ModelSizingContext = { modelVolumeMm3: 400000, totalCandidates: 20, modelSizeMm: 400 };
+    // Each run-level factor keeps its own cap; the shaft curve then stops at
+    // band + headroom, so the product can never club a structure pole.
+    const factors = modelSizingFactors(ctx);
+    assert.ok(factors.sizeFactor <= AUTO_SUPPORT_CONSTRAINTS.modelSizeFactorCap.defaultValue + 1e-9, 'size factor capped');
+    assert.ok(factors.loadFactor <= AUTO_SUPPORT_CONSTRAINTS.modelLoadFactorCap.defaultValue + 1e-9, 'load factor capped');
     const sized = sizeParameters(candidate, 1, ctx)!;
-    assert.ok(sized.shaftDiameterMm! <= band * 1.85 + 1e-9,
-        `combined factor caps at 1.85 (got ${sized.shaftDiameterMm})`);
-    assert.ok(sized.shaftDiameterMm! > band * 1.5, 'and the scaled end still grows');
+    assert.ok(sized.shaftDiameterMm! <= band + STRUCTURE_SHAFT_HEADROOM_MM + 1e-9,
+        `structure shaft cap (got ${sized.shaftDiameterMm})`);
+    assert.ok(sized.shaftDiameterMm! > band * 1.3, 'and the scaled end still grows');
 });
+
+test('the structure headroom caps tall/large trunks, and sizeScale is the explicit escape', () => {
+    const ctx: ModelSizingContext = { modelVolumeMm3: 400000, totalCandidates: 20, modelSizeMm: 400 };
+    const candidate = makeCandidate({ islandAreaMm2: 8, zHeight: 100 });
+    const band = activeSizingBand().shaftDiameterMm;
+
+    const sized = sizeParameters(candidate, 1, ctx)!;
+    assert.equal(sized.shaftDiameterMm, band + STRUCTURE_SHAFT_HEADROOM_MM,
+        'the height/load curve cannot club a structure trunk past 1.4');
+
+    const explicit = sizeParameters(candidate, 1.2, ctx)!;
+    assert.ok(explicit.shaftDiameterMm! > sized.shaftDiameterMm!, 'sizeScale is an instruction, not a curve');
+    assert.ok(explicit.shaftDiameterMm! <= 2.0, 'but still bounded by the absolute shaft ceiling');
+});
+
+test('the anchor band keeps the full shaft ceiling (its job is anchoring)', () => {
+    const ctx: ModelSizingContext = { modelVolumeMm3: 400000, totalCandidates: 20, modelSizeMm: 400 };
+    const candidate = makeCandidate({ islandAreaMm2: 8, zHeight: 100 });
+    withTier('anchor', () => {
+        const sized = sizeParameters(candidate, 1, ctx)!;
+        assert.ok(sized.shaftDiameterMm! > SIZING_BANDS.structure.shaftDiameterMm + STRUCTURE_SHAFT_HEADROOM_MM,
+            'anchor can grow past the structure headroom');
+        assert.ok(sized.shaftDiameterMm! <= 2.0, 'but not past the absolute ceiling');
+    });
+});
+
+test('sizeParameters honors sizeScale in slot 2 and customAutoSettings in slot 4 without mutating global store', () => {
+    const storeBefore = structuredClone(getSettings().autoSupport);
+    const ctx: ModelSizingContext = { modelVolumeMm3: 400000, totalCandidates: 20, modelSizeMm: 400 };
+    const candidate = makeCandidate({ islandAreaMm2: 8, zHeight: 100 });
+
+    const customDetailOff: AutoSupportSettings = {
+        ...createDefaultAutoSupportSettings(),
+        sizingPreset: 'detail',
+        modelScaleEnabled: false,
+    };
+
+    const sized = sizeParameters(candidate, 1.25, ctx, customDetailOff);
+    // Detail shaft is 0.8mm; modelScaleEnabled=false pins model/height factors to 1; sizeScale=1.25 -> 1.0mm
+    assert.equal(sized.shaftDiameterMm, 1.0, '0.8mm detail band × 1.25 sizeScale with modelScaleEnabled=false');
+    assert.equal(sized.rootsDiameterMm, SIZING_BANDS.detail.rootDiameterMm * 1.25, 'detail roots × 1.25 sizeScale');
+    assert.equal(activeSizingBand(customDetailOff).shaftDiameterMm, SIZING_BANDS.detail.shaftDiameterMm);
+    assert.equal(modelSizingFactors(ctx, customDetailOff).trunkScale, 1);
+
+    assert.deepEqual(getSettings().autoSupport, storeBefore, 'global store untouched');
+});
+
+test('MED-01: factory structure and anchor presets produce strictly smaller tipContactDiameterMm on steep slopes than flat ceilings', () => {
+    for (const tier of ['structure', 'anchor'] as const) {
+        withTier(tier, () => {
+            const flat = sizeParameters(makeCandidate({
+                islandAreaMm2: 8,
+                zHeight: 10,
+                tipNormal: { x: 0, y: 0, z: -1 },
+            }));
+            const steep = sizeParameters(makeCandidate({
+                islandAreaMm2: 8,
+                zHeight: 10,
+                tipNormal: { x: 0.9798, y: 0, z: -0.2 },
+            }));
+            assert.ok(
+                steep.tipContactDiameterMm! < flat.tipContactDiameterMm!,
+                `${tier}: steep slope contact (${steep.tipContactDiameterMm}) must be strictly smaller than flat ceiling (${flat.tipContactDiameterMm})`,
+            );
+        });
+    }
+});
+
+test('MINOR-03: estimateHostCount is deterministic and order-invariant across candidate permutations', () => {
+    assert.equal(estimateHostCount([]), 0);
+    const pts: Array<Pick<CandidatePoint, 'tipPos'>> = [
+        { tipPos: { x: 0.2, y: 0.3, z: 10 } },
+        { tipPos: { x: 1.5, y: 1.1, z: 12 } }, // same 4mm cell (0,0) when grid disabled
+        { tipPos: { x: 5.0, y: 0.5, z: 14 } }, // cell (1,0)
+        { tipPos: { x: 5.2, y: 6.8, z: 16 } }, // cell (1,1)
+        { tipPos: { x: -1.2, y: -0.4, z: 8 } }, // cell (-1,-1)
+    ];
+    const reversed = [...pts].reverse();
+    const shuffled = [pts[2], pts[4], pts[0], pts[3], pts[1]];
+
+    const countA = estimateHostCount(pts, { enabled: false, spacingMm: 4 });
+    const countB = estimateHostCount(reversed, { enabled: false, spacingMm: 4 });
+    const countC = estimateHostCount(shuffled, { enabled: false, spacingMm: 4 });
+    assert.equal(countA, 4, '4 unique 4mm XY cells');
+    assert.equal(countB, countA, 'reverse order identical');
+    assert.equal(countC, countA, 'arbitrary permutation identical');
+
+    const gridCount = estimateHostCount(pts, { enabled: true, spacingMm: 1.0 });
+    assert.equal(gridCount, 5, '1mm grid spacing separates (0.2,0.3) and (1.5,1.1)');
+    assert.equal(estimateHostCount(shuffled, { enabled: true, spacingMm: 1.0 }), gridCount);
+});
+
+test('HIGH-05: computeAutoSupportPlan computes world-scaled volume minus hollowed cavityMesh volume', () => {
+    initializeBVH();
+    // Raw 10×10×10 box (1000 mm³) scaled 2× uniformly -> world outer volume = 8000 mm³.
+    // Bottom is at z = 10 in world space: local box z ∈ [-5, 5], translate(0, 0, 10) -> [5, 15], scale 2× -> [10, 30].
+    const outerGeo = new THREE.BoxGeometry(10, 10, 10).translate(0, 0, 10).toNonIndexed();
+    outerGeo.computeVertexNormals();
+    accelerateGeometry(outerGeo);
+    const outerMesh = new THREE.Mesh(outerGeo, new THREE.MeshBasicMaterial());
+    outerMesh.scale.set(2, 2, 2);
+    outerMesh.updateMatrixWorld(true);
+
+    // Cavity 6×6×6 box in local space (216 mm³) scaled 2× uniformly -> world cavity volume = 1728 mm³.
+    // Net world volume = 8000 - 1728 = 6272 mm³.
+    const cavityGeo = new THREE.BoxGeometry(6, 6, 6).translate(0, 0, 10).toNonIndexed();
+    cavityGeo.computeVertexNormals();
+    accelerateGeometry(cavityGeo);
+    const cavityMesh = new THREE.Mesh(cavityGeo, new THREE.MeshBasicMaterial());
+    cavityMesh.scale.set(2, 2, 2);
+    cavityMesh.updateMatrixWorld(true);
+
+    const islands: DetectedIsland[] = [
+        {
+            id: 'sole-1',
+            source: 'voxel',
+            contact: new THREE.Vector3(0, 0, 10),
+            baseZ: 10,
+            areaMm2: 4.0,
+        },
+    ];
+
+    const prev = getSettings();
+    setSettings({
+        ...prev,
+        autoSupport: {
+            ...prev.autoSupport,
+            minimaReinforcementEnabled: false,
+            debugSkipAutoBracing: true,
+        },
+    });
+    try {
+        const plan = computeAutoSupportPlan(islands, 'scaled-hollow-model', undefined, undefined, outerMesh, undefined, cavityMesh);
+        assert.ok(plan, 'plan succeeds');
+        const reportedVol = plan.analytics.sizingDebug?.modelVolumeMm3 ?? 0;
+        const expectedVol = 8 * 1000 - 8 * 216; // 6272 mm³
+        assert.ok(
+            Math.abs(reportedVol - expectedVol) <= 2,
+            `expected hollowed world volume ~${expectedVol} mm³, got ${reportedVol} mm³`,
+        );
+    } finally {
+        setSettings(prev);
+    }
+});
+

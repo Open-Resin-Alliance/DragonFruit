@@ -269,6 +269,7 @@ import { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
 import { useIslands } from '@/volumeAnalysis/Islands/useIslands';
 import { IslandsPanel } from '@/components/controls/IslandsPanel';
 import { AutoSupportPanel, getAutoSupportBusy, subscribeAutoSupportBusy, autoSupportDrivingScan, getAutoSupportProgress, subscribeAutoSupportProgress } from '@/components/controls/AutoSupportPanel';
+import { SupportStressPanel } from '@/components/controls/autoSupport/SupportStressPanel';
 import { installPerfConsoleAPI } from '@/supports/PlacementLogic/Pathfinding/pathfindingPerf';
 import { getUnappliedModifiers } from '@/features/mesh-modifiers/unappliedModifiers';
 import type { UnappliedModifierAction } from '@/components/organisms/modals/ModifierModals';
@@ -1652,6 +1653,7 @@ export default function Home() {
     segmentId: null,
     point: null,
   });
+  const supportShaftHoverDebugRef = React.useRef<ShaftHoverDebugDetail>(supportShaftHoverDebug);
 
   const activeSliceProfileFingerprint = sliceProfileFingerprint(activePrinterProfile?.id, activeMaterialProfile?.id);
   const slicedPlatesView = useSlicedPlates({
@@ -2377,34 +2379,29 @@ export default function Home() {
       const nextSegmentId = detail?.segmentId ?? null;
       const nextPoint = detail?.point ?? null;
 
-      setSupportShaftHoverDebug((prev) => {
-        if (
-          prev.segmentId === nextSegmentId &&
-          prev.point?.x === nextPoint?.x &&
-          prev.point?.y === nextPoint?.y &&
-          prev.point?.z === nextPoint?.z
-        ) {
-          return prev;
-        }
-
-        return {
-          segmentId: nextSegmentId,
-          point: nextPoint,
-        };
-      });
+      const prev = supportShaftHoverDebugRef.current;
+      if (
+        prev.segmentId === nextSegmentId
+        && prev.point?.x === nextPoint?.x
+        && prev.point?.y === nextPoint?.y
+        && prev.point?.z === nextPoint?.z
+      ) {
+        return;
+      }
+      const next = { segmentId: nextSegmentId, point: nextPoint };
+      supportShaftHoverDebugRef.current = next;
+      setSupportShaftHoverDebug(next);
     };
 
     const handleShaftLeave = (evt: Event) => {
       const detail = (evt as CustomEvent<{ segmentId?: string | null }>).detail;
-      setSupportShaftHoverDebug((prev) => {
-        if (!detail?.segmentId || prev.segmentId === detail.segmentId) {
-          if (prev.segmentId === null && prev.point === null) {
-            return prev;
-          }
-          return { segmentId: null, point: null };
-        }
-        return prev;
-      });
+      const prev = supportShaftHoverDebugRef.current;
+      if (!detail?.segmentId || prev.segmentId === detail.segmentId) {
+        if (prev.segmentId === null && prev.point === null) return;
+        const next = { segmentId: null, point: null };
+        supportShaftHoverDebugRef.current = next;
+        setSupportShaftHoverDebug(next);
+      }
     };
 
     window.addEventListener('shaft-hover', handleShaftHover as EventListener);
@@ -7341,6 +7338,7 @@ export default function Home() {
   // injected (no src/supports coupling in the Islands module).
   const modelRaycastRef = React.useRef<((start: THREE.Vector3, end: THREE.Vector3) => boolean) | null>(null);
   const [supportTips, setSupportTips] = React.useState<THREE.Vector3[]>([]);
+  const supportTipsRef = React.useRef<THREE.Vector3[]>([]);
 
   React.useEffect(() => {
     const updateSupportTips = () => {
@@ -7348,7 +7346,10 @@ export default function Home() {
       const tips: THREE.Vector3[] = [];
       const activeModelId = scene.activeModel?.id;
       if (!activeModelId) {
-        setSupportTips([]);
+        if (supportTipsRef.current.length > 0) {
+          supportTipsRef.current = [];
+          setSupportTips([]);
+        }
         return;
       }
 
@@ -7373,13 +7374,15 @@ export default function Home() {
         }
       }
 
-      setSupportTips(prevTips => {
-        if (prevTips.length !== tips.length) return tips;
-        for (let i = 0; i < tips.length; i++) {
-          if (!prevTips[i].equals(tips[i])) return tips;
-        }
-        return prevTips;
-      });
+      // A hover writes the support state (and notifies) without moving a tip.
+      // Calling setState here on every notification schedules a page render
+      // even when the updater returns the previous array; compare first.
+      const previous = supportTipsRef.current;
+      const unchanged = previous.length === tips.length
+        && tips.every((tip, index) => previous[index].equals(tip));
+      if (unchanged) return;
+      supportTipsRef.current = tips;
+      setSupportTips(tips);
     };
 
     updateSupportTips();
@@ -7401,6 +7404,7 @@ export default function Home() {
     layerHeightMm: slicing.layerHeightMm,
     supportTips,
     plateZ: 0,
+    modelId: scene.activeModel?.id,
     sourcePath: scene.activeModel?.sourcePath,
     activeTab: scene.mode,
     hasRaft: getRaftSettingsForModel(scene.activeModel?.id).bottomMode !== 'off',
@@ -7415,6 +7419,8 @@ export default function Home() {
 
   // 5. Supports
   const supports = useSupportInteractionManager({ mode: scene.mode });
+
+  const finalizeMirrorSessionRef = React.useRef<() => void>(() => {});
 
   const handleModeChange = React.useCallback((nextMode: typeof scene.mode) => {
     if (scene.models.length === 0 && nextMode !== 'prepare') {
@@ -7431,8 +7437,12 @@ export default function Home() {
       setShowPrintingResliceModal(true);
       return;
     }
+    if (scene.mode === 'prepare' && nextMode !== 'prepare') {
+      suppressTransformPersistenceCycles(10);
+      finalizeMirrorSessionRef.current();
+    }
     scene.setMode(nextMode);
-  }, [hasSlicedPlate, isActiveSliceStale, scene]);
+  }, [hasSlicedPlate, isActiveSliceStale, scene, suppressTransformPersistenceCycles]);
 
   const handleAddPrinterFromOnboarding = React.useCallback(() => {
     openProfileSettingsModal('printer', { openPrinterLibrary: true });
@@ -7983,7 +7993,6 @@ export default function Home() {
     handleFillPlateDuplicate,
   } = arrange;
 
-  const finalizeMirrorSessionRef = React.useRef<() => void>(() => {});
   const setTransformModeWithMirrorFinalize = React.useCallback((nextMode: TransformMode) => {
     if (transformMgr.transformMode === 'mirror' && nextMode !== 'mirror') {
       suppressTransformPersistenceCycles(10);
@@ -8047,6 +8056,10 @@ export default function Home() {
       if (isAppMode(origin.appMode) && origin.appMode !== scene.mode) {
         // The workspace switch must not put back the workspace's remembered tool over this one.
         historyOriginToolPendingRef.current = isTransformMode(origin.transformMode);
+        if (scene.mode === 'prepare' && origin.appMode !== 'prepare') {
+          suppressTransformPersistenceCycles(10);
+          finalizeMirrorSessionRef.current();
+        }
         scene.setMode(origin.appMode);
       }
       if (isTransformMode(origin.transformMode) && origin.transformMode !== transformMgr.transformMode) {
@@ -10860,20 +10873,35 @@ export default function Home() {
               <SupportSidebar activeModelId={scene.activeModelId} />
             </div>
             {autoSupportsExperimentEnabled && (
-              <div
-                key="support-auto"
-                style={{ display: supportRailMode === 'auto' && transformMgr.transformMode !== 'hollowing' ? undefined : 'none' }}
-              >
-                <AutoSupportPanel
-                  islands={islandsPoc}
-                  hasGeometry={!!scene.geom}
-                  activeModelId={scene.activeModelId ?? undefined}
-                  autoLift={selectionLifted}
-                  onAutoLiftChange={handleAutoLiftChange}
-                  onBeforeRun={requestModifierDecisionBeforeSupports}
-                  getCavityGeometry={getCavityGeometryForModel}
-                />
-              </div>
+              <>
+                <div
+                  key="support-auto"
+                  style={{ display: supportRailMode === 'auto' && transformMgr.transformMode !== 'hollowing' ? undefined : 'none' }}
+                >
+                  <AutoSupportPanel
+                    islands={islandsPoc}
+                    hasGeometry={!!scene.geom}
+                    activeModelId={scene.activeModelId ?? undefined}
+                    autoLift={selectionLifted}
+                    onAutoLiftChange={handleAutoLiftChange}
+                    onBeforeRun={requestModifierDecisionBeforeSupports}
+                    getCavityGeometry={getCavityGeometryForModel}
+                  />
+                </div>
+                <div
+                  key="support-stress"
+                  style={{ display: supportRailMode === 'auto' && transformMgr.transformMode !== 'hollowing' ? undefined : 'none' }}
+                >
+                  <SupportStressPanel
+                    activeModelId={scene.activeModelId ?? undefined}
+                    hasScanned={islandsPoc.hasScanned}
+                    poseKey={islandsPoc.poseKey}
+                    islands={islandsPoc.structuralIslands ?? islandsPoc.filteredIslands}
+                    poseDragMomentMm3={islandsPoc.dragTotalMm3}
+                    toppleCoverageNeeded={islandsPoc.toppleCoverage}
+                  />
+                </div>
+              </>
             )}
             <div
               key="support-islands"
@@ -10882,6 +10910,7 @@ export default function Home() {
               <IslandsPanel
                 islands={islandsPoc}
                 hasGeometry={!!scene.geom}
+                modelName={scene.activeModel?.name}
                 bottomClearancePx={modelStatsBottomClearancePx}
               />
             </div>

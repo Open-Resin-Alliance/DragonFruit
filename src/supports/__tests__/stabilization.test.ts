@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 
+import { measurePoseStability, posedPositions } from '../autoSupport/poseStability';
 import { computeStabilizationAnchors } from '../autoSupport/stabilization';
 
 /** A 20mm box, face-down (centered at origin → the −Z face is the base). */
@@ -104,5 +105,67 @@ test('a stray vertex does not decide where the part touches the plate', () => {
         computeStabilizationAnchors(boxWithStrayVertex()),
         [],
         'flat base stays stable despite the defect',
+    );
+});
+
+test('HIGH-06: tilted plank on an X-aligned 1D bearing edge prioritizes tension flank normal to X-edge instead of biasing -X', () => {
+    // 80mm wide (along X) × 8mm thick × 40mm tall plank, rotated -30° about X so it rests on
+    // a single X-aligned 1D bearing edge (y ≈ -6.54, z ≈ -19.32) and leans strongly toward +Y.
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(80, 8, 40, 16, 1, 2));
+    mesh.rotation.x = -Math.PI / 6;
+    mesh.updateMatrixWorld(true);
+
+    const worldPos = posedPositions(mesh);
+    const index = mesh.geometry.getIndex()?.array as ArrayLike<number> | undefined;
+    const stability = measurePoseStability(worldPos, index, 0, 0);
+    assert.equal(stability.bearingEdges, 0);
+    assert.ok(Math.abs(stability.pushDirDeg - 90) < 5, `tilted plank leans +Y (~90°), got ${stability.pushDirDeg}`);
+
+    const anchors = computeStabilizationAnchors(mesh);
+    assert.ok(anchors.length > 0);
+    const zMin = Math.min(...anchors.map((a) => a.z));
+    const stanceY = anchors.find((a) => Math.abs(a.z - zMin) < 1e-3)!.y;
+    const raised = anchors.filter((a) => a.z - zMin > 0.5);
+    assert.ok(raised.length > 0, 'emits raised buttress teeth');
+
+    // Tension side is -Y (y < stanceY), opposite the +Y overhang push direction:
+    const tensionCount = raised.filter((a) => a.y < stanceY - 0.1).length;
+    const pushCount = raised.filter((a) => a.y > stanceY + 0.1).length;
+    assert.ok(
+        tensionCount > pushCount,
+        `buttresses must prioritize -Y tension flank (${tensionCount}) over +Y overhang (${pushCount})`,
+    );
+
+    // Must NOT bias along -X (x < 0) vs +X (x > 0) from pushDirDeg = 0° fallback:
+    const negX = raised.filter((a) => a.x < -0.5).length;
+    const posX = raised.filter((a) => a.x > 0.5).length;
+    assert.ok(
+        Math.abs(negX - posX) <= 2,
+        `buttresses along X-edge should be X-symmetric (-X: ${negX}, +X: ${posX})`,
+    );
+});
+
+test('HIGH-06: symmetric X-aligned V-wedge aligns pushDirDeg normal to X-edge and avoids -X anchor bias', () => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(80, 20, 20, 16, 1, 1));
+    mesh.rotation.x = Math.PI / 4;
+    mesh.updateMatrixWorld(true);
+
+    const worldPos = posedPositions(mesh);
+    const index = mesh.geometry.getIndex()?.array as ArrayLike<number> | undefined;
+    const stability = measurePoseStability(worldPos, index, 0, 0);
+    assert.equal(stability.bearingEdges, 0);
+    assert.ok(
+        Math.abs(stability.pushDirDeg - 90) < 5 || Math.abs(stability.pushDirDeg - 270) < 5,
+        `symmetric X-wedge pushDirDeg must be normal to X-edge (90° or 270°), got ${stability.pushDirDeg}`,
+    );
+
+    const anchors = computeStabilizationAnchors(mesh);
+    const zMin = Math.min(...anchors.map((a) => a.z));
+    const raised = anchors.filter((a) => a.z - zMin > 0.5);
+    const negX = raised.filter((a) => a.x < -0.5).length;
+    const posX = raised.filter((a) => a.x > 0.5).length;
+    assert.ok(
+        Math.abs(negX - posX) <= 2,
+        `symmetric X-wedge buttresses must not bias -X (-X: ${negX}, +X: ${posX})`,
     );
 });

@@ -44,12 +44,30 @@ const SHADOW_CELL_MM = 0.5;
 /** Below this enclosed volume there is no mass to restore anything. */
 const MIN_VOLUME_MM3 = 1e-9;
 
+export interface PlateAdhesionContact {
+    x: number;
+    y: number;
+    areaMm2: number;
+}
+
+/** The plate's adhesion footprint as contact points for the rigid peel solve. */
+export function plateContactsFromStability(
+    stability: PoseStability | null | undefined,
+): PlateAdhesionContact[] | undefined {
+    const hull = stability?.bearingHull;
+    if (!stability || !hull || hull.length === 0 || !(stability.bearingAreaMm2 > 0)) return undefined;
+    const areaMm2 = stability.bearingAreaMm2 / hull.length;
+    return hull.map((point) => ({ x: point.x, y: point.y, areaMm2 }));
+}
+
 export interface PoseStability {
     /** World Z of the lowest point under this pose (mm). */
     plateZMm: number;
     volumeMm3: number;
     /** XY area of the bearing hull (mm²); 0 = no bearing polygon. */
     bearingAreaMm2: number;
+    /** Convex bearing hull in world XY (mm), CCW; the plate contact points. */
+    bearingHull?: Array<{ x: number; y: number }>;
     /** Hull edge count; 0 = a point or edge contact. */
     bearingEdges: number;
     /** How far the volume centroid sits inside the worst edge (mm). Negative
@@ -59,6 +77,8 @@ export interface PoseStability {
     contactDepthMm: number;
     /** Driving moment about the worst edge (mm³); 0 when nothing leans. */
     dragMomentMm3: number;
+    /** Unprojected scalar peel-drag moment `Σ A·|n_xy|·z` across all down-facing faces (mm³); matches Rust `StabilityReport.drag_moment_mm3`. */
+    totalDragMomentMm3: number;
     /** `V·d_e/M_e` (mm) — the gravity verdict's geometry. `Infinity` when the
      *  pose carries no lateral drag. */
     marginMm: number;
@@ -81,6 +101,11 @@ export interface PoseStability {
      *  load is at the top edge of that face and a brace only resists once it
      *  reaches there; `dragMomentMm3` alone cannot say how tall that is. */
     dragTopMm: number;
+    /** Worst bearing edge, world XY (mm): a point on the edge line and its
+     *  outward unit normal. The topple-risk evaluation measures solved peel
+     *  moments about this line, so it needs the line, not just the azimuth. */
+    worstEdgePoint?: { x: number; y: number };
+    worstEdgeNormal?: { x: number; y: number };
     /** Azimuth of the worst edge's outward normal (deg, 0 = +X, 90 = +Y): the
      *  direction the drag pushes the part, i.e. the side the tipping edge is
      *  on. Braces belong on the opposite side — that is where the lever arm
@@ -157,14 +182,12 @@ export function isSlenderPart(s: {
  * not the pose needs rescuing today.
  *
  * A SIZE and not a share of the drag, because anchoring value is about room.
- * The floor is where a flat stops having room for contacts at all: a tip covers
- * about 3mm of surface, so a handful of them want on the order of a hundred mm²
- * before spreading anything across it means anything. Above that it is a
- * judgement about the part, which the band and the spacing already make: a
- * 465mm² face on a 42mm figurine gets a low band, and so does a 400mm² face on
- * a 22mm cube, which is the pair that killed an earlier 1000mm² floor.
+ * Rust classifies steep flats starting at 150mm² so moderate `[150, 200)` mm²
+ * faces are available when `verdictNeedsCoverage` fires, while unconditional
+ * anchoring starts at 200mm² so medium flat walls (`~14×14 mm` and up) resist
+ * elastic peel wobble and Z-banding even on globally stable poses.
  */
-export const STEEP_FLAT_ANCHOR_MIN_AREA_MM2 = 150;
+export const STEEP_FLAT_ANCHOR_MIN_AREA_MM2 = 200;
 
 /**
  * Should this steep flat be covered, given the pose's verdict?
@@ -323,6 +346,7 @@ export function measurePoseStability(
             centroidDepthMm: 0,
             contactDepthMm: 0,
             dragMomentMm3: 0,
+            totalDragMomentMm3: 0,
             marginMm: 0,
             adhesionRatio: 0,
             pushDirDeg: 0,
@@ -412,8 +436,15 @@ export function measurePoseStability(
     let worstContactDepth = 0;
     let worstSum = 0;
     let worstDirDeg = 0;
+    let worstEdgePoint = { x: 0, y: 0 };
+    let worstEdgeNormal = { x: 0, y: 0 };
     let haveWorst = false;
     let dragTopMm = 0;
+    let totalDragMomentMm3 = 0;
+    let dragVecX = 0;
+    let dragVecY = 0;
+    let dragQuadX = 0;
+    let dragQuadY = 0;
     const resting: RestingContact = { ...EMPTY_RESTING };
     for (let t = 0; t < triCount; t++) {
         if (load(t)) continue;
@@ -455,6 +486,11 @@ export function measurePoseStability(
         if (faceTop > dragTopMm) dragTopMm = faceTop;
         const nhx = nx / twiceArea;
         const nhy = ny / twiceArea;
+        totalDragMomentMm3 += area * sinTheta * height;
+        dragVecX += area * nhx * height;
+        dragVecY += area * nhy * height;
+        dragQuadX += area * height * (nhx * nhx - nhy * nhy);
+        dragQuadY += area * height * (2 * nhx * nhy);
         for (let e = 0; e < edgeSum.length; e++) {
             const proj = nhx * edgeNx[e] + nhy * edgeNy[e];
             if (proj > 0) edgeSum[e] += area * proj * height;
@@ -476,6 +512,10 @@ export function measurePoseStability(
             worstContactDepth = contactDepth;
             worstSum = sum;
             worstDirDeg = (Math.atan2(edgeNy[e], edgeNx[e]) * 180) / Math.PI;
+            // The edge line the margin was measured about. `edgeX/edgeY` is a
+            // point on it; the outward normal is unit by construction.
+            worstEdgePoint = { x: edgeX[e], y: edgeY[e] };
+            worstEdgeNormal = { x: edgeNx[e], y: edgeNy[e] };
         }
     }
     if (edgeSum.length === 0) {
@@ -483,19 +523,34 @@ export function measurePoseStability(
         worstDepth = 0;
         worstContactDepth = 0;
         worstSum = 0;
+        if (totalDragMomentMm3 > 1e-9) {
+            if (Math.hypot(dragVecX, dragVecY) > 1e-6 * totalDragMomentMm3) {
+                worstDirDeg = (Math.atan2(dragVecY, dragVecX) * 180) / Math.PI;
+            } else if (Math.hypot(dragQuadX, dragQuadY) > 1e-9) {
+                worstDirDeg = (0.5 * Math.atan2(dragQuadY, dragQuadX) * 180) / Math.PI;
+            }
+        }
     }
     return {
         plateZMm: zMin,
         volumeMm3,
         bearingAreaMm2,
+        bearingHull: hull.map((point) => ({ x: point.x, y: point.y })),
         bearingEdges: edgeSum.length,
         centroidDepthMm: worstDepth,
         contactDepthMm: worstContactDepth,
         dragMomentMm3: worstSum,
+        totalDragMomentMm3,
         marginMm: worstMargin,
         adhesionRatio:
-            worstSum > 1e-9 ? (bearingAreaMm2 * worstContactDepth) / worstSum : Infinity,
-        pushDirDeg: (worstDirDeg + 360) % 360,
+            worstSum > 1e-9
+                ? (bearingAreaMm2 * worstContactDepth) / worstSum
+                : edgeSum.length === 0 && totalDragMomentMm3 > 1e-9
+                  ? 0
+                  : Infinity,
+        worstEdgePoint,
+        worstEdgeNormal,
+        pushDirDeg: (((worstDirDeg % 360) + 360) % 360) || 0,
         heightMm: Number.isFinite(zMax) ? zMax - zMin : 0,
         thicknessMm: bearingAreaMm2 > 0 ? volumeMm3 / bearingAreaMm2 : 0,
         slenderness:

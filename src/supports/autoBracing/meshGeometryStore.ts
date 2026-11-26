@@ -18,17 +18,26 @@ type MeshEntry = {
 };
 
 const meshEntries = new Map<string, MeshEntry>();
+const registeredMeshes = new Map<string, THREE.Mesh>();
 
 export function registerMeshForAutoBrace(modelId: string, geometry: THREE.BufferGeometry, transform: THREE.Matrix4): void {
     const mesh = new THREE.Mesh(geometry, DOUBLE_SIDED_MATERIAL);
+    const clonedTransform = transform.clone();
     mesh.matrixAutoUpdate = false;
-    mesh.matrix.copy(transform);
-    mesh.matrixWorld.copy(transform);
-    meshEntries.set(modelId, { geometry, transform, mesh });
+    mesh.matrix.copy(clonedTransform);
+    mesh.matrixWorld.copy(clonedTransform);
+    meshEntries.set(modelId, { geometry, transform: clonedTransform, mesh });
+    registeredMeshes.set(modelId, mesh);
 }
 
 export function unregisterMeshForAutoBrace(modelId: string): void {
     meshEntries.delete(modelId);
+    registeredMeshes.delete(modelId);
+}
+
+export function clearMeshesForAutoBrace(): void {
+    meshEntries.clear();
+    registeredMeshes.clear();
 }
 
 export function getMeshEntryForAutoBrace(modelId: string): MeshEntry | undefined {
@@ -37,4 +46,8 @@ export function getMeshEntryForAutoBrace(modelId: string): MeshEntry | undefined
 
 export function getAllMeshEntriesForAutoBrace(): Map<string, MeshEntry> {
     return meshEntries;
+}
+
+export function getRegisteredMeshesForAutoBrace(): ReadonlyMap<string, THREE.Mesh> {
+    return registeredMeshes;
 }

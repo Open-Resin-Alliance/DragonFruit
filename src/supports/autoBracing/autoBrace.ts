@@ -32,10 +32,11 @@ import { applyInitialPattern } from './initialPattern';
 import { applyRepeatingPattern } from './repeatingPattern';
 import { runZigZagChain } from './zigzagChain';
 import { buildBraceProfile } from './braceDiameter';
+import { MIN_HEIGHT_FOR_MANDATORY_BRACING_MM } from '../SupportTypes/Kickstand/kickstandStabiliser';
 import type { KickstandBuildResult } from '../SupportTypes/Kickstand/types';
 import { generateLateralStabilisers, getSupportTypeDescriptor, parsePrefixedSegmentId, isAutoBraceableShaftType, isLateralStabiliserType, lateralStabiliserTypes, spanKnotHostType, SUPPORT_TYPES, type SupportCollectionKey, type SupportEdge, type SupportTypeDescriptor, type SupportTypeId } from '../supportTypeRegistry';
 import { resolveSegmentEndpoints } from '../SupportPrimitives/Knot/segmentEndpoints';
-import { linePassesMeshClearance } from './meshClearance';
+import { linePassesMeshClearance, withScopedAutoBraceModels } from './meshClearance';
 
 const EPS = 0.000001;
 /** The types auto-bracing samples. Derived, so a ninth type joins by declaring it. */
@@ -61,6 +62,7 @@ type SupportSample = {
     topReferenceZ: number;
     bottomReferenceZ: number;
     sortAnchor: Vec3;
+    bottomSortAnchor: Vec3;
     hostSegmentId?: string;
 };
 
@@ -82,6 +84,7 @@ type AnchorCandidate = {
 
 type PairDistanceOverride = {
     ignoreMaxDistance: boolean;
+    allowDiagonal?: boolean;
 };
 
 /**
@@ -115,11 +118,54 @@ function sortSupports(a: SupportSample, b: SupportSample): number {
     // height and kind before falling back to the id.
     if (a.topReferenceZ !== b.topReferenceZ) return a.topReferenceZ - b.topReferenceZ;
     if (a.bottomReferenceZ !== b.bottomReferenceZ) return a.bottomReferenceZ - b.bottomReferenceZ;
+    if (a.bottomSortAnchor.x !== b.bottomSortAnchor.x) return a.bottomSortAnchor.x - b.bottomSortAnchor.x;
+    if (a.bottomSortAnchor.y !== b.bottomSortAnchor.y) return a.bottomSortAnchor.y - b.bottomSortAnchor.y;
     if (a.supportKind !== b.supportKind) return a.supportKind.localeCompare(b.supportKind);
     // Ids are random for generated supports. At equal geometry the stable sort
     // keeps the insertion order, which is the placement order; comparing ids
     // here made the brace pass differ between runs.
     return 0;
+}
+
+/** Brace knots stay this far below a shaft's top (the contact-cone base), so a
+ *  brace never fuses the terminal finger into the support next door and the
+ *  contact cone snaps away cleanly in post-cure removal. */
+export const BRACE_CANOPY_KEEP_OUT_MM = 2.5;
+
+function braceAtZWithinCanopy(sample: SupportSample, z: number): boolean {
+    return z > sample.topReferenceZ - BRACE_CANOPY_KEEP_OUT_MM + 1e-6;
+}
+
+/** Brace attachment heights quantize to this rung, so neighbouring braces that
+ *  meet the same shaft at the same tier share a knot instead of splitting it
+ *  into two near-coincident sub-millimetre segments. */
+export const BRACE_RUNG_MM = 0.5;
+const BRACE_KNOT_SHARE_TOL_Z_MM = 0.05;
+const BRACE_KNOT_SHARE_TOL_PLAN_MM = 0.05;
+
+/** Reuse a knot already on this segment at this rung, or mint one. */
+function makeBraceKnotTaker(
+    knots: Record<string, Knot>,
+    createKnotId: () => string,
+): (segmentId: string, pos: Vec3, t: number | undefined, diameter: number) => Knot {
+    const byRung = new Map<string, Knot>();
+    const keyOf = (segmentId: string, z: number) => `${segmentId}:${Math.round(z / BRACE_RUNG_MM)}`;
+    for (const knot of Object.values(knots)) {
+        byRung.set(keyOf(knot.parentShaftId, knot.pos.z), knot);
+    }
+    return (segmentId, pos, t, diameter) => {
+        const key = keyOf(segmentId, pos.z);
+        const existing = byRung.get(key);
+        if (existing
+            && Math.abs(existing.pos.z - pos.z) <= BRACE_KNOT_SHARE_TOL_Z_MM
+            && Math.hypot(existing.pos.x - pos.x, existing.pos.y - pos.y) <= BRACE_KNOT_SHARE_TOL_PLAN_MM) {
+            return existing;
+        }
+        const knot: Knot = { id: createKnotId(), parentShaftId: segmentId, t, pos, diameter };
+        knots[knot.id] = knot;
+        byRung.set(key, knot);
+        return knot;
+    };
 }
 
 function createUniqueIdFactory(prefix: string, existingIds: Set<string>) {
@@ -136,7 +182,12 @@ function createUniqueIdFactory(prefix: string, existingIds: Set<string>) {
     };
 }
 
-function collectSegmentExtrema(segments: SegmentSample[]): { topReferenceZ: number; bottomReferenceZ: number; sortAnchor: Vec3 } {
+function collectSegmentExtrema(segments: SegmentSample[]): {
+    topReferenceZ: number;
+    bottomReferenceZ: number;
+    sortAnchor: Vec3;
+    bottomSortAnchor: Vec3;
+} {
     let topPoint: Vec3 | null = null;
     let bottomPoint: Vec3 | null = null;
 
@@ -151,6 +202,7 @@ function collectSegmentExtrema(segments: SegmentSample[]): { topReferenceZ: numb
         topReferenceZ: topPoint?.z ?? 0,
         bottomReferenceZ: bottomPoint?.z ?? 0,
         sortAnchor: topPoint ?? { x: 0, y: 0, z: 0 },
+        bottomSortAnchor: bottomPoint ?? { x: 0, y: 0, z: 0 },
     };
 }
 
@@ -160,7 +212,7 @@ function collectSegmentExtrema(segments: SegmentSample[]): { topReferenceZ: numb
  * Endpoints now come from the shared walker, and which types take part is
  * declared as `isAutoBraceable`.
  */
-function buildSupportSamples(snapshot: SupportState): SupportSample[] {
+function buildSupportSamples(snapshot: SupportState, targetModelId?: string): SupportSample[] {
     const supports: SupportSample[] = [];
 
     for (const descriptor of SUPPORT_TYPES) {
@@ -181,6 +233,9 @@ function buildSupportSamples(snapshot: SupportState): SupportSample[] {
         )?.field;
 
         for (const entity of Object.values(collection ?? {})) {
+            const resolvedModelId = entity.modelId ?? (entity.rootId ? snapshot.roots[entity.rootId]?.modelId : undefined) ?? '';
+            if (targetModelId && resolvedModelId !== targetModelId) continue;
+
             const hostKnotId = knotField ? (entity as Record<string, unknown>)[knotField] : undefined;
             const hosts = {
                 root: entity.rootId ? snapshot.roots[entity.rootId] : undefined,
@@ -197,7 +252,7 @@ function buildSupportSamples(snapshot: SupportState): SupportSample[] {
             supports.push({
                 supportId: entity.id,
                 supportKind: descriptor.id,
-                modelId: entity.modelId,
+                modelId: resolvedModelId,
                 segments,
                 ...collectSegmentExtrema(segments),
                 ...(entity.hostSegmentId ? { hostSegmentId: entity.hostSegmentId } : {}),
@@ -221,8 +276,8 @@ type StabiliserSource = Pick<SupportState, 'kickstands' | 'roots' | 'knots'>;
  * Samples for stabilisers held outside the store -- the set a regeneration
  * pass has just built, which is not yet on SupportState.
  */
-function buildStabiliserSamples(stabiliserState: StabiliserSource): SupportSample[] {
-    return buildSupportSamples(stabiliserState as SupportState);
+function buildStabiliserSamples(stabiliserState: StabiliserSource, targetModelId?: string): SupportSample[] {
+    return buildSupportSamples(stabiliserState as SupportState, targetModelId);
 }
 
 function resolveAnchorAtZ(support: SupportSample, targetZ: number): AnchorPoint | null {
@@ -255,7 +310,7 @@ function resolveAnchorAtZ(support: SupportSample, targetZ: number): AnchorPoint 
     };
 }
 
-type Edge = { a: SupportSample; b: SupportSample; hDist: number; angleRad: number };
+type Edge = { a: SupportSample; b: SupportSample; hDist: number; angleRad: number; diagonalFallback?: boolean };
 
 const KICKSTAND_MAX_EDGES_PER_TRUNK = 2;
 const KICKSTAND_MAX_EDGES_PER_KICKSTAND = 2;
@@ -325,6 +380,7 @@ function buildGroupPairs(
     maxLen: number,
     gridSettings?: { enabled: boolean; spacingMm: number },
     minSpanMm = 0,
+    ladderFilter?: { initialDistanceMm: number; patternIntervalMm: number; isZigZag: boolean },
 ): Edge[] {
     if (group.length < 2) return [];
 
@@ -336,26 +392,52 @@ function buildGroupPairs(
     // the inner call of an O(n²) loop.
     const points = group.map((s) => getGridCorrelatedPoint(s, gridSettings));
 
-    const edges: Edge[] = [];
+    const cardinalEdges: Edge[] = [];
+    const diagonalFallbackEdges: Edge[] = [];
     for (let i = 0; i < group.length; i++) {
         const aPoint = points[i];
         for (let j = i + 1; j < group.length; j++) {
             const bPoint = points[j];
             const dx = bPoint.x - aPoint.x;
             const dy = bPoint.y - aPoint.y;
-
-            if (gridCardinalOnly && Math.abs(dx) > axisToleranceMm && Math.abs(dy) > axisToleranceMm) {
-                continue;
-            }
+            const isDiagonalInGrid = gridCardinalOnly && Math.abs(dx) > axisToleranceMm && Math.abs(dy) > axisToleranceMm;
 
             const hDist = Math.sqrt(dx * dx + dy * dy);
             // below minSpanMm the two supports are one post: bracing between
             // them is material with no stiffness to show for it
             if (hDist < Math.max(0.001, minSpanMm) || hDist > maxRun) continue;
-            edges.push({ a: group[i], b: group[j], hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) });
+
+            const overlapLow = Math.max(group[i].bottomReferenceZ, group[j].bottomReferenceZ);
+            const overlapHigh = Math.min(group[i].topReferenceZ, group[j].topReferenceZ);
+            const minNeededRise = Math.max(AUTO_BRACING_HARD_RULES.minZigZagRiseMm, hDist);
+            if (overlapHigh - overlapLow <= minNeededRise + 0.1) continue;
+            if (ladderFilter && !ladderFilter.isZigZag) {
+                const interval = Math.max(EPS, ladderFilter.patternIntervalMm);
+                const kMin = Math.max(0, Math.ceil((overlapLow - EPS - ladderFilter.initialDistanceMm) / interval));
+                const firstTierZ = ladderFilter.initialDistanceMm + kMin * interval;
+                if (firstTierZ + minNeededRise >= overlapHigh - 0.1) continue;
+            }
+
+            const edge: Edge = {
+                a: group[i],
+                b: group[j],
+                hDist,
+                angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)),
+                ...(isDiagonalInGrid ? { diagonalFallback: true } : {}),
+            };
+            if (isDiagonalInGrid) {
+                diagonalFallbackEdges.push(edge);
+            } else {
+                cardinalEdges.push(edge);
+            }
         }
     }
-    edges.sort((x, y) => x.hDist - y.hDist);
+    const edgeTier = (e: Edge) => (e.a.supportKind === 'trunk' && e.b.supportKind === 'trunk' ? 0 : 1);
+    const compareEdges = (x: Edge, y: Edge) => (edgeTier(x) - edgeTier(y)) || (x.hDist - y.hDist);
+    cardinalEdges.sort(compareEdges);
+    diagonalFallbackEdges.sort(compareEdges);
+    const cardinalCount = cardinalEdges.length;
+    const edges: Edge[] = [...cardinalEdges, ...diagonalFallbackEdges];
 
     const result: Edge[] = [];
     const adjacency = new Map<string, Edge[]>();
@@ -454,7 +536,7 @@ function buildGroupPairs(
             for (const existing of axes) {
                 const sep = axisSeparationDeg(existing, e.angleRad);
                 if (sep >= AUTO_BRACING_HARD_RULES.minAxisSeparationDeg) {
-                    const score = 90 - Math.abs(90 - sep);
+                    const score = (ei < cardinalCount ? 100 : 0) + (90 - Math.abs(90 - sep));
                     if (score > bestScore) {
                         bestScore = score;
                         bestCandidate = ei;
@@ -470,20 +552,100 @@ function buildGroupPairs(
 }
 
 /** Kickstand state is derived from the snapshot; a second argument could only disagree. */
-export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: AutoBracingSettings): BuildSnapshotResult {
+export function buildAutoBracedSnapshot(
+    snapshot: SupportState,
+    rawSettings?: Partial<AutoBracingSettings>,
+    options?: { modelId?: string },
+): BuildSnapshotResult {
+    const targetModelId = options?.modelId;
     const stabiliserBase: StabiliserSource = {
         kickstands: snapshot.kickstands,
         roots: snapshot.roots,
         knots: snapshot.knots,
     };
-    const settings = normalizeAutoBracingSettings(inputSettings);
+    const settings = normalizeAutoBracingSettings(rawSettings);
     const activeGridSettings = getSettings().grid;
     const maxRun = maxHorizontalRunFromBraceLen(settings.maxBraceLengthMm);
+
+    const activePlateModelIds = new Set<string>();
+    const segmentOwnerModelId = new Map<string, string>();
+    for (const root of Object.values(snapshot.roots ?? {})) {
+        if (root.modelId) activePlateModelIds.add(root.modelId);
+    }
+    for (const descriptor of SUPPORT_TYPES) {
+        const collection = snapshot[descriptor.location.key as SupportCollectionKey] as unknown as Record<string, {
+            modelId?: string;
+            rootId?: string;
+            segments?: Segment[];
+        }>;
+        for (const entity of Object.values(collection ?? {})) {
+            const entityModelId = entity.modelId
+                ?? (typeof entity.rootId === 'string' ? snapshot.roots[entity.rootId]?.modelId : undefined);
+            if (entityModelId) {
+                activePlateModelIds.add(entityModelId);
+                if (Array.isArray(entity.segments)) {
+                    for (const seg of entity.segments) {
+                        segmentOwnerModelId.set(seg.id, entityModelId);
+                    }
+                }
+            }
+        }
+    }
+    for (const entity of Object.values(snapshot.supports ?? {})) {
+        const entityWithRoot = entity as { modelId?: string; rootId?: string; segments?: Segment[] };
+        const entityModelId = entityWithRoot.modelId
+            ?? (typeof entityWithRoot.rootId === 'string' ? snapshot.roots?.[entityWithRoot.rootId]?.modelId : undefined);
+        if (entityModelId) {
+            activePlateModelIds.add(entityModelId);
+            if (Array.isArray(entityWithRoot.segments)) {
+                for (const seg of entityWithRoot.segments) {
+                    if (!segmentOwnerModelId.has(seg.id)) {
+                        segmentOwnerModelId.set(seg.id, entityModelId);
+                    }
+                }
+            }
+        }
+    }
+    for (const knot of Object.values(snapshot.knots ?? {})) {
+        const knotModelId = (knot as { modelId?: string }).modelId;
+        if (knotModelId) {
+            activePlateModelIds.add(knotModelId);
+        }
+    }
+    if (targetModelId) activePlateModelIds.add(targetModelId);
+
     // Every declared braceable shaft type -- trunk AND branch. This filtered on
     // the literal 'trunk', so branch samples were built and then discarded here.
-    const trunkSamples = buildSupportSamples(snapshot).filter(s => isAutoBraceableShaftType(s.supportKind));
+    const trunkSamples = buildSupportSamples(snapshot, targetModelId).filter(s => isAutoBraceableShaftType(s.supportKind));
 
-    if (trunkSamples.length < AUTO_BRACING_HARD_RULES.minGroupSize) {
+    const hasMandatoryTallSupport = trunkSamples.some((s) => {
+        const trunkEntity = snapshot.trunks[s.supportId];
+        const rootZ = trunkEntity?.rootId ? snapshot.roots[trunkEntity.rootId]?.transform.pos.z : undefined;
+        const baseZ = typeof rootZ === 'number' ? Math.min(rootZ, s.bottomReferenceZ) : s.bottomReferenceZ;
+        return s.topReferenceZ - baseZ >= MIN_HEIGHT_FOR_MANDATORY_BRACING_MM;
+    });
+    const hasInScopeExistingStabiliser = lateralStabiliserTypes().some((typeId) => {
+        const descriptor = getSupportTypeDescriptor(typeId);
+        const collection = (snapshot as unknown as Record<string, Record<string, Record<string, unknown>>>)[descriptor.location.key] ?? {};
+        return Object.values(collection).some((entity) => {
+            const entityModelId = (typeof entity.modelId === 'string' ? entity.modelId : undefined)
+                ?? (typeof entity.rootId === 'string' ? snapshot.roots[entity.rootId]?.modelId : undefined)
+                ?? (typeof entity.hostSegmentId === 'string' ? segmentOwnerModelId.get(entity.hostSegmentId) : undefined);
+            const inScope = !targetModelId || entityModelId === targetModelId;
+            if (!inScope) return false;
+            return entity.generatedBy !== 'autoBracing' || settings.removeExistingBracing;
+        });
+    });
+    const hasRemovableAutoBrace = settings.removeExistingBracing
+        && Object.values(snapshot.braces ?? {}).some(
+            (brace) => (!targetModelId || brace.modelId === targetModelId) && brace.generatedBy === 'autoBracing',
+        );
+    const hasRemovableAutoBracing = hasRemovableAutoBrace || hasInScopeExistingStabiliser;
+
+    if (
+        trunkSamples.length === 0 ||
+        (trunkSamples.length < AUTO_BRACING_HARD_RULES.minGroupSize && !hasMandatoryTallSupport && !hasRemovableAutoBracing)
+    ) {
         return {
             snapshot,
             generatedBraceCount: 0,
@@ -496,11 +658,13 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
 
     let stabiliserState = stabiliserBase;
     let selectedStabiliserCleared: boolean | null = null;
+    const removedStabiliserRootIds = new Set<string>();
+    const removedStabiliserKnotIds = new Set<string>();
+    let removedAutoGeneratedCount = 0;
     {
         const nextStabilisers: StabiliserSource['kickstands'] = {};
         const nextRoots: StabiliserSource['roots'] = {};
         const nextKnots: StabiliserSource['knots'] = {};
-        let removedAutoGeneratedCount = 0;
 
         // Keeps every stabiliser this run did not generate, along with the
         // primitives it claims through its declared edges.
@@ -509,8 +673,15 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
             const collection = (stabiliserState as unknown as Record<string, Record<string, Record<string, unknown>>>)[descriptor.location.key] ?? {};
 
             for (const [id, entity] of Object.entries(collection)) {
-                if (entity.generatedBy === 'autoBracing') {
+                const entityModelId = (typeof entity.modelId === 'string' ? entity.modelId : undefined)
+                    ?? (typeof entity.rootId === 'string' ? snapshot.roots[entity.rootId]?.modelId : undefined)
+                    ?? (typeof entity.hostSegmentId === 'string' ? segmentOwnerModelId.get(entity.hostSegmentId) : undefined);
+                const inScope = !targetModelId || entityModelId === targetModelId;
+
+                if (inScope && entity.generatedBy === 'autoBracing' && settings.removeExistingBracing) {
                     removedAutoGeneratedCount += 1;
+                    if (typeof entity.rootId === 'string') removedStabiliserRootIds.add(entity.rootId);
+                    if (typeof entity.hostKnotId === 'string') removedStabiliserKnotIds.add(entity.hostKnotId);
                     continue;
                 }
 
@@ -585,12 +756,18 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
         list.push(trunk);
         trunksByModel.set(trunk.modelId, list);
     }
+    const ladderFilter = {
+        initialDistanceMm: settings.initialDistanceMm,
+        patternIntervalMm: settings.patternIntervalMm,
+        isZigZag: settings.initialPattern === 'zigZag' || settings.repeatingPattern === 'zigZag',
+    };
     for (const modelTrunks of trunksByModel.values()) {
         const pairs = buildGroupPairs(
             modelTrunks,
             settings.maxBraceLengthMm,
             activeGridSettings,
             autoBracingMinPairSpanMm(settings),
+            ladderFilter,
         );
         for (const pair of pairs) {
             existingTrunkEdges.push({
@@ -606,14 +783,43 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     // amongst the existing trunks in the preliminary pass.
     // A tall shaft needs two bracing axes; when no neighbour is in reach there
     // is nothing to brace against, so ask for a support that stands alone.
-    const generatedStabilisers = lateralStabiliserTypes().flatMap((typeId) =>
-        generateLateralStabilisers(typeId, {
-            snapshot,
-            existing: stabiliserState,
-            settings,
-            existingEdges: existingTrunkEdges,
-            gridSettings: activeGridSettings,
-        }) as KickstandBuildResult[]);
+    const rootsForStabilisers: SupportState['roots'] = removedStabiliserRootIds.size > 0
+        ? (() => {
+            const referencedTrunkRootIds = new Set<string>();
+            for (const trunk of Object.values(snapshot.trunks)) {
+                if (trunk.rootId) referencedTrunkRootIds.add(trunk.rootId);
+            }
+            const filteredRoots = { ...snapshot.roots };
+            for (const removedRootId of removedStabiliserRootIds) {
+                if (!referencedTrunkRootIds.has(removedRootId)) {
+                    delete filteredRoots[removedRootId];
+                }
+            }
+            return filteredRoots;
+        })()
+        : snapshot.roots;
+
+    const snapshotForStabilisers: SupportState = targetModelId
+        ? (() => {
+            const scopedTrunks: SupportState['trunks'] = {};
+            for (const [id, trunk] of Object.entries(snapshot.trunks)) {
+                if ((trunk.modelId ?? snapshot.roots[trunk.rootId]?.modelId) === targetModelId) {
+                    scopedTrunks[id] = trunk;
+                }
+            }
+            return { ...snapshot, trunks: scopedTrunks, roots: rootsForStabilisers };
+        })()
+        : (rootsForStabilisers === snapshot.roots ? snapshot : { ...snapshot, roots: rootsForStabilisers });
+
+    const generatedStabilisers = withScopedAutoBraceModels(activePlateModelIds, () =>
+        lateralStabiliserTypes().flatMap((typeId) =>
+            generateLateralStabilisers(typeId, {
+                snapshot: snapshotForStabilisers,
+                existing: stabiliserState,
+                settings,
+                existingEdges: existingTrunkEdges,
+                gridSettings: activeGridSettings,
+            }) as KickstandBuildResult[]));
     
     let generatedStabiliserCount = 0;
     const generatedStabiliserIds = new Set<string>();
@@ -622,13 +828,124 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
         const nextRoots = { ...stabiliserState.roots };
         const nextKnots = { ...stabiliserState.knots };
 
-        for (const build of generatedStabilisers) {
+        const occupiedSupportIds = new Set<string>(Object.keys(nextStabilisers));
+        const occupiedRootIds = new Set<string>(Object.keys(nextRoots));
+        const occupiedKnotIds = new Set<string>(Object.keys(nextKnots));
+        const occupiedSegmentIds = new Set<string>();
+        const occupiedJointIds = new Set<string>();
+
+        const recordSegments = (segments?: Segment[]) => {
+            if (!Array.isArray(segments)) return;
+            for (const seg of segments) {
+                occupiedSegmentIds.add(seg.id);
+                if (seg.bottomJoint?.id) occupiedJointIds.add(seg.bottomJoint.id);
+                if (seg.topJoint?.id) occupiedJointIds.add(seg.topJoint.id);
+            }
+        };
+
+        for (const rootId of Object.keys(snapshot.roots ?? {})) {
+            if (!removedStabiliserRootIds.has(rootId)) occupiedRootIds.add(rootId);
+        }
+        for (const knotId of Object.keys(snapshot.knots ?? {})) {
+            if (!removedStabiliserKnotIds.has(knotId)) occupiedKnotIds.add(knotId);
+        }
+        for (const ks of Object.values(nextStabilisers)) {
+            recordSegments(ks.segments);
+        }
+        for (const descriptor of SUPPORT_TYPES) {
+            if (isLateralStabiliserType(descriptor.id)) continue;
+            const collection = snapshot[descriptor.location.key as SupportCollectionKey] as unknown as Record<string, {
+                id?: string;
+                segments?: Segment[];
+            }>;
+            for (const [id, entity] of Object.entries(collection ?? {})) {
+                occupiedSupportIds.add(id);
+                recordSegments(entity.segments);
+            }
+        }
+        for (const [id, entity] of Object.entries(snapshot.supports ?? {})) {
+            if (snapshot.kickstands?.[id] && !nextStabilisers[id]) continue;
+            occupiedSupportIds.add(id);
+            recordSegments((entity as { segments?: Segment[] }).segments);
+        }
+
+        const hasStabiliserCollision = (candidate: KickstandBuildResult): boolean =>
+            occupiedSupportIds.has(candidate.kickstand.id) ||
+            occupiedRootIds.has(candidate.root.id) ||
+            occupiedKnotIds.has(candidate.hostKnot.id) ||
+            candidate.kickstand.segments.some(
+                (seg) =>
+                    occupiedSegmentIds.has(seg.id) ||
+                    (seg.bottomJoint ? occupiedJointIds.has(seg.bottomJoint.id) : false) ||
+                    (seg.topJoint ? occupiedJointIds.has(seg.topJoint.id) : false),
+            );
+
+        const rekeyStabiliserBuild = (
+            raw: KickstandBuildResult,
+            mapId: (id: string) => string,
+        ): KickstandBuildResult => {
+            const nextRootId = mapId(raw.root.id);
+            const nextHostKnotId = mapId(raw.hostKnot.id);
+            const nextKickstandId = mapId(raw.kickstand.id);
+            const jointMap = new Map<string, Segment['topJoint']>();
+            const mapJoint = (joint: Segment['topJoint']): Segment['topJoint'] => {
+                if (!joint) return undefined;
+                let mapped = jointMap.get(joint.id);
+                if (!mapped) {
+                    mapped = { ...joint, id: mapId(joint.id) };
+                    jointMap.set(joint.id, mapped);
+                }
+                return mapped;
+            };
+            const nextSegments: Segment[] = raw.kickstand.segments.map((seg) => ({
+                ...seg,
+                id: mapId(seg.id),
+                ...(seg.bottomJoint ? { bottomJoint: mapJoint(seg.bottomJoint) } : {}),
+                ...(seg.topJoint ? { topJoint: mapJoint(seg.topJoint) } : {}),
+            }));
+            return {
+                ...raw,
+                root: {
+                    ...raw.root,
+                    id: nextRootId,
+                },
+                hostKnot: {
+                    ...raw.hostKnot,
+                    id: nextHostKnotId,
+                },
+                kickstand: {
+                    ...raw.kickstand,
+                    id: nextKickstandId,
+                    rootId: nextRootId,
+                    hostKnotId: nextHostKnotId,
+                    segments: nextSegments,
+                },
+            };
+        };
+
+        for (const rawBuild of generatedStabilisers) {
+            let build = rawBuild;
+            if (hasStabiliserCollision(build)) {
+                const scopePrefix = build.kickstand.modelId || targetModelId || 'm';
+                let attempt = 1;
+                do {
+                    const suffix = attempt === 1 ? '' : `-${attempt}`;
+                    build = rekeyStabiliserBuild(rawBuild, (id) => `${scopePrefix}-${id}${suffix}`);
+                    attempt += 1;
+                } while (hasStabiliserCollision(build));
+            }
+
             build.kickstand.hostSegmentId = build.kickstand.hostSegmentId || build.hostKnot.parentShaftId;
             build.kickstand.generatedBy = 'autoBracing';
             generatedStabiliserIds.add(build.kickstand.id);
             nextStabilisers[build.kickstand.id] = build.kickstand;
             nextRoots[build.root.id] = build.root;
             nextKnots[build.hostKnot.id] = build.hostKnot;
+
+            occupiedSupportIds.add(build.kickstand.id);
+            occupiedRootIds.add(build.root.id);
+            occupiedKnotIds.add(build.hostKnot.id);
+            recordSegments(build.kickstand.segments);
         }
 
         stabiliserState = {
@@ -641,10 +958,11 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
         generatedStabiliserCount = generatedStabilisers.length;
     }
 
-    const stabiliserSamples = buildStabiliserSamples(stabiliserState);
+    const stabiliserSamples = buildStabiliserSamples(stabiliserState, targetModelId);
 
     const segmentOwnerTrunkId = new Map<string, string>();
     for (const trunk of Object.values(snapshot.trunks)) {
+        if (targetModelId && (trunk.modelId ?? snapshot.roots[trunk.rootId]?.modelId) !== targetModelId) continue;
         for (const seg of trunk.segments) {
             segmentOwnerTrunkId.set(seg.id, trunk.id);
         }
@@ -685,37 +1003,62 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     }
 
     const groupedSupports: SupportSample[][] = [];
-    for (const groupIds of trunkGroupIds) {
-        const g = groupIds
-            .map((id) => trunkById.get(id))
-            .filter((trunk): trunk is SupportSample => Boolean(trunk));
+    const allowGroupPairing = trunkSamples.length >= AUTO_BRACING_HARD_RULES.minGroupSize
+        || hasMandatoryTallSupport
+        || stabiliserSamples.length > 0;
+    if (allowGroupPairing) {
+        for (const groupIds of trunkGroupIds) {
+            const g = groupIds
+                .map((id) => trunkById.get(id))
+                .filter((trunk): trunk is SupportSample => Boolean(trunk));
 
-        const members: SupportSample[] = [...g];
-        for (const trunk of g) {
-            const kickstands = stabilisersByHostId.get(trunk.supportId);
-            if (kickstands && kickstands.length > 0) members.push(...kickstands);
+            const members: SupportSample[] = [...g];
+            for (const trunk of g) {
+                const kickstands = stabilisersByHostId.get(trunk.supportId);
+                if (kickstands && kickstands.length > 0) members.push(...kickstands);
+            }
+            groupedSupports.push(members);
         }
-        groupedSupports.push(members);
     }
 
     const groupedIds = new Set<string>();
     groupedSupports.forEach(g => g.forEach(s => { if (isAutoBraceableShaftType(s.supportKind)) groupedIds.add(s.supportId); }));
 
-    // Keep braces this tool did not generate; `generatedBy` distinguishes them.
+    // Keep braces this tool did not generate (or belonging to sibling models); `generatedBy` distinguishes them.
     const keptBraces: SupportState['braces'] = {};
+    let removedBraceCountForPass = 0;
+    const candidateDropKnotIds = new Set<string>(removedStabiliserKnotIds);
     for (const [id, brace] of Object.entries(snapshot.braces)) {
+        const inScope = !targetModelId || brace.modelId === targetModelId;
         const isOurs = brace.generatedBy === 'autoBracing';
-        if (isOurs && settings.removeExistingBracing) continue;
+        if (inScope && isOurs && settings.removeExistingBracing) {
+            removedBraceCountForPass += 1;
+            candidateDropKnotIds.add(brace.startKnotId);
+            candidateDropKnotIds.add(brace.endKnotId);
+            continue;
+        }
         keptBraces[id] = brace;
+    }
+
+    const resolveKnotModelId = (knot: Knot): string | undefined =>
+        (knot as { modelId?: string }).modelId ?? segmentOwnerModelId.get(knot.parentShaftId);
+
+    for (const [id, knot] of Object.entries(snapshot.knots)) {
+        if ((knot as { hostedBy?: string }).hostedBy === 'autoBracing') {
+            const knotModelId = resolveKnotModelId(knot);
+            if (!targetModelId || knotModelId === targetModelId) {
+                candidateDropKnotIds.add(id);
+            }
+        }
     }
 
     // The collection this pass rebuilds, so its kept set is read instead of the
     // snapshot's. The brace type comes from the registry rather than being
     // written as 'brace': it is the type whose knot host is a selectable span.
     const bracesKey = getSupportTypeDescriptor(spanKnotHostType()).location.key;
-
-    const braceKnotIds = new Set<string>();
-    for (const b of Object.values(snapshot.braces)) { braceKnotIds.add(b.startKnotId); braceKnotIds.add(b.endKnotId); }
+    const stabiliserKeys = new Set(
+        lateralStabiliserTypes().map((typeId) => getSupportTypeDescriptor(typeId).location.key),
+    );
 
     /** Knots the entities in `collection` hang from, by declared knot edges. */
     const addHostKnots = (
@@ -739,22 +1082,31 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
 
     // A knot survives if anything still hanging from it needs it -- every type
     // the registry says hangs from a knot, rather than the branch and leaf this
-    // replaces. Kickstand host knots were already safe by another route (the
-    // stabiliser pass above re-adds them), so this changes nothing today; it is
-    // the ninth type that would otherwise be missed.
-    //
-    // Braces read from `keptBraces` rather than the snapshot: the ones this pass
-    // is removing must NOT hold their endpoints alive.
+    // replaces. Braces and lateral stabilisers read from their kept/regenerated
+    // collections so entities removed in this pass do NOT hold their knots alive.
     const preservedKnotIds = new Set<string>();
     for (const descriptor of SUPPORT_TYPES) {
         const collection = descriptor.location.key === bracesKey
             ? keptBraces as unknown as Record<string, unknown>
-            : snapshot[descriptor.location.key] as unknown as Record<string, unknown>;
+            : stabiliserKeys.has(descriptor.location.key)
+                ? (stabiliserState as unknown as Record<string, unknown>)[descriptor.location.key] as Record<string, unknown>
+                : snapshot[descriptor.location.key] as unknown as Record<string, unknown>;
         addHostKnots(descriptor, collection, preservedKnotIds);
     }
 
     const nextKnots: Record<string, Knot> = {};
-    for (const [id, k] of Object.entries(snapshot.knots)) { if (!braceKnotIds.has(id) || preservedKnotIds.has(id)) nextKnots[id] = k; }
+    for (const [id, k] of Object.entries(snapshot.knots)) {
+        if (targetModelId) {
+            const knotModelId = resolveKnotModelId(k);
+            if (knotModelId && knotModelId !== targetModelId) {
+                nextKnots[id] = k;
+                continue;
+            }
+        }
+        if (!candidateDropKnotIds.has(id) || preservedKnotIds.has(id)) {
+            nextKnots[id] = k;
+        }
+    }
 
     const selectedBraceId = snapshot.selectedId
         ? parsePrefixedSegmentId(snapshot.selectedId)?.entityId ?? snapshot.selectedId
@@ -775,6 +1127,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
 
     const generatedBraces: Record<string, Brace> = {};
     const generatedKnots: Record<string, Knot> = {};
+    const takeBraceKnot = makeBraceKnotTaker(nextSnapshot.knots, createKnotId);
 
     // Trunk-to-trunk brace axes actually placed by the ladder — used by the
     // post-ladder reconciliation to drop redundant kickstands.
@@ -803,7 +1156,16 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
                 settings.maxBraceLengthMm,
                 activeGridSettings,
                 autoBracingMinPairSpanMm(settings),
+                ladderFilter,
             );
+            for (const e of pairs) {
+                if (e.diagonalFallback) {
+                    pairDistanceOverrides.set(pairKey(e.a.supportId, e.b.supportId), {
+                        ignoreMaxDistance: false,
+                        allowDiagonal: true,
+                    });
+                }
+            }
             if (modelId) pairsByModel.set(modelId, pairs);
         }
         const extra = groupMembers.filter((s) => isLateralStabiliserType(s.supportKind));
@@ -819,11 +1181,17 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
                         const bBase = getGridCorrelatedPoint(sb, activeGridSettings);
                         const dx = bBase.x - aBase.x;
                         const dy = bBase.y - aBase.y;
-                        if (!isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) continue;
+                        if (!ignoreDistanceForSb && !isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) continue;
 
                         const hDist = Math.sqrt(dx * dx + dy * dy);
-                        if (hDist < 0.000001) continue;
-                        d = { hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) };
+                        if (hDist < 0.000001) {
+                            if (!ignoreDistanceForSb) continue;
+                            const zRef = referenceZForDistance(trunk, sb);
+                            d = horizontalDistanceAtZ(trunk, sb, zRef);
+                            if (!d) continue;
+                        } else {
+                            d = { hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) };
+                        }
                     } else {
                         const zRef = referenceZForDistance(trunk, sb);
                         d = horizontalDistanceAtZ(trunk, sb, zRef);
@@ -855,11 +1223,17 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
                         const bBase = getGridCorrelatedPoint(sb2, activeGridSettings);
                         const dx = bBase.x - aBase.x;
                         const dy = bBase.y - aBase.y;
-                        if (!isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) continue;
+                        if (!ignoreDistanceForPair && !isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) continue;
 
                         const hDist = Math.sqrt(dx * dx + dy * dy);
-                        if (hDist < 0.000001) continue;
-                        d = { hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) };
+                        if (hDist < 0.000001) {
+                            if (!ignoreDistanceForPair) continue;
+                            const zRef = referenceZForDistance(sb1, sb2);
+                            d = horizontalDistanceAtZ(sb1, sb2, zRef);
+                            if (!d) continue;
+                        } else {
+                            d = { hDist, angleRad: normalizeAxisAngleRad(Math.atan2(dy, dx)) };
+                        }
                     } else {
                         const zRef = referenceZForDistance(sb1, sb2);
                         d = horizontalDistanceAtZ(sb1, sb2, zRef);
@@ -1026,6 +1400,7 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
             ) => {
                 const distanceOverride = pairDistanceOverrides.get(pairKey(lowS.supportId, highS.supportId));
                 const ignoreMaxDistance = Boolean(distanceOverride?.ignoreMaxDistance);
+                const allowDiagonal = Boolean(distanceOverride?.allowDiagonal);
                 const lowAnchor = resolveAnchorAtZ(lowS, atZ);
                 if (!lowAnchor) return;
 
@@ -1063,24 +1438,25 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
 
                 highAnchor = resolveAnchorAtZ(highS, atZ + dzGuess);
                 if (!highAnchor) return;
+                if (braceAtZWithinCanopy(lowS, lowAnchor.pos.z) || braceAtZWithinCanopy(highS, highAnchor.pos.z)) return;
 
                 const dx = highAnchor.pos.x - lowAnchor.pos.x;
                 const dy = highAnchor.pos.y - lowAnchor.pos.y;
                 const dz = highAnchor.pos.z - lowAnchor.pos.z;
 
                 if (activeGridSettings.enabled) {
-                    if (!ignoreMaxDistance && !isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) return;
+                    if (!ignoreMaxDistance && !allowDiagonal && !isCardinalDelta(dx, dy, activeGridSettings.spacingMm)) return;
                 }
 
                 const horizontalSpan = Math.sqrt(dx * dx + dy * dy);
                 if (!ignoreMaxDistance && horizontalSpan > settings.maxBraceLengthMm + EPS) return;
 
-                if (!linePassesMeshClearance(lowAnchor.pos, highAnchor.pos, lowAnchor.modelId, settings.braceDiameterMm)) return;
+                if (!linePassesMeshClearance(lowAnchor.pos, highAnchor.pos, lowAnchor.modelId, settings.braceDiameterMm, activePlateModelIds)) return;
 
-                const sId = createKnotId(), eId = createKnotId(), bId = createBraceId();
-                generatedKnots[sId] = { id: sId, parentShaftId: lowAnchor.segmentId, t: lowAnchor.t, pos: lowAnchor.pos, diameter: lowAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM };
-                generatedKnots[eId] = { id: eId, parentShaftId: highAnchor.segmentId, t: highAnchor.t, pos: highAnchor.pos, diameter: highAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM };
-                generatedBraces[bId] = { id: bId, modelId: lowAnchor.modelId, startKnotId: sId, endKnotId: eId, profile: braceProfile, debugSection: section, generatedBy: 'autoBracing' };
+                const bId = createBraceId();
+                const lowBraceKnot = takeBraceKnot(lowAnchor.segmentId, lowAnchor.pos, lowAnchor.t, lowAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM);
+                const highBraceKnot = takeBraceKnot(highAnchor.segmentId, highAnchor.pos, highAnchor.t, highAnchor.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM);
+                generatedBraces[bId] = { id: bId, modelId: lowAnchor.modelId, startKnotId: lowBraceKnot.id, endKnotId: highBraceKnot.id, profile: braceProfile, debugSection: section, generatedBy: 'autoBracing' };
 
                 // Only trunk↔trunk braces count toward the two-axis stability
                 // contract — braces to kickstands are the kickstand's own bracing.
@@ -1102,29 +1478,31 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
         const zigZagMinRiseMm = AUTO_BRACING_HARD_RULES.minZigZagRiseMm;
         if (settings.initialPattern === 'zigZag') {
             runZigZagChain(pairs, settings.initialDistanceMm, maxZ, 'initial', place, zigZagMinRiseMm);
-        } else if (settings.repeatingPattern === 'zigZag') {
-            runZigZagChain(
-                pairs,
-                settings.initialDistanceMm + settings.patternIntervalMm,
-                maxZ,
-                'repeating',
-                place,
-                zigZagMinRiseMm,
-            );
-        }
-        ladder.forEach((anchorZ, tierIndex) => {
-            const isInitial = tierIndex === 0;
-            const pattern = isInitial ? settings.initialPattern : settings.repeatingPattern;
-            // Zigzag tiers are covered by the chains above.
-            if (pattern === 'zigZag') return;
-            const placeAtTier = (lowS: SupportSample, highS: SupportSample, section: 'initial' | 'repeating') =>
-                place(lowS, highS, section, anchorZ);
-            if (isInitial) {
-                applyInitialPattern(pairs, pattern, placeAtTier);
-            } else {
-                applyRepeatingPattern(pairs, pattern, placeAtTier);
+        } else {
+            if (settings.repeatingPattern === 'zigZag') {
+                runZigZagChain(
+                    pairs,
+                    settings.initialDistanceMm + settings.patternIntervalMm,
+                    maxZ,
+                    'repeating',
+                    place,
+                    zigZagMinRiseMm,
+                );
             }
-        });
+            ladder.forEach((anchorZ, tierIndex) => {
+                const isInitial = tierIndex === 0;
+                const pattern = isInitial ? settings.initialPattern : settings.repeatingPattern;
+                // Zigzag tiers are covered by the chains above.
+                if (pattern === 'zigZag') return;
+                const placeAtTier = (lowS: SupportSample, highS: SupportSample, section: 'initial' | 'repeating') =>
+                    place(lowS, highS, section, anchorZ);
+                if (isInitial) {
+                    applyInitialPattern(pairs, pattern, placeAtTier);
+                } else {
+                    applyRepeatingPattern(pairs, pattern, placeAtTier);
+                }
+            });
+        }
     }
 
     // ── Post-ladder reconciliation ──────────────────────────────────
@@ -1135,16 +1513,19 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     // of stacking a kickstand next to an already-stable trunk.
     if (generatedStabilisers.length > 0 && bracedAxesByTrunkId.size > 0) {
         const drops = new Set<string>();
-        for (const build of generatedStabilisers) {
-            const hostTrunkId = segmentOwnerTrunkId.get(build.kickstand.hostSegmentId);
+        for (const id of generatedStabiliserIds) {
+            const ks = stabiliserState.kickstands[id];
+            if (!ks) continue;
+            const hostTrunkId = segmentOwnerTrunkId.get(ks.hostSegmentId);
             if (!hostTrunkId) continue;
             const axes = bracedAxesByTrunkId.get(hostTrunkId) ?? [];
             if (hasQualifiedTwoAxisBracing(axes, AUTO_BRACING_HARD_RULES.minAxisSeparationDeg)) {
-                drops.add(build.kickstand.id);
+                drops.add(id);
             }
         }
 
         if (drops.size > 0) {
+            generatedStabiliserCount = Math.max(0, generatedStabilisers.length - drops.size);
             const droppedSegmentIds = new Set<string>();
             for (const id of drops) {
                 const ks = stabiliserState.kickstands[id];
@@ -1184,17 +1565,38 @@ export function buildAutoBracedSnapshot(snapshot: SupportState, inputSettings: A
     nextSnapshot.braces = { ...keptBraces, ...generatedBraces };
 
     const generatedBraceCount = Object.keys(generatedBraces).length;
-    const removedBraceCount = Object.keys(snapshot.braces).length;
-    const changed = generatedBraceCount > 0 || removedBraceCount > 0;
+    const removedBraceCount = removedBraceCountForPass;
+    const changed =
+        generatedBraceCount > 0 ||
+        removedBraceCount > 0 ||
+        generatedStabiliserCount > 0 ||
+        removedAutoGeneratedCount > 0 ||
+        removedStabiliserRootIds.size > 0;
 
     // Fold the kickstand result back in: nextSnapshot was spread from the input
     // and still holds the pre-regeneration kickstands.
     // Only kickstand-owned roots and knots: stabiliserState comes from the input
     // snapshot, so a wholesale merge would restore the pruned brace knots.
+    const nextRootsWithStabilisers = { ...nextSnapshot.roots };
+    if (removedStabiliserRootIds.size > 0) {
+        const referencedTrunkRootIds = new Set<string>();
+        for (const trunk of Object.values(nextSnapshot.trunks)) {
+            if (trunk.rootId) referencedTrunkRootIds.add(trunk.rootId);
+        }
+        for (const removedRootId of removedStabiliserRootIds) {
+            const existingRoot = nextRootsWithStabilisers[removedRootId];
+            if (!existingRoot) continue;
+            if (targetModelId && existingRoot.modelId && existingRoot.modelId !== targetModelId) continue;
+            if (!referencedTrunkRootIds.has(removedRootId)) {
+                delete nextRootsWithStabilisers[removedRootId];
+            }
+        }
+    }
+
     const snapshotWithStabilisers: SupportState = {
         ...nextSnapshot,
         kickstands: stabiliserState.kickstands,
-        roots: { ...nextSnapshot.roots },
+        roots: nextRootsWithStabilisers,
         knots: { ...nextSnapshot.knots },
         selectedId: selectedStabiliserCleared ? null : nextSnapshot.selectedId,
     };
@@ -1271,3 +1673,250 @@ export function clearBracesForModel(modelId: string | null | undefined): number 
 }
 
 type BuildSnapshotResult = AutoBraceResult & { snapshot: SupportState };
+
+export interface StressBraceRequest {
+    /** Support entity at one end (a tip's support, or the overloaded member). */
+    aEntityId: string;
+    /** Support entity at the other end; absent => nearest legal host to `near`. */
+    bEntityId?: string;
+    /** Preferred link height (mm); clamped into both supports' Z overlap. */
+    atZMm: number;
+    /** Plan point used to find a neighbour when `bEntityId` is absent. */
+    near?: Vec3;
+    /** Override for the link's own span (mm). A rocking pair may be farther
+     *  apart than the auto-bracing ladder's aesthetic `maxBraceLengthMm`; the
+     *  caller measures the pair and passes that span. */
+    maxSpanMm?: number;
+}
+
+export interface StressBraceResult {
+    snapshot: SupportState;
+    added: number;
+    skipped: number;
+    changed: boolean;
+    reasons: Partial<Record<'noEndpoints' | 'noHost' | 'noLegalLink' | 'duplicate' | 'blocked', number>>;
+    /** Request endpoints whose brace was actually added. A missing id is one
+     *  the caller may replace with a kickstand buttress in the same batch. */
+    bracedEntityIds: string[];
+}
+
+/**
+ * Adds braces for solver-derived stress actions (`planStressActions`), reusing
+ * the auto-brace conventions: a 45° link from a low anchor, knots on the two
+ * host segments, the settings' brace diameter, and the mesh-clearance gate.
+ *
+ * This is the execution half of the closed loop. It does not decide what needs
+ * bracing — the report already did — and it will not invent a host for an
+ * overloaded member: when no second shaft is within `maxBraceLengthMm`, the
+ * action is skipped and counted, so the caller can decide to promote the leaf
+ * instead of silently thickening it to its cap again.
+ */
+export function addTargetedStressBraces(
+    snapshot: SupportState,
+    requests: readonly StressBraceRequest[],
+    settings: AutoBracingSettings,
+    allowedModelIds?: ReadonlySet<string>,
+): StressBraceResult {
+    const next = cloneSupportState(snapshot);
+    const samples = buildSupportSamples(next);
+    const sampleById = new Map(samples.map((sample) => [sample.supportId, sample]));
+    const supportBySegment = new Map<string, string>();
+    for (const sample of samples) {
+        for (const segment of sample.segments) supportBySegment.set(segment.segmentId, sample.supportId);
+    }
+
+    const braceProfile = buildBraceProfile(settings.braceDiameterMm);
+    const braceIds = new Set(Object.keys(next.braces));
+    const knotIds = new Set(Object.keys(next.knots));
+    const createBraceId = createUniqueIdFactory('auto-brace', braceIds);
+    const createKnotId = createUniqueIdFactory('auto-brace-knot', knotIds);
+    const takeBraceKnot = makeBraceKnotTaker(next.knots, createKnotId);
+
+    /** A rocking pair is reported by contact entity: a leaf has no shaft of
+     *  its own, so resolve it to the support tree that hosts it (the parent
+     *  knot's owning trunk/branch). Without this a leaf pair skipped as
+     *  `noEndpoints` and the report kept recommending a brace nothing could
+     *  place. */
+    const resolveSupportId = (entityId: string): string | undefined => {
+        if (sampleById.has(entityId)) return entityId;
+        const hostSupportId = (parentKnotId: string | undefined): string | undefined => {
+            if (!parentKnotId) return undefined;
+            const knot = next.knots?.[parentKnotId];
+            if (!knot?.parentShaftId) return undefined;
+            return supportBySegment.get(knot.parentShaftId)
+                ?? (sampleById.has(knot.parentShaftId) ? knot.parentShaftId : undefined);
+        };
+        const leaf = next.leaves?.[entityId];
+        if (leaf) {
+            const id = hostSupportId(leaf.parentKnotId);
+            if (id) return id;
+        }
+        const branch = next.branches?.[entityId];
+        if (branch) {
+            const id = hostSupportId(branch.parentKnotId);
+            if (id) return id;
+        }
+        return undefined;
+    };
+
+    const pairKey = (aId: string, bId: string): string => [aId, bId].sort().join('|');
+    /** A targeted action never stacks a second brace between the same pair at
+     *  another height; one link is the action. */
+    const existingPairIds = new Set<string>();
+    for (const brace of Object.values(next.braces)) {
+        const start = next.knots[brace.startKnotId];
+        const end = next.knots[brace.endKnotId];
+        if (!start || !end) continue;
+        const aId = supportBySegment.get(start.parentShaftId) ?? start.parentShaftId;
+        const bId = supportBySegment.get(end.parentShaftId) ?? end.parentShaftId;
+        existingPairIds.add(pairKey(aId, bId));
+    }
+
+    const reasons: StressBraceResult['reasons'] = {};
+    const bump = (reason: keyof NonNullable<StressBraceResult['reasons']>): void => {
+        reasons[reason] = (reasons[reason] ?? 0) + 1;
+    };
+    let added = 0;
+    let skipped = 0;
+    const bracedEntityIds: string[] = [];
+
+    for (const request of requests) {
+        const aId = resolveSupportId(request.aEntityId);
+        const a = aId ? sampleById.get(aId) : undefined;
+        if (!a) {
+            bump('noEndpoints');
+            skipped++;
+            continue;
+        }
+        const maxSpanMm = request.maxSpanMm ?? settings.maxBraceLengthMm;
+
+        const candidates: SupportSample[] = [];
+        if (request.bEntityId) {
+            const bId = resolveSupportId(request.bEntityId);
+            const b = bId ? sampleById.get(bId) : undefined;
+            if (!b) {
+                bump('noEndpoints');
+                skipped++;
+                continue;
+            }
+            if (b.supportId === a.supportId) {
+                bump('duplicate');
+                skipped++;
+                continue;
+            }
+            candidates.push(b);
+        } else {
+            const target = request.near ?? a.sortAnchor;
+            const neighbours = samples
+                .filter((sample) => sample.supportId !== a.supportId && sample.modelId === a.modelId)
+                .map((sample) => ({
+                    sample,
+                    distance: Math.hypot(sample.sortAnchor.x - target.x, sample.sortAnchor.y - target.y),
+                }))
+                .filter((entry) => entry.distance <= maxSpanMm + EPS)
+                .sort((x, y) => x.distance - y.distance || x.sample.supportId.localeCompare(y.sample.supportId))
+                .slice(0, 8);
+            candidates.push(...neighbours.map((entry) => entry.sample));
+        }
+        if (candidates.length === 0) {
+            bump('noHost');
+            skipped++;
+            continue;
+        }
+
+        let placed = false;
+        let sawDuplicate = false;
+        let sawBlocked = false;
+        for (const b of candidates) {
+            if (b.modelId !== a.modelId) continue;
+            const key = pairKey(a.supportId, b.supportId);
+            const zLow = Math.max(a.bottomReferenceZ, b.bottomReferenceZ);
+            const zHigh = Math.min(a.topReferenceZ, b.topReferenceZ) - BRACE_CANOPY_KEEP_OUT_MM;
+            if (zHigh - zLow < 0.5) continue;
+            const rungTarget = Math.round(request.atZMm / BRACE_RUNG_MM) * BRACE_RUNG_MM;
+            const clampedTarget = THREE.MathUtils.clamp(rungTarget, zLow + 0.25, zHigh - 0.25);
+            const attempts = [...new Set([
+                Math.round(clampedTarget * 1000) / 1000,
+                Math.round((zLow + 0.25) * 1000) / 1000,
+                Math.round((zHigh - 0.25) * 1000) / 1000,
+            ])];
+
+            for (const atZ of attempts) {
+                for (const [lowS, highS] of [[a, b], [b, a]] as const) {
+                    const low = resolveAnchorAtZ(lowS, atZ);
+                    if (!low) continue;
+                    // A lateral tie is horizontal at the layer: a rocking pair
+                    // spanning the part cannot climb a 45° ladder into supports
+                    // that end at that height. Try the tie first, then the
+                    // auto-brace 45° link as the fallback.
+                    const linkModes: Array<() => AnchorPoint | null> = [
+                        () => resolveAnchorAtZ(highS, atZ),
+                        () => {
+                            const sameTier = resolveAnchorAtZ(highS, atZ);
+                            if (!sameTier) return null;
+                            const hDist = Math.hypot(
+                                sameTier.pos.x - low.pos.x,
+                                sameTier.pos.y - low.pos.y,
+                            );
+                            if (hDist < 1e-3 || hDist > maxSpanMm + EPS) return null;
+                            if (atZ + hDist >= lowS.topReferenceZ - 0.1 || atZ + hDist >= highS.topReferenceZ - 0.1) {
+                                return null;
+                            }
+                            return resolveAnchorAtZ(highS, atZ + hDist);
+                        },
+                    ];
+                    for (const resolveHigh of linkModes) {
+                        const high = resolveHigh();
+                        if (!high) continue;
+                        if (braceAtZWithinCanopy(lowS, low.pos.z) || braceAtZWithinCanopy(highS, high.pos.z)) continue;
+                        const span = Math.hypot(
+                            high.pos.x - low.pos.x,
+                            high.pos.y - low.pos.y,
+                            high.pos.z - low.pos.z,
+                        );
+                        if (span < 1e-3 || span > maxSpanMm + EPS) continue;
+                        if (existingPairIds.has(key)) {
+                            sawDuplicate = true;
+                            continue;
+                        }
+                        const allowed = allowedModelIds ?? new Set([a.modelId]);
+                        if (!linePassesMeshClearance(low.pos, high.pos, a.modelId, settings.braceDiameterMm, allowed)) {
+                            sawBlocked = true;
+                            continue;
+                        }
+
+                        const braceId = createBraceId();
+                        const startKnot = takeBraceKnot(low.segmentId, low.pos, low.t, low.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM);
+                        const endKnot = takeBraceKnot(high.segmentId, high.pos, high.t, high.hostDiameterMm + JOINT_DIAMETER_OFFSET_MM);
+                        next.braces[braceId] = {
+                            id: braceId,
+                            modelId: a.modelId,
+                            startKnotId: startKnot.id,
+                            endKnotId: endKnot.id,
+                            profile: braceProfile,
+                            debugSection: 'repeating',
+                            generatedBy: 'autoBracing',
+                        };
+                        existingPairIds.add(key);
+                        bracedEntityIds.push(...[a.supportId, b.supportId].filter((id): id is string => Boolean(id)));
+                        added++;
+                        placed = true;
+                        break;
+                    }
+                    if (placed) break;
+                }
+                if (placed) break;
+            }
+            if (placed) break;
+        }
+
+        if (!placed) {
+            skipped++;
+            if (sawDuplicate && !sawBlocked) bump('duplicate');
+            else if (sawBlocked) bump('blocked');
+            else bump('noLegalLink');
+        }
+    }
+
+    return { snapshot: next, added, skipped, changed: added > 0, reasons, bracedEntityIds };
+}

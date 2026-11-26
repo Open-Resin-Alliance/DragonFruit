@@ -71,7 +71,12 @@ function makeBucketKey(ix: number, iy: number): string {
     return `${ix}:${iy}`;
 }
 
-function buildAdjacency(nodes: VoronoiSupportNode[], maxNeighborDistanceMm: number): Map<string, string[]> {
+function buildAdjacency(
+    nodes: VoronoiSupportNode[],
+    maxNeighborDistanceMm: number,
+    nodeById: Map<string, VoronoiSupportNode>,
+    orderById: Map<string, number>,
+): Map<string, string[]> {
     const adjacency = new Map<string, Set<string>>();
     for (const node of nodes) adjacency.set(node.supportId, new Set<string>());
 
@@ -107,7 +112,7 @@ function buildAdjacency(nodes: VoronoiSupportNode[], maxNeighborDistanceMm: numb
                 if (!neighborBucket) continue;
 
                 for (const other of neighborBucket) {
-                    if (other.supportId <= node.supportId) continue;
+                    if (other.supportId === node.supportId) continue;
                     if (squaredDistance(node.point, other.point) > maxDistSq + EPS) continue;
                     adjacency.get(node.supportId)?.add(other.supportId);
                     adjacency.get(other.supportId)?.add(node.supportId);
@@ -118,7 +123,10 @@ function buildAdjacency(nodes: VoronoiSupportNode[], maxNeighborDistanceMm: numb
 
     const normalized = new Map<string, string[]>();
     for (const [id, neighbors] of adjacency.entries()) {
-        normalized.set(id, [...neighbors].sort());
+        normalized.set(
+            id,
+            [...neighbors].sort((a, b) => compareSupportIds(a, b, nodeById, orderById)),
+        );
     }
     return normalized;
 }
@@ -293,12 +301,29 @@ function applyIslandFallbackSeeds(
 /** Stable order for support ids: position first, id only for exact coincidence.
  *  Auto-generated ids are random, so sorting by id alone made the partition —
  *  and every brace choice downstream — differ between runs. */
-function compareSupportIds(a: string, b: string, nodeById: Map<string, VoronoiSupportNode>): number {
+function compareSupportIds(
+    a: string,
+    b: string,
+    nodeById: Map<string, VoronoiSupportNode>,
+    orderById?: Map<string, number>,
+): number {
+    if (a === b) return 0;
     const na = nodeById.get(a);
     const nb = nodeById.get(b);
     if (na && nb) {
         if (na.point.x !== nb.point.x) return na.point.x - nb.point.x;
         if (na.point.y !== nb.point.y) return na.point.y - nb.point.y;
+        const adx = na.debugPoint?.x ?? na.point.x;
+        const bdx = nb.debugPoint?.x ?? nb.point.x;
+        if (adx !== bdx) return adx - bdx;
+        const ady = na.debugPoint?.y ?? na.point.y;
+        const bdy = nb.debugPoint?.y ?? nb.point.y;
+        if (ady !== bdy) return ady - bdy;
+    }
+    if (orderById) {
+        const ia = orderById.get(a);
+        const ib = orderById.get(b);
+        if (ia !== undefined && ib !== undefined && ia !== ib) return ia - ib;
     }
     return a.localeCompare(b);
 }
@@ -307,12 +332,13 @@ function multiSourceClaim(
     nodes: VoronoiSupportNode[],
     adjacency: Map<string, string[]>,
     seeds: Set<string>,
+    nodeById: Map<string, VoronoiSupportNode>,
+    orderById: Map<string, number>,
 ): Map<string, string> {
     const claimedBySupportId = new Map<string, string>();
     const queue: Array<{ supportId: string; centerId: string }> = [];
-    const nodeById = new Map(nodes.map((node) => [node.supportId, node]));
 
-    const sortedSeeds = [...seeds].sort((a, b) => compareSupportIds(a, b, nodeById));
+    const sortedSeeds = [...seeds].sort((a, b) => compareSupportIds(a, b, nodeById, orderById));
     for (const centerId of sortedSeeds) {
         claimedBySupportId.set(centerId, centerId);
         queue.push({ supportId: centerId, centerId });
@@ -330,10 +356,12 @@ function multiSourceClaim(
 
     if (claimedBySupportId.size === nodes.length) return claimedBySupportId;
 
-    const stranded = new Set<string>();
-    for (const node of nodes) {
-        if (!claimedBySupportId.has(node.supportId)) stranded.add(node.supportId);
-    }
+    const stranded = new Set<string>(
+        nodes
+            .filter((node) => !claimedBySupportId.has(node.supportId))
+            .map((node) => node.supportId)
+            .sort((a, b) => compareSupportIds(a, b, nodeById, orderById)),
+    );
 
     let progress = true;
     while (progress && stranded.size > 0) {
@@ -380,8 +408,9 @@ export function partitionSupportsWithVoronoi(
     const groupsAcrossModels: string[][] = [];
 
     for (const modelSupports of byModel.values()) {
-        const adjacency = buildAdjacency(modelSupports, settings.maxNeighborDistanceMm);
         const nodeById = new Map(modelSupports.map((node) => [node.supportId, node]));
+        const orderById = new Map(modelSupports.map((node, idx) => [node.supportId, idx]));
+        const adjacency = buildAdjacency(modelSupports, settings.maxNeighborDistanceMm, nodeById, orderById);
         const islands = findConnectedIslands(modelSupports, adjacency);
 
         const seeds = buildSeeds(modelSupports, settings);
@@ -398,7 +427,8 @@ export function partitionSupportsWithVoronoi(
             seeds.add(modelSupports[0].supportId);
         }
 
-        for (const seedId of seeds) {
+        const orderedSeeds = [...seeds].sort((a, b) => compareSupportIds(a, b, nodeById, orderById));
+        for (const seedId of orderedSeeds) {
             const node = nodeById.get(seedId);
             if (!node) continue;
             const markerPoint = node.debugPoint ?? node.point;
@@ -409,7 +439,7 @@ export function partitionSupportsWithVoronoi(
             });
         }
 
-        const claimedBySupportId = multiSourceClaim(modelSupports, adjacency, seeds);
+        const claimedBySupportId = multiSourceClaim(modelSupports, adjacency, seeds, nodeById, orderById);
 
         const groupsByCenter = new Map<string, string[]>();
         for (const support of modelSupports) {
@@ -420,9 +450,13 @@ export function partitionSupportsWithVoronoi(
             groupsByCenter.set(centerId, list);
         }
 
-        const nodeBySupportId = new Map(modelSupports.map((node) => [node.supportId, node]));
-        for (const group of groupsByCenter.values()) {
-            groupsAcrossModels.push(group.sort((a, b) => compareSupportIds(a, b, nodeBySupportId)));
+        const orderedCenters = [...groupsByCenter.keys()].sort((a, b) =>
+            compareSupportIds(a, b, nodeById, orderById),
+        );
+        for (const centerId of orderedCenters) {
+            const group = groupsByCenter.get(centerId);
+            if (!group) continue;
+            groupsAcrossModels.push(group.sort((a, b) => compareSupportIds(a, b, nodeById, orderById)));
         }
     }
 

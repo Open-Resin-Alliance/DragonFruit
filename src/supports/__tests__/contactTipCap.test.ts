@@ -12,6 +12,7 @@ import { createDefaultAutoSupportSettings, AUTO_SUPPORT_CONSTRAINTS, SIZING_BAND
 import { setSettings, getSettings, updateAutoSupportSettings } from '../Settings/state';
 import { createPreset, deletePreset } from '../Settings/presets';
 import { createDefaultSettings } from '../Settings/types';
+import { computeAutoSupportPlan } from '../autoSupport/autoPlace';
 import type { SizingBand } from '../autoSupport/settings';
 import type { CandidatePoint } from '../autoSupport/types';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
@@ -249,3 +250,117 @@ test('auto-support never produces a contact tip below 0.22 mm', () => {
             `an explicit per-point tip cannot go below 0.22 (got ${explicit.tipContactDiameterMm})`);
     });
 });
+
+function concatNonIndexedGeometries(geoms: THREE.BufferGeometry[]): THREE.BufferGeometry {
+    const nonIndexed = geoms.map((g) => (g.index ? g.toNonIndexed() : g));
+    let totalVerts = 0;
+    for (const g of nonIndexed) totalVerts += g.getAttribute('position').count;
+    const positions = new Float32Array(totalVerts * 3);
+    let offset = 0;
+    for (const g of nonIndexed) {
+        const arr = g.getAttribute('position').array as Float32Array;
+        positions.set(arr, offset);
+        offset += arr.length;
+    }
+    const merged = new THREE.BufferGeometry();
+    merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    merged.computeVertexNormals();
+    accelerateGeometry(merged);
+    return merged;
+}
+
+test('computeAutoSupportPlan caps standalone trunks and hosted members on a sloped sub-mm rib while leaving wide flats uncapped', () => {
+    initializeBVH();
+    // 0.35 mm narrow rib tilted in both X (30°) and Y (-30°): underside normal
+    // is (0.433, 0.5, -0.75) (~41.4° from vertical), while placeholder (0,0,-1)
+    // probes into the 4 mm thick rib depth rather than across the 0.35 mm width.
+    const slopedRib = new THREE.BoxGeometry(12, 0.35, 4.0)
+        .rotateX(Math.PI / 6)
+        .rotateY(-Math.PI / 6)
+        .translate(0, 0, 18);
+    const wideFlat = new THREE.BoxGeometry(10, 10, 2.0).translate(25, 0, 19);
+    const mesh = new THREE.Mesh(concatNonIndexedGeometries([slopedRib, wideFlat]), new THREE.MeshBasicMaterial());
+    mesh.updateMatrixWorld(true);
+
+    const pointOnSlopedRib = (s: number) => new THREE.Vector3(
+        Math.cos(Math.PI / 6) * (s + 1),
+        1.0,
+        16.5 + 0.5 * s,
+    );
+
+    const islands: DetectedIsland[] = [
+        {
+            id: 'rib-lower',
+            source: 'voxel',
+            contact: pointOnSlopedRib(-2.0),
+            baseZ: 15.5,
+            areaMm2: 1.0,
+        },
+        {
+            id: 'rib-upper',
+            source: 'voxel',
+            contact: pointOnSlopedRib(1.5),
+            baseZ: 17.25,
+            areaMm2: 1.0,
+        },
+        {
+            id: 'wide-flat',
+            source: 'voxel',
+            contact: new THREE.Vector3(25, 0, 18),
+            baseZ: 18,
+            areaMm2: 2.0,
+        },
+    ];
+
+    const prevSettings = getSettings();
+    setSettings({
+        ...prevSettings,
+        grid: { ...prevSettings.grid, enabled: false },
+        autoSupport: {
+            ...prevSettings.autoSupport,
+            sizingPreset: 'anchor',
+            sizeScale: 1.2,
+            tipContactMarginScale: 0.9,
+            stabilizationEnabled: false,
+            minimaReinforcementEnabled: false,
+            debugSkipAutoBracing: true,
+        },
+    });
+    try {
+        const plan = computeAutoSupportPlan(islands, 'sloped-rib-model', undefined, undefined, mesh);
+        assert.ok(plan, 'plan succeeds');
+        const cap = 0.35 * 0.9; // 0.315 mm
+
+        const trunks = Object.values(plan.support.trunks).filter((t) => t.modelId === 'sloped-rib-model');
+        const members = [
+            ...Object.values(plan.support.leaves).filter((l) => l.modelId === 'sloped-rib-model'),
+            ...Object.values(plan.support.branches).filter((b) => b.modelId === 'sloped-rib-model'),
+        ];
+
+        const ribTrunks = trunks.filter((t) => (t.contactCone?.pos.x ?? 0) < 10);
+        const wideTrunks = trunks.filter((t) => (t.contactCone?.pos.x ?? 0) > 15);
+
+        assert.ok(ribTrunks.length >= 1, 'at least one standalone trunk on the sloped rib');
+        assert.ok(members.length >= 1, 'second rib island attached as a fanned/merged leaf or branch');
+        assert.equal(wideTrunks.length, 1, 'wide flat gets its standalone trunk');
+
+        for (const t of ribTrunks) {
+            const profile = t.contactCone!.profile;
+            assert.ok(profile.maxContactDiameterMm !== undefined, 'rib trunk carries maxContactDiameterMm');
+            assert.ok(profile.contactDiameterMm <= cap + 0.02,
+                `rib trunk contact (${profile.contactDiameterMm}) capped to ~${cap} despite thickened shaft`);
+        }
+        for (const m of members) {
+            const profile = m.contactCone!.profile;
+            assert.ok(profile.maxContactDiameterMm !== undefined, 'rib hosted member carries maxContactDiameterMm');
+            assert.ok(profile.contactDiameterMm <= cap + 0.02,
+                `rib member contact (${profile.contactDiameterMm}) capped to ~${cap}`);
+        }
+        const wideProfile = wideTrunks[0].contactCone!.profile;
+        assert.equal(wideProfile.maxContactDiameterMm, undefined, 'uncapped wide flat never stamps maxContactDiameterMm');
+        assert.ok(wideProfile.contactDiameterMm >= 0.4, `wide flat keeps full anchor contact (${wideProfile.contactDiameterMm})`);
+    } finally {
+        setSettings(prevSettings);
+    }
+});
+

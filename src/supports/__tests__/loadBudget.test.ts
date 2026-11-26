@@ -141,3 +141,87 @@ test('a contact that lands on no footprint is credited to nothing', () => {
 
     assert.equal(budget.totalCapacityMm2, AREA_PER_SUPPORT_MM2, 'only the contact on the patch counts');
 });
+
+test('BUG-LB-01: 4 vertically stacked shelves cascade linearly without 2^(K-1) blowup', () => {
+    const s10 = island({ id: 'z10', baseZ: 10, areaMm2: 16, contactVoxels: square(0, 0, 4, 10) });
+    const s20 = island({ id: 'z20', baseZ: 20, areaMm2: 16, contactVoxels: square(0, 0, 4, 20) });
+    const s30 = island({ id: 'z30', baseZ: 30, areaMm2: 16, contactVoxels: square(0, 0, 4, 30) });
+    const s40 = island({ id: 'z40', baseZ: 40, areaMm2: 16, contactVoxels: square(0, 0, 4, 40) });
+
+    const budget = computeLoadBudget({
+        islands: [s10, s20, s30, s40],
+        contacts: [],
+        areaPerSupportMm2: AREA_PER_SUPPORT_MM2,
+        toppleCoverageNeeded: false,
+    });
+
+    const demandOf = (id: string) => budget.rows.find((r) => r.islandId === id)!.demandMm2;
+    assert.equal(demandOf('z40'), 16);
+    assert.equal(demandOf('z30'), 32);
+    assert.equal(demandOf('z20'), 48);
+    assert.equal(demandOf('z10'), 64, 'bottom shelf carries K * A = 64, not 2^(K-1) * A = 128');
+    assert.equal(budget.totalDemandMm2, 160);
+});
+
+test('BUG-LB-01: partial shelf occlusion conserves upper load across split lower shelves', () => {
+    const gridRect = (colStart: number, colEnd: number, z: number): VoxelFootprint => {
+        const pts: { x: number; y: number; z: number }[] = [];
+        for (let c = colStart; c < colEnd; c++) {
+            for (let r = 0; r < 16; r++) {
+                pts.push({ x: c * 0.25, y: r * 0.25, z });
+            }
+        }
+        return footprintFromPoints(pts);
+    };
+
+    // z=30 (16 cols, 16 mm²) overhangs half onto z=20 (left 8 cols, 8 mm²) and half directly onto z=10 (all 16 cols, 16 mm²).
+    const s30 = island({ id: 'z30', baseZ: 30, areaMm2: 16, contactVoxels: gridRect(0, 16, 30) });
+    const s20 = island({ id: 'z20', baseZ: 20, areaMm2: 8, contactVoxels: gridRect(0, 8, 20) });
+    const s10 = island({ id: 'z10', baseZ: 10, areaMm2: 16, contactVoxels: gridRect(0, 16, 10) });
+
+    const budget = computeLoadBudget({
+        islands: [s10, s20, s30],
+        contacts: [],
+        areaPerSupportMm2: AREA_PER_SUPPORT_MM2,
+        toppleCoverageNeeded: false,
+    });
+
+    const demandOf = (id: string) => budget.rows.find((r) => r.islandId === id)!.demandMm2;
+    assert.equal(demandOf('z30'), 16);
+    assert.equal(demandOf('z20'), 16, 'z=20 intercepts half of z=30 (8 + 8 = 16)');
+    assert.equal(demandOf('z10'), 40, 'z=10 receives unoccluded half of z=30 (8) plus z=20 total (16) plus own (16) = 40');
+});
+
+test('BUG-LB-01: PlacedContact honours actual shaftDiameterMm and poseTotalDragMomentMm3 overrides projected denominator', () => {
+    const patch = island({
+        id: 'patch',
+        baseZ: 10,
+        areaMm2: 100,
+        contactVoxels: square(0, 0, 10, 10),
+        dragMomentMm3: 500,
+    });
+
+    const budget = computeLoadBudget({
+        islands: [patch],
+        contacts: [
+            // Anchor tier preset (1.4 mm -> 19.6 mm²), but actual placed shaft is detail-sized (0.8 mm -> 6.4 mm²).
+            { tip: { x: 0, y: 0, z: 10 }, preset: 'anchor', shaftDiameterMm: 0.8 },
+            // Contact 0.75 mm outside the [-5, 5] footprint boundary tests the Chebyshev ring probe.
+            { tip: { x: 5.75, y: 0, z: 10 }, preset: 'structure', shaftDiameterMm: 1.0 },
+        ],
+        areaPerSupportMm2: AREA_PER_SUPPORT_MM2,
+        poseDragMomentMm3: 500,
+        poseTotalDragMomentMm3: 2000,
+        toppleCoverageNeeded: true,
+    });
+
+    assert.ok(
+        Math.abs(budget.totalCapacityMm2 - 16.4) < 1e-9,
+        `expected 6.4 + 10.0 = 16.4 mm² capacity, got ${budget.totalCapacityMm2}`,
+    );
+    assert.equal(
+        budget.rows[0].demandMm2,
+        125,
+        'unprojected poseTotalDragMomentMm3 (500 / 2000 = 0.25) overrides projected poseDragMomentMm3',
+    );
+});

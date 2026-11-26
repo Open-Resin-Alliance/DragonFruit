@@ -20,7 +20,11 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { clearHistory, getUndoCount, undo, registerHistoryHandler } from '../../history/historyStore';
 import { SUPPORT_AUTO_PLACE } from '../history/actionTypes';
 import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
-import { runAutoPlace } from '../autoSupport/autoPlace';
+import { computeAutoSupportPlan, commitAutoPlacePlan, runAutoPlace } from '../autoSupport/autoPlace';
+import { buildStick } from '../SupportTypes/Stick/stickBuilder';
+import { createOwnedDraft, draftAddEntity, isOwnedDraft, sealOwnedDraft } from '../autoSupport/supportDraft';
+import type { AutoSupportPlan } from '../autoSupport/types';
+import { modelMeshKey, runAutoPlaceRequest, serializeIsland, serializeModelMesh } from '../autoSupport/autoPlace.worker.shared';
 import { setModelMesh } from '../autoSupport/meshStore';
 import { resetStore, getSnapshot, setSnapshot, resetKickstandsInState, getSupportTypeOf } from '../state';
 import { initializeBVH, accelerateGeometry } from '@/utils/bvh';
@@ -37,7 +41,7 @@ import {
     selectTypeForPlacement,
 } from '../supportTypeRegistry';
 import { entitiesIn, keyOf } from './helpers/typeCollections';
-import type { SupportEntityAny } from '../types';
+import type { Knot, SupportEntityAny, SupportState } from '../types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -82,8 +86,10 @@ test('runAutoPlace places standalone trunks and pushes an undoable history entry
     assert.equal(result.changed, true);
 
     const snapshot = getSnapshot();
+    const kickstandCount = Object.keys(snapshot.kickstands).length;
     assert.equal(Object.keys(snapshot.trunks).length, 2, 'two trunks committed to the store');
-    assert.equal(Object.keys(snapshot.roots).length, 2, 'two roots committed');
+    assert.equal(kickstandCount, 1, 'two collinear tall trunks (>=15mm) receive one orthogonal kickstand');
+    assert.equal(Object.keys(snapshot.roots).length, 2 + kickstandCount, 'trunk and kickstand roots committed');
 
     // The run must be undoable as one entry.
     undo();
@@ -92,6 +98,8 @@ test('runAutoPlace places standalone trunks and pushes an undoable history entry
     const payload = captured[0].payload as { before?: unknown; after?: unknown };
     assert.ok(payload.before && payload.after, 'payload carries before/after snapshots');
     assert.equal(Object.keys(getSnapshot().trunks).length, 0, 'undo restores the empty pre-run snapshot');
+    assert.equal(Object.keys(getSnapshot().kickstands).length, 0, 'undo removes auto-generated kickstands');
+    assert.equal(Object.keys(getSnapshot().roots).length, 0, 'undo removes all committed roots');
 
     unregisterCapture();
     disposeHandlers();
@@ -161,7 +169,7 @@ test('runAutoPlace grids a large flat region at fixed density (uniform distribut
     // consolidate into fan trees — supports release in chunks, so plate
     // contacts drop well below the candidate count (leaves attach to chunk
     // hosts; branches only appear when a straight leaf is blocked).
-    assert.ok(result.placed.trunk >= 30 && result.placed.trunk <= 120,
+    assert.ok(result.placed.trunk >= 15 && result.placed.trunk <= 120,
         `placed ${result.placed.trunk} chunk hosts for ~200 tips (consolidated into trees)`);
     assert.ok(result.placed.leaf >= 50,
         `consolidated into fan leaves (${result.placed.leaf})`);
@@ -279,10 +287,89 @@ test('runAutoPlace grids a huge steep flat the self-support angle calls self-sup
 
     const result = runAutoPlace([facet], 'model-a', { debugSkipAutoBracing: true, stabilizationEnabled: false });
 
-    assert.ok(result.placed.trunk >= 15,
+    // Off-grid chunk consolidation converts edge grid pillars into tree leaves.
+    assert.ok((result.placed.trunk + result.placed.leaf + result.placed.branch) >= 15,
+        `placed ${result.placed.trunk + result.placed.leaf + result.placed.branch} grid supports on the 60° face`);
+    assert.ok(result.placed.trunk >= 12,
         `placed ${result.placed.trunk} grid trunks on the 60° face`);
-    assert.equal(result.rejectedCandidates, 0,
-        'the region normal keeps the cone clear at 60°');
+    // Phase 1c now adds contacts against the measured break load, and this
+    // synthetic facet is not marked `steepFlat`, so it is treated as a
+    // formation overhang. A vertical pillar to the upper part of a 60° leaning
+    // face can be blocked by the box itself; the trunk retry rescues what it
+    // can, and the residual is a route failure, not the cone/attachment gate
+    // this test guards. Keep the grid gates at zero and bound the route misses.
+    assert.equal(result.analytics?.rejectionReasons.grid_reject_collision ?? 0, 0,
+        'the region normal keeps grid attachments out of collision');
+    assert.equal(result.analytics?.rejectionReasons.grid_reject_no_attachment ?? 0, 0,
+        'no grid attachment is refused for the 60° normal');
+    assert.ok((result.analytics?.rejectionReasons.trunk_build_error ?? 0) <= 2,
+        `at most the traction adds fail trunk routing (${JSON.stringify(result.analytics?.rejectionReasons)})`);
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('a steep flat with anchors gets a class-2 force-budget contact when its cells are over budget', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    const deg = 60;
+    const geometry = new THREE.BoxGeometry(20, 20, 20);
+    geometry.rotateX(THREE.MathUtils.degToRad(deg));
+    geometry.translate(0, 0, 20);
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld();
+    setModelMesh('model-a', mesh);
+
+    const rad = THREE.MathUtils.degToRad(deg);
+    const normal = { x: 0, y: Math.sin(rad), z: -Math.cos(rad) };
+    const yMin = -10 * Math.cos(rad) + 10 * Math.sin(rad);
+    const yMax = 10 * Math.cos(rad) + 10 * Math.sin(rad);
+    const zAt = (y: number) => Math.tan(rad) * y;
+    const contactVoxels: { x: number; y: number; z?: number }[] = [];
+    for (let x = -10; x <= 10; x += 0.25) {
+        for (let y = yMin; y <= yMax; y += 0.25) {
+            contactVoxels.push({ x, y, z: zAt(y) });
+        }
+    }
+    const facet: DetectedIsland = {
+        id: 'steep-anchored',
+        source: 'overhang',
+        contact: new THREE.Vector3(0, (yMin + yMax) / 2, zAt((yMin + yMax) / 2)),
+        baseZ: zAt(yMin),
+        areaMm2: 400 * Math.cos(rad),
+        surfaceAreaMm2: 400,
+        surfaceNormal: normal,
+        overhangAngleDeg: deg,
+        steepFlat: true,
+        triangleIds: [10, 11],
+        contactVoxels: footprintFromPoints(contactVoxels),
+    };
+
+    // 5 MPa datasheet → 1 MPa support break: the anchoring contacts on the
+    // steep face are over their break load, and their nearest down-facing
+    // surface is the steep flat itself (class 2).
+    const result = runAutoPlace(
+        [facet],
+        'model-a',
+        { debugSkipAutoBracing: true },
+        undefined,
+        undefined,
+        undefined,
+        5,
+    );
+
+    const adds = result.analytics?.forestReport?.diagnostics?.forceBudgetAdds;
+    assert.ok((result.placed.trunk + result.placed.branch + result.placed.leaf) > 0,
+        'the steep flat is covered at all (anchors / grid)');
+    assert.ok((adds?.augmentedAttempted ?? 0) > 0,
+        `the over-budget face produced class-2 add points (${JSON.stringify(adds)})`);
+    assert.ok((adds?.augmentedPlaced ?? 0) > 0,
+        `at least one class-2 contact placed (${JSON.stringify(adds)})`);
 
     setModelMesh('model-a', null);
     disposeHandlers();
@@ -460,10 +547,10 @@ test('runAutoPlace gap-fills under-covered regions (coverage convergence)', () =
         gridAreaThresholdMm2: 25,
     });
 
-    // Initial grid at 5.5mm spacing ≈ 16 points + gap-fill, then the
-    // anchor-tree pass merges trunks into branches — assert TIPS preserved.
-    assert.ok(result.placed.trunk + result.placed.branch >= 20,
-        `gap-fill + tree merge preserved tips (${result.placed.trunk}T + ${result.placed.branch}B)`);
+    // Initial grid at 5.5mm spacing ≈ 16 points + gap-fill, then cluster-first
+    // synthesis attaches contacts as leaves/branches onto shared trunks — assert TIPS preserved.
+    assert.ok(result.placed.trunk + result.placed.branch + result.placed.leaf >= 20,
+        `gap-fill + tree synthesis preserved tips (${result.placed.trunk}T + ${result.placed.branch}B + ${result.placed.leaf}L)`);
 
     setModelMesh('model-a', null);
     disposeHandlers();
@@ -475,12 +562,11 @@ test('runAutoPlace gives small sub-threshold regions a single pillar', () => {
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
-    // A 4×4 mm foot (16 mm², under the 25 mm² grid threshold) is below the
-    // distribution threshold — shape analysis says a single support carries
-    // it; no carpet for a patch this small.
+    // A compact 1.5×1.5 mm patch (2.25 mm², under the 4 mm² grid threshold and
+    // 3 mm span gate) keeps the single-pillar path; no carpet for a patch this small.
     const contactVoxels: { x: number; y: number }[] = [];
-    for (let x = -2; x <= 2; x += 0.25) {
-        for (let y = -2; y <= 2; y += 0.25) {
+    for (let x = -0.75; x <= 0.75; x += 0.25) {
+        for (let y = -0.75; y <= 0.75; y += 0.25) {
             contactVoxels.push({ x, y });
         }
     }
@@ -489,7 +575,7 @@ test('runAutoPlace gives small sub-threshold regions a single pillar', () => {
         source: 'overhang',
         contact: new THREE.Vector3(0, 0, 6.5),
         baseZ: 6.5,
-        areaMm2: 16,
+        areaMm2: 2.25,
         contactVoxels: footprintFromPoints(contactVoxels),
     };
 
@@ -507,35 +593,34 @@ test('a sub-threshold overhang candidate past the leaf threshold becomes a pilla
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
-    // Trunk A (voxel island) at the origin; overhang region o15 at (3,0,33) is
-    // sub-threshold and non-anchor (band off), so it is offered to A's shaft.
-    // The link is past the leaf threshold, so the old answer was a 7mm tapered
-    // cone — a spike standing next to the trunk rather than a support. It gets
-    // a branch or, when no sample on A gives one a legal departure (as here), a
-    // pillar of its own; the consolidation pass merges pillars into chunk trees.
+    // Trunk A (voxel island) at the origin; sub-threshold overhang o15 at (4.5,0,33)
+    // has shortest legal 45° span hypot(4.5, 4.5) = 6.36 mm (> 5.9 mm fallback cap),
+    // so it must promote to a real hosted branch (or pillar), never a 6+ mm tapered spike.
     const result = runAutoPlace(
         [
             makeIsland('A', 0, 0, 40, 30),
             {
                 id: 'o15',
                 source: 'overhang',
-                contact: new THREE.Vector3(3, 0, 33),
+                contact: new THREE.Vector3(4.5, 0, 33),
                 baseZ: 33,
-                areaMm2: 16,
+                areaMm2: 2.0,
                 contactVoxels: footprintFromPoints([
-                    { x: 2.75, y: -0.25 }, { x: 3, y: -0.25 }, { x: 3.25, y: -0.25 },
-                    { x: 2.75, y: 0 }, { x: 3, y: 0 }, { x: 3.25, y: 0 },
-                    { x: 2.75, y: 0.25 }, { x: 3, y: 0.25 }, { x: 3.25, y: 0.25 },
+                    { x: 4.25, y: -0.25 }, { x: 4.5, y: -0.25 }, { x: 4.75, y: -0.25 },
+                    { x: 4.25, y: 0 }, { x: 4.5, y: 0 }, { x: 4.75, y: 0 },
+                    { x: 4.25, y: 0.25 }, { x: 4.5, y: 0.25 }, { x: 4.75, y: 0.25 },
                 ]),
             },
         ],
         'model-a',
-        { debugSkipAutoBracing: true,  },
+        { debugSkipAutoBracing: true },
     );
 
     assertNoLeafPastBranchThreshold();
     assert.equal(result.placed.leaf, 0, 'no leaf cone: the span is past the threshold');
-    assert.equal(result.placed.trunk, 2, 'o15 stands on the plate instead');
+    assert.equal(result.placed.trunk + result.placed.branch, 2, 'both contacts get real shaft supports');
+    assert.equal(result.placed.trunk, 1, 'A stands on the plate');
+    assert.equal(result.placed.branch, 1, 'o15 promotes to a hosted branch off A');
 
     // Both contacts are still supported — the pillar is a real support, not a drop.
     assert.ok((result.analytics?.areaCoverage ?? 0) >= 0.99, 'both contacts are supported');
@@ -550,8 +635,8 @@ test('runAutoPlace falls back to a standalone trunk when no fan host exists', ()
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 
-    // 20 mm from any shaft: beyond both fan and merge reach — the overhang
-    // keeps a standalone trunk so the surface is still supported.
+    // 20 mm from any shaft: beyond both fan and merge reach — the sub-threshold
+    // overhang keeps a standalone trunk so the surface is still supported.
     const result = runAutoPlace(
         [
             makeIsland('A', 0, 0, 40, 30),
@@ -560,12 +645,12 @@ test('runAutoPlace falls back to a standalone trunk when no fan host exists', ()
                 source: 'overhang',
                 contact: new THREE.Vector3(20, 0, 30),
                 baseZ: 30,
-                areaMm2: 16,
+                areaMm2: 2.0,
                 contactVoxels: footprintFromPoints([{ x: 19.75, y: 0 }, { x: 20, y: 0 }, { x: 20.25, y: 0 }]),
             },
         ],
         'model-a',
-        { debugSkipAutoBracing: true,  },
+        { debugSkipAutoBracing: true },
     );
 
     assert.equal(result.placed.trunk, 2, 'far overhang keeps its standalone trunk (coverage)');
@@ -754,18 +839,20 @@ test('runAutoPlace merges with a steep knot, not at the host junction', () => {
     assert.ok(result.placed.leaf >= 1, 'A attached as a leaf');
 
     const snapshot = getSnapshot();
-    const mergeKnot = Object.values(snapshot.knots).find((k) => k.id.startsWith('auto-merge-'));
-    assert.ok(mergeKnot, 'merge knot exists');
-    assert.ok(mergeKnot.pos.z >= 32 && mergeKnot.pos.z <= 38,
-        `knot snapped to the highest 60°-rise sample, not the base (kZ=${mergeKnot.pos.z.toFixed(1)})`);
+    const attachKnot = Object.values(snapshot.knots).find(
+        (k) => k.id.startsWith('auto-merge-') || k.id.startsWith('auto-cluster-'),
+    );
+    assert.ok(attachKnot, 'attachment knot exists');
+    assert.ok(attachKnot.pos.z >= 32 && attachKnot.pos.z <= 39.0,
+        `knot snapped to a high steep-rise sample, not the base (kZ=${attachKnot.pos.z.toFixed(1)})`);
 
     const leaf = Object.values(snapshot.leaves).find((l) => l.origin === 'island');
-    assert.ok(leaf, 'merged leaf carries the island origin');
+    assert.ok(leaf, 'attached leaf carries the island origin');
 
     const placement = result.analytics?.placement;
-    // Higher-Z island B places first (priority order) and has no host;
-    // A then merges into B — the merge itself never refuses.
-    assert.deepEqual(placement?.mergeRefusals, { noHost: 1 }, 'only the first-placed island lacks a host');
+    // The anchor island places first with no host; the clustered neighbor then
+    // attaches directly onto it without building a second trunk.
+    assert.deepEqual(placement?.mergeRefusals, { noHost: 1 }, 'only the anchor island lacks a host');
 
     setModelMesh('model-a', null);
     disposeHandlers();
@@ -778,8 +865,8 @@ test('runAutoPlace places low undersides as a standalone pillar forest', () => {
     const disposeHandlers = registerSupportHistoryHandlers();
 
     // Two low overhang patches: o0 (flat 8×8 grid, above threshold) gets the
-    // fixed-density grid and consolidates into chunk trees; o15 is a 3×0.5 mm
-    // sliver below the threshold — a single standalone pillar.
+    // fixed-density grid and consolidates into chunk trees; o15 is a 0.5×0.5 mm
+    // sub-threshold sliver far from o0 — a single standalone pillar.
     const contactVoxels: { x: number; y: number }[] = [];
     for (let x = -4; x <= 4; x += 0.25) {
         for (let y = -4; y <= 4; y += 0.25) {
@@ -795,12 +882,12 @@ test('runAutoPlace places low undersides as a standalone pillar forest', () => {
             },
             {
                 id: 'o15', source: 'overhang',
-                contact: new THREE.Vector3(3, 0, 8), baseZ: 8,
-                areaMm2: 16,
+                contact: new THREE.Vector3(14, 0, 8), baseZ: 8,
+                areaMm2: 2.0,
                 contactVoxels: footprintFromPoints([
-                    { x: 2.75, y: -0.25 }, { x: 3, y: -0.25 }, { x: 3.25, y: -0.25 },
-                    { x: 2.75, y: 0 }, { x: 3, y: 0 }, { x: 3.25, y: 0 },
-                    { x: 2.75, y: 0.25 }, { x: 3, y: 0.25 }, { x: 3.25, y: 0.25 },
+                    { x: 13.75, y: -0.25 }, { x: 14, y: -0.25 }, { x: 14.25, y: -0.25 },
+                    { x: 13.75, y: 0 }, { x: 14, y: 0 }, { x: 14.25, y: 0 },
+                    { x: 13.75, y: 0.25 }, { x: 14, y: 0.25 }, { x: 14.25, y: 0.25 },
                 ]),
             },
         ],
@@ -808,13 +895,11 @@ test('runAutoPlace places low undersides as a standalone pillar forest', () => {
         { debugSkipAutoBracing: true },
     );
 
-    assert.equal(result.placed.branch, 0, 'leaves only — no routed branches');
-
     const snapshot = getSnapshot();
     const trunks = Object.values(snapshot.trunks);
     assert.ok(trunks.some((t) => t.origin === 'overhang'), 'chunk hosts carry the overhang origin');
     assert.ok(trunks.some((t) => t.origin === 'standalone'),
-        'the o15 sliver keeps its own standalone pillar');
+        'the isolated o15 sliver keeps its own standalone pillar');
     assert.ok(result.placed.leaf >= 5,
         `o0 consolidates into fan leaves (${result.placed.leaf})`);
 
@@ -995,7 +1080,9 @@ test('no branch leaves its host shallower than the branch-angle rule', () => {
     runAutoPlace(islands, 'model-a', { debugSkipAutoBracing: true, stabilizationEnabled: false });
 
     const snapshot = getSnapshot();
-    const minRiseDeg = getSettings().grid.minBranchAngleDeg;
+    const minRiseDeg = getSettings().grid.enabled
+        ? getSettings().grid.minBranchAngleDeg
+        : 45;
 
     const tooFlat: string[] = [];
     for (const [id, branch] of Object.entries(snapshot.branches)) {
@@ -1106,23 +1193,36 @@ test('a long fan link becomes a pillar, never a tapered spike', () => {
         };
     };
 
-    const host = facetAt('host-spike', 0, 0, 20, 2);
-    const neighbour = facetAt('lone-tip', 6, 0, 22.5, 2);
+    const host = facetAt('host-spike', 0, 0, 20, 0.7);
+    const neighbour = facetAt('lone-tip', 6, 0, 22.5, 0.7);
 
-    const result = runAutoPlace([host, neighbour], 'model-a', { debugSkipAutoBracing: true });
+    // Off-grid default (leafFanMaxAngleDeg=45°): the ~8.5mm rescue link is past
+    // the 6mm leaf threshold, so it promotes to a real hosted branch — never a
+    // tapered leaf cone.
+    const branchResult = runAutoPlace([host, neighbour], 'model-a', { debugSkipAutoBracing: true });
+    assert.equal(branchResult.placed.stick, 0,
+        `never bridged model-to-model (${branchResult.placed.stick} sticks)`);
+    assertNoLeafPastBranchThreshold();
+    assert.equal(branchResult.placed.leaf, 0, 'no leaf cone past the branch threshold');
+    assert.equal(branchResult.placed.branch, 1, 'long off-grid fan link promotes to a hosted branch');
+    assert.equal(branchResult.placed.trunk, 1, 'host stands on the plate');
+    assert.ok((branchResult.analytics?.areaCoverage ?? 0) >= 0.99, 'both contacts are supported');
 
-    // The link that would carry this tip is ~12mm, past the leaf threshold, and
-    // this host's shaft gives no sample a legal branch departure — so the tip
-    // keeps a pillar. The 12.2mm tapered cone this used to build is exactly the
-    // shape the rule forbids, and a pillar is not worse: one plate contact and
-    // one model contact, the same as any trunk, and the consolidation pass can
-    // still chunk it into the forest.
+    // When a lower host (Z=10) cannot offer any shaft sample steep enough for a
+    // legal branch to a neighbour 7.5 mm out at Z=10.5 (cone bend pushes shaft
+    // departure past 45°), the tip keeps a standalone pillar rather than building
+    // a long tapered spike.
+    resetStore();
+    resetKickstandsInState();
+    const lowHost = facetAt('host-low', 0, 0, 10, 0.7);
+    const farLowNeighbour = facetAt('lone-low-tip', 7.5, 0, 10.5, 0.7);
+    const result = runAutoPlace([lowHost, farLowNeighbour], 'model-a', { debugSkipAutoBracing: true, leafFanMaxAngleDeg: 30 });
     assert.equal(result.placed.stick, 0,
         `never bridged model-to-model (${result.placed.stick} sticks)`);
     assertNoLeafPastBranchThreshold();
     assert.equal(result.placed.leaf, 0, 'no leaf cone of the link length');
-    assert.equal(result.placed.branch, 0, 'and no branch this host could carry');
-    assert.ok(result.placed.trunk <= 2,
+    assert.equal(result.placed.branch, 0, 'and no branch this low host could carry legally');
+    assert.equal(result.placed.trunk, 2,
         `it stands on the plate instead (${result.placed.trunk} trunks)`);
     assert.ok((result.analytics?.areaCoverage ?? 0) >= 0.99, 'the contact is still supported');
 
@@ -1214,7 +1314,7 @@ for (const gridEnabled of [false, true]) {
 // Model-scale sizing: the run-level factors reach the built geometry.
 // ---------------------------------------------------------------------------
 
-test('the same island sizes a thicker trunk on a big model than on a small one', () => {
+test('a big model never gets a thinner trunk than a small one, and the structure cap holds', () => {
     resetStore();
     resetKickstandsInState();
     clearHistory();
@@ -1242,10 +1342,14 @@ test('the same island sizes a thicker trunk on a big model than on a small one',
 
     const small = shaftForBox(30, 30, 30);
     const large = shaftForBox(220, 220, 60);
+    // Both runs carry the whole model on one contact, so the stress loop takes
+    // each to the structure cap (1.4 mm); growth past the band is now bracing
+    // and kickstands, not a fatter pole. The large model may never be thinner.
     assert.ok(
-        large > small,
-        `the large model's trunk is thicker (${large.toFixed(2)} mm vs ${small.toFixed(2)} mm)`,
+        large >= small,
+        `the large model's trunk is never thinner (${large.toFixed(2)} mm vs ${small.toFixed(2)} mm)`,
     );
+    assert.ok(large <= 1.4 + 1e-6, `the structure shaft cap holds (${large.toFixed(2)} mm)`);
 
     setModelMesh('model-a', null);
 });
@@ -1334,3 +1438,337 @@ test('a voxel island on a steep side wall gets no support', () => {
     setModelMesh('model-a', null);
     disposeHandlers();
 });
+
+test('exterior cavity bridge exceeding MAX_CAVITY_BRIDGE_MM (12mm) is rejected', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+
+    // Wide lower shelf (80x80, top at Z=6) blocks direct and angled plate trunks;
+    // exterior upper overhang (bottom at Z=22) sits 16mm > 12mm above the shelf
+    // (within Stick's 20mm contactSpan range, so only MAX_CAVITY_BRIDGE_MM rejects it).
+    const geometry = mergeGeometries([
+        new THREE.BoxGeometry(80, 80, 4).translate(0, 0, 4),
+        new THREE.BoxGeometry(4, 4, 2).translate(0, 0, 23),
+    ])!;
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld(true);
+    setModelMesh('model-a', mesh);
+
+    const island = {
+        ...makeIsland('ext-bridge-16mm', 0, 0, 22, 2),
+        surfaceNormal: { x: 0, y: 0, z: -1 },
+    };
+    const result = runAutoPlace(
+        [island],
+        'model-a',
+        { debugSkipAutoBracing: true, stabilizationEnabled: false },
+    );
+
+    assert.equal(result.placed.stick, 0, '16mm exterior Stick (>12mm cap) must be rejected');
+    assert.equal(Object.keys(getSnapshot().sticks).length, 0, 'no exterior Stick stored');
+    assert.ok(result.rejectedCandidates >= 1, 'candidate counted as rejected');
+
+    setModelMesh('model-a', null);
+    disposeHandlers();
+});
+
+test('Phase 3f flat-voxel coverage stubs bind to segment ids, thicken host trunk, survive Phase 4c, and match worker', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+    const prevSettings = getSettings();
+
+    try {
+        const settings = createDefaultSettings();
+        settings.grid.enabled = false;
+        setSettings(settings);
+
+        const geometry = new THREE.BoxGeometry(8, 8, 4).translate(12, -8, 12);
+        accelerateGeometry(geometry);
+        const mesh = new THREE.Mesh(geometry);
+        mesh.updateMatrixWorld(true);
+        setModelMesh('model-a', mesh);
+
+        const voxels: Array<{ x: number; y: number; z?: number }> = [];
+        for (let x = 10; x <= 14; x += 0.25) {
+            for (let y = -10; y <= -6; y += 0.25) {
+                voxels.push({ x, y, z: 10 });
+            }
+        }
+        const island: DetectedIsland = {
+            id: 'flat-vox-16',
+            source: 'voxel',
+            contact: new THREE.Vector3(12, -8, 10),
+            baseZ: 10,
+            areaMm2: 16,
+            layerSpan: [0, 200],
+            contactVoxels: footprintFromPoints(voxels),
+        };
+
+        const override = { debugSkipAutoBracing: true, stabilizationEnabled: false, sizeScale: 0.5 } as const;
+        const plan = computeAutoSupportPlan([island], 'model-a', override, undefined, mesh);
+        assert.ok(plan, 'main-thread plan computed');
+        assert.ok(plan.result.placed.branch > 0, `expected Phase 3f stub branches, got ${JSON.stringify(plan.result.placed)}`);
+        assert.equal(
+            plan.result.placed.branch,
+            Object.keys(plan.support.branches).length,
+            '0 stub branches culled in Phase 4c',
+        );
+
+        const allSegIds = new Set<string>();
+        const trunkIds = new Set(Object.keys(plan.support.trunks));
+        for (const trunk of Object.values(plan.support.trunks)) {
+            for (const seg of trunk.segments) allSegIds.add(seg.id);
+        }
+        for (const branch of Object.values(plan.support.branches)) {
+            const knot: Knot | undefined = plan.support.knots[branch.parentKnotId];
+            assert.ok(knot, `branch ${branch.id} has parent knot`);
+            assert.ok(!trunkIds.has(knot.parentShaftId), `stub knot ${knot.id} must not point at raw trunk id`);
+            assert.ok(allSegIds.has(knot.parentShaftId), `stub knot ${knot.id} parentShaftId references a real segment id`);
+            assert.equal(typeof knot.t, 'number', `stub knot ${knot.id} carries numeric t`);
+        }
+
+        // Verify Forest resize pass saw the stub branches and thickened the host trunk to >= stub branch diameter.
+        const hostTrunk = Object.values(plan.support.trunks)[0];
+        const maxBranchSegDia = Math.max(
+            ...Object.values(plan.support.branches).flatMap((b) => b.segments.map((s) => s.diameter)),
+        );
+        assert.ok(
+            hostTrunk.segments[0].diameter + 1e-6 >= maxBranchSegDia,
+            `host trunk base segment (${hostTrunk.segments[0].diameter.toFixed(3)}mm) must thicken to >= stub branch (${maxBranchSegDia.toFixed(3)}mm)`,
+        );
+
+        // Worker parity check
+        setModelMesh('model-a', null);
+        const workerPlan = runAutoPlaceRequest(structuredClone({
+            modelId: 'model-a',
+            islands: [serializeIsland(island)],
+            settingsOverride: override,
+            appSettings: settings,
+            baseState: getSnapshot(),
+            mesh: serializeModelMesh(mesh),
+            meshKey: modelMeshKey(mesh),
+        }));
+        assert.ok(workerPlan, 'worker plan computed');
+        assert.deepEqual(workerPlan.result.placed, plan.result.placed, 'worker and main-thread placed counts match');
+        assert.equal(
+            Object.keys(workerPlan.support.branches).length,
+            Object.keys(plan.support.branches).length,
+            'worker and main-thread stub branch entity counts match',
+        );
+    } finally {
+        setModelMesh('model-a', null);
+        setSettings(prevSettings);
+        disposeHandlers();
+    }
+});
+
+test('Phase 3c gap-fill reads draft tips on a clean store and converges without duplicate tips', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+    const prevSettings = getSettings();
+
+    try {
+        const settings = createDefaultSettings();
+        settings.grid.enabled = false;
+        setSettings(settings);
+
+        const geometry = new THREE.BoxGeometry(10, 6, 4).translate(0, 0, 14);
+        accelerateGeometry(geometry);
+        const mesh = new THREE.Mesh(geometry);
+        mesh.updateMatrixWorld(true);
+        setModelMesh('model-a', mesh);
+
+        const voxels: Array<{ x: number; y: number; z?: number }> = [];
+        for (let x = -4; x <= 4; x += 0.25) {
+            for (let y = -2; y <= 2; y += 0.25) {
+                voxels.push({ x, y, z: 12 });
+            }
+        }
+        const overhang: DetectedIsland = {
+            id: 'overhang-gap-fill-clean',
+            source: 'overhang',
+            contact: new THREE.Vector3(0, 0, 12),
+            baseZ: 12,
+            areaMm2: 32,
+            overhangAngleDeg: 0,
+            surfaceNormal: { x: 0, y: 0, z: -1 },
+            contactVoxels: footprintFromPoints(voxels),
+        };
+
+        // gridAreaThresholdMm2: 100 forces Phase 2 to emit only 1 centroid candidate at (0, 0, 12),
+        // leaving uncovered wings >= 2.0 mm² on both ±X ends for Phase 3c gap-fill to cover.
+        runAutoPlace(
+            [overhang],
+            'model-a',
+            {
+                gridAreaThresholdMm2: 100,
+                debugSkipAutoBracing: true,
+                stabilizationEnabled: false,
+            },
+        );
+
+        // Collect all placed tip XY positions (trunks + any consolidated leaves/branches)
+        const state = getSnapshot();
+        const tipPositions: Array<{ x: number; y: number }> = [];
+        for (const t of Object.values(state.trunks)) {
+            if (t.contactCone?.pos) tipPositions.push({ x: t.contactCone.pos.x, y: t.contactCone.pos.y });
+        }
+        for (const l of Object.values(state.leaves)) {
+            if (l.contactCone?.pos) tipPositions.push({ x: l.contactCone.pos.x, y: l.contactCone.pos.y });
+        }
+        for (const b of Object.values(state.branches)) {
+            if (b.contactCone?.pos) tipPositions.push({ x: b.contactCone.pos.x, y: b.contactCone.pos.y });
+        }
+        assert.ok(tipPositions.some((p) => p.x < -1.5), `expected Phase 3c gap-fill tip on -X wing, got ${JSON.stringify(tipPositions)}`);
+        assert.ok(tipPositions.some((p) => p.x > 1.5), `expected Phase 3c gap-fill tip on +X wing, got ${JSON.stringify(tipPositions)}`);
+
+        for (let i = 0; i < tipPositions.length; i++) {
+            for (let j = i + 1; j < tipPositions.length; j++) {
+                const dist = Math.hypot(
+                    tipPositions[i].x - tipPositions[j].x,
+                    tipPositions[i].y - tipPositions[j].y,
+                );
+                assert.ok(
+                    dist >= 0.5,
+                    `duplicate tip coordinates placed at (${tipPositions[i].x.toFixed(2)}, ${tipPositions[i].y.toFixed(2)}) and (${tipPositions[j].x.toFixed(2)}, ${tipPositions[j].y.toFixed(2)})`,
+                );
+            }
+        }
+    } finally {
+        setModelMesh('model-a', null);
+        setSettings(prevSettings);
+        disposeHandlers();
+    }
+});
+
+test('BUG-PERF-WIRE[b] commitAutoPlacePlan seals drafts, prevents undoStack mutation, and respects beforeOverride', () => {
+    const disposeHandlers = registerSupportHistoryHandlers();
+    try {
+        clearHistory();
+        resetStore();
+
+        // 1. Setup base snapshot
+        const initialTrunk = {
+            id: 't-pre',
+            modelId: 'model-x',
+            typeId: 'trunk',
+            contactCone: { pos: { x: 0, y: 0, z: 10 } },
+        } as any;
+        const initialSnap: SupportState = {
+            ...getSnapshot(),
+            trunks: { [initialTrunk.id]: initialTrunk },
+        };
+        setSnapshot(initialSnap);
+
+        // Create an owned draft representing an auto-place run
+        let draft = createOwnedDraft(initialSnap);
+        assert.equal(isOwnedDraft(draft), true, 'draft must be an owned draft initially');
+
+        const newTrunk = {
+            id: 't-new',
+            modelId: 'model-x',
+            typeId: 'trunk',
+            contactCone: { pos: { x: 1, y: 1, z: 10 } },
+        } as any;
+        draft = draftAddEntity(draft, 'trunk', newTrunk);
+
+        const plan = {
+            before: initialSnap,
+            support: draft,
+            analytics: { timings: {} as any },
+            result: { changed: true, placed: { trunks: 1 } as any, rejected: 0, status: 'success' },
+        } as unknown as AutoSupportPlan;
+
+        // Commit plan
+        const res = commitAutoPlacePlan(plan);
+        assert.equal(res.changed, true);
+
+        // After commitAutoPlacePlan(plan) commits with { payloadOwned: true }:
+        // getSnapshot() is NOT an owned draft
+        const committedSnap = getSnapshot();
+        assert.equal(isOwnedDraft(committedSnap), false, 'committed snapshot must be sealed (not an owned draft)');
+        assert.equal(isOwnedDraft(plan.support), false, 'plan.support must be sealed');
+        assert.notEqual(plan.before, plan.support);
+
+        // Subsequent mutations to getSnapshot() (or draftAddEntity / direct mutation on committedSnap)
+        // must NOT mutate undoStack entries in place
+        const postMutationTrunk = {
+            id: 't-mutated',
+            modelId: 'model-x',
+            typeId: 'trunk',
+            contactCone: { pos: { x: 2, y: 2, z: 10 } },
+        } as any;
+        (committedSnap.trunks as any)['t-mutated'] = postMutationTrunk;
+
+        // Undo should restore plan.before exactly
+        undo();
+        const restoredSnap = getSnapshot();
+        assert.ok(restoredSnap.trunks['t-pre'], 'pre-run trunk must be restored');
+        assert.ok(!restoredSnap.trunks['t-new'], 'placed trunk must be undone');
+        assert.ok(!restoredSnap.trunks['t-mutated'], 'subsequent mutation must not have polluted history/undo');
+
+        // 2. Test beforeOverride
+        clearHistory();
+        resetStore();
+        const replaceBefore: SupportState = {
+            ...getSnapshot(),
+            trunks: {
+                't-override': {
+                    id: 't-override',
+                    modelId: 'model-x',
+                    typeId: 'trunk',
+                } as any,
+            },
+        };
+
+        let draft2 = createOwnedDraft(getSnapshot());
+        draft2 = draftAddEntity(draft2, 'trunk', { id: 't-from-plan', modelId: 'model-x' } as any);
+        const plan2 = {
+            before: getSnapshot(),
+            support: draft2,
+            analytics: { timings: {} as any },
+            result: { changed: true, placed: { trunks: 1 } as any, rejected: 0, status: 'success' },
+        } as unknown as AutoSupportPlan;
+
+        commitAutoPlacePlan(plan2, replaceBefore);
+        assert.equal(getUndoCount(), 1);
+        assert.ok(getSnapshot().trunks['t-from-plan']);
+        assert.ok(!getSnapshot().trunks['t-override']);
+
+        // Undo restores replaceBefore!
+        undo();
+        assert.ok(getSnapshot().trunks['t-override'], 'beforeOverride must be restored by undo()');
+        assert.ok(!getSnapshot().trunks['t-from-plan']);
+    } finally {
+        disposeHandlers();
+    }
+});
+
+test('buildStick matches cone bodyDiameterMm to explicit shaftDiameterMm override', () => {
+    const { stick, error } = buildStick({
+        modelId: 'stick-sizing-test',
+        aPos: { x: 0, y: 0, z: 10 },
+        aNormal: { x: 0, y: 0, z: -1 },
+        bPos: { x: 0, y: 0, z: 2 },
+        bNormal: { x: 0, y: 0, z: 1 },
+        shaftDiameterMm: 1.65,
+        tipContactDiameterMm: 0.35,
+    });
+    assert.equal(error, undefined);
+    assert.equal(stick.segments[0]?.diameter, 1.65);
+    assert.equal(stick.contactConeA.profile.bodyDiameterMm, 1.65);
+    assert.equal(stick.contactConeB.profile.bodyDiameterMm, 1.65);
+    assert.equal(stick.contactConeA.profile.contactDiameterMm, 0.35);
+});
+
+

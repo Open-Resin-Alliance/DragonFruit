@@ -17,6 +17,7 @@
  */
 
 import * as THREE from 'three';
+import { accelerateGeometry, initializeBVH } from '@/utils/bvh';
 import { quantizeToCell } from '@/utils/math';
 import { ColumnClearanceMap } from './ColumnClearanceMap';
 
@@ -112,6 +113,7 @@ const COLUMN_MAP_CACHE_BYTES = 32 * 1024 * 1024;
 
 export class SDFCache {
     readonly cellSize: number;
+    readonly geometry: THREE.BufferGeometry;
 
     private readonly mesh: THREE.Mesh;
     /** BVH instance from three-mesh-bvh (geometry.boundsTree) */
@@ -186,7 +188,14 @@ export class SDFCache {
         this.cellSize = opts?.cellSize ?? 0.5;
         this.mesh = mesh;
 
-        const geom = mesh.geometry as THREE.BufferGeometry & { boundsTree?: MeshBVHLike };
+        const geom = mesh.geometry as THREE.BufferGeometry & { boundsTree?: MeshBVHLike; computeBoundsTree?: unknown };
+        this.geometry = geom;
+        if (!geom.boundsTree && (geom.getAttribute('position')?.count ?? 0) > 0) {
+            if (typeof geom.computeBoundsTree !== 'function') {
+                initializeBVH();
+            }
+            accelerateGeometry(geom);
+        }
         const bvh = geom.boundsTree;
         if (!bvh) {
             throw new Error('SDFCache: mesh geometry has no boundsTree (BVH). Ensure BVH is computed before constructing the cache.');

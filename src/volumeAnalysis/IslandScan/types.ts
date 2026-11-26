@@ -36,6 +36,7 @@ export interface ComponentInfo {
   size: number; // Number of pixels in the component
   centroidSumX: number; // Sum of X coordinates for centroid calc
   centroidSumY: number; // Sum of Y coordinates for centroid calc
+  isDetached?: boolean;
 }
 
 export interface Island {

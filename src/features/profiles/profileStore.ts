@@ -371,6 +371,12 @@ export type MaterialProfile = {
         z: number;
     };
     layerHeightMm: number;
+    /**
+     * Green (partially cured) tensile/flexural strength in MPa. The support
+     * frame solver divides tip/member utilizations by it; absent means the
+     * standard-resin default. Exposed on the Meta tab.
+     */
+    tensileStrengthMpa?: number;
     normalExposureSec: number;
     bottomExposureSec: number;
     bottomLayerCount: number;
@@ -668,6 +674,9 @@ type PersistedProfileStoreEnvelope = {
 
 const STORAGE_KEY = 'dragonfruit-profiles-v1';
 const STORAGE_BACKUP_KEY = 'dragonfruit-profiles-v1-backup';
+/** One-time marker for the material-field semantics change (green strength →
+ *  datasheet tensile). */
+const TENSILE_SEMANTICS_MIGRATION_KEY = 'dragonfruit.material.tensileSemantics.v2';
 const LEGACY_STORAGE_KEYS = ['dragonfruit-profiles'];
 const PROFILE_STORE_SCHEMA_VERSION = 3;
 const ACTIVE_MATERIAL_BY_PRINTER_PROFILE_STORAGE_KEY = 'dragonfruit.material.activeByPrinterProfile.v1';
@@ -1379,6 +1388,7 @@ function sanitizeState(input: Partial<ProfileStoreState> | null | undefined): Pr
                             z: Number((profile as any).scaleCompensationPct?.z) || 0,
                         },
                         layerHeightMm: Number((profile as any).layerHeightMm) || 0.05,
+                        tensileStrengthMpa: Number(materialProfile.tensileStrengthMpa) || 24,
                         normalExposureSec: Number((profile as any).normalExposureSec) || 2.5,
                         bottomExposureSec: Number((profile as any).bottomExposureSec) || 28,
                         bottomLayerCount: Number((profile as any).bottomLayerCount) || 5,
@@ -1513,6 +1523,32 @@ function parsePersistedState(raw: string | null): Partial<ProfileStoreState> | n
     }
 }
 
+/**
+ * The material field used to hold the green support strength the solver divided
+ * by directly (default 12 MPa). It now holds the resin datasheet tensile and is
+ * derated ×0.2 at the solver. A stored profile still carrying the old default
+ * 12 would therefore compute a 2.4 MPa break and carpet the model in supports;
+ * move exactly those values to the measured DM12 datasheet 24 (→ 4.8 MPa break).
+ * The localStorage marker makes this one-time: a 12 typed after the change is
+ * kept as the user's datasheet value.
+ */
+function migrateTensileSemantics(
+    parsed: Partial<ProfileStoreState>,
+): Partial<ProfileStoreState> {
+    if (!hasWindow() || window.localStorage.getItem(TENSILE_SEMANTICS_MIGRATION_KEY) === '1') {
+        return parsed;
+    }
+    const materials = Array.isArray(parsed.materialProfiles) ? parsed.materialProfiles : [];
+    const migratedMaterials = materials.map((material) => {
+        const value = material?.tensileStrengthMpa;
+        return typeof value === 'number' && Math.abs(value - 12) < 1e-9
+            ? { ...material, tensileStrengthMpa: 24 }
+            : material;
+    });
+    window.localStorage.setItem(TENSILE_SEMANTICS_MIGRATION_KEY, '1');
+    return { ...parsed, materialProfiles: migratedMaterials };
+}
+
 function ensureHydrated(): void {
     if (!hasWindow()) return;
     if (isHydrated) return;
@@ -1542,7 +1578,7 @@ export function hydrateProfilesFromStorage(): void {
             return;
         }
 
-        state = sanitizeState(parsed);
+        state = sanitizeState(migrateTensileSemantics(parsed));
         persist(state);
         notify();
     } catch (error) {
@@ -2035,6 +2071,7 @@ export function addMaterialProfile(
             z: partial?.scaleCompensationPct?.z ?? 0,
         },
         layerHeightMm: partial?.layerHeightMm ?? 0.05,
+        tensileStrengthMpa: clampNumber(partial?.tensileStrengthMpa, 24, 5, 200),
         normalExposureSec: partial?.normalExposureSec ?? 2.5,
         bottomExposureSec: partial?.bottomExposureSec ?? 28,
         bottomLayerCount: partial?.bottomLayerCount ?? 5,
@@ -2694,6 +2731,7 @@ export function importPrinterBundle(payload: unknown): string {
                 z: Number(material.scaleCompensationPct?.z ?? 0),
             },
             layerHeightMm: Number.isFinite(Number(material.layerHeightMm)) ? Number(material.layerHeightMm) : 0.05,
+            tensileStrengthMpa: clampNumber(material.tensileStrengthMpa, 24, 5, 200),
             normalExposureSec: Number.isFinite(Number(material.normalExposureSec)) ? Number(material.normalExposureSec) : 2.5,
             bottomExposureSec: Number.isFinite(Number(material.bottomExposureSec)) ? Number(material.bottomExposureSec) : 28,
             bottomLayerCount: Number.isFinite(Number(material.bottomLayerCount)) ? Math.max(1, Math.round(Number(material.bottomLayerCount))) : 5,
@@ -3077,6 +3115,7 @@ export function importSceneMaterials(printerProfileId: string, materials: unknow
                 z: Number(source.scaleCompensationPct?.z ?? 0),
             },
             layerHeightMm: Number.isFinite(Number(source.layerHeightMm)) ? Number(source.layerHeightMm) : 0.05,
+            tensileStrengthMpa: clampNumber(source.tensileStrengthMpa, 24, 5, 200),
             normalExposureSec: Number.isFinite(Number(source.normalExposureSec)) ? Number(source.normalExposureSec) : 2.5,
             bottomExposureSec: Number.isFinite(Number(source.bottomExposureSec)) ? Number(source.bottomExposureSec) : 28,
             bottomLayerCount: Math.max(1, Math.round(Number(source.bottomLayerCount ?? 5))),

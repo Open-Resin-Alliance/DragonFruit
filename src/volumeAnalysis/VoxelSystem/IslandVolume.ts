@@ -262,3 +262,58 @@ export function getIslandDescendants(
   return descendants;
 }
 
+/**
+ * Calculate the total volume of an island in mm³.
+ * Uses pixel area × layer height for each layer.
+ * 
+ * Counts volume inclusively up to `island.lastLayer` (for complete islands,
+ * `lastLayer` is already the final layer prior to merge/absorption).
+ */
+export function calculateIslandVolume(
+  island: Island,
+  scanResults: ScanResults,
+  layerHeightMm: number
+): number {
+  // Optimized volume calculation using pre-calculated areas if available
+  // This avoids iterating pixels if perLayerAreaMm2 is populated
+  if (island.perLayerAreaMm2 && island.perLayerAreaMm2.size > 0) {
+    let totalVolumeMm3 = 0;
+    const maxLayerToCount = island.lastLayer;
+
+    for (const [layer, areaMm2] of island.perLayerAreaMm2) {
+      if (layer <= maxLayerToCount) {
+        totalVolumeMm3 += areaMm2 * layerHeightMm;
+      }
+    }
+    return totalVolumeMm3;
+  }
+
+  // Fallback to pixel counting (slower)
+  const pixelsByLayer = getIslandPixelsByLayer(island.id, scanResults);
+  const pixelAreaMm2 = scanResults.grid.px_mm * scanResults.grid.px_mm;
+  let totalVolumeMm3 = 0;
+
+  const maxLayerToCount = island.lastLayer;
+
+  for (const [layer, pixels] of pixelsByLayer) {
+    if (layer > maxLayerToCount) continue;
+
+    const layerAreaMm2 = pixels.length * pixelAreaMm2;
+    totalVolumeMm3 += layerAreaMm2 * layerHeightMm;
+  }
+
+  return totalVolumeMm3;
+}
+
+/**
+ * Calculate and populate volumes for all islands in the scan results.
+ * Modifies the islands in place by setting their volumeMm3 property.
+ */
+export function calculateAllIslandVolumes(
+  scanResults: ScanResults,
+  layerHeightMm: number
+): void {
+  for (const island of scanResults.islands) {
+    island.volumeMm3 = calculateIslandVolume(island, scanResults, layerHeightMm);
+  }
+}

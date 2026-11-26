@@ -1,6 +1,7 @@
+import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as THREE from 'three';
-import { computeLoopsAtZ } from '../Slice2D';
+import { computeLoopsAtZ, polygonArea } from '../Slice2D';
 
 test('Slicing Performance Benchmark', () => {
     // Create a high-res sphere (approx 10k triangles)
@@ -26,4 +27,9 @@ test('Slicing Performance Benchmark', () => {
     // Estimate for a full print (e.g., 2000 layers)
     const estimatedFullScan = (timePerLayer * 2000) / 1000;
     console.log(`Estimated time for 2000 layers: ${estimatedFullScan.toFixed(2)}s`);
+
+    const eqLoops = computeLoopsAtZ(geometry, 0.5);
+    assert.equal(eqLoops.length, 1, 'indexed SphereGeometry slice away from pole seam should produce 1 closed loop');
+    assert.ok(polygonArea(eqLoops[0]) > 7500, 'cross-section area near equator should exceed 7500 mm^2');
+    geometry.dispose();
 });

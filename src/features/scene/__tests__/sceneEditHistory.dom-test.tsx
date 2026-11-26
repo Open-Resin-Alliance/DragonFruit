@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { resolveObjectURL } from 'node:buffer';
 import test from 'node:test';
 import { useEffect } from 'react';
+import { msg } from '@lingui/core/macro';
+import * as THREE from 'three';
+import { serializeVoxlDocumentV2 } from '@/features/scene/voxl';
 import { clearHistory, getUndoCount, redo, undo } from '@/history/historyStore';
 import { addRoot, getSnapshot } from '@/supports/state';
 import { renderWithProviders, settle } from '@/utils/__tests__/helpers/renderDom';
@@ -206,6 +209,121 @@ test('moving a model carries its supports through undo and redo', async () => {
     await settle(20);
     assert.ok(Math.abs(rootX() - (startX + 5)) < 1e-6, 'redo moves the support again');
     assert.ok(Math.abs(model().transform.position.x - after.position.x) < 1e-6, 'and the model');
+  } finally {
+    await tree.unmount();
+  }
+});
+
+async function loadVoxlWithMetadata(
+  scene: () => Scene,
+  sourcePath: string,
+  originalFileName: string,
+) {
+  const beforeCount = scene().models.length;
+  const bin = await serializeVoxlDocumentV2(
+    {
+      models: [{
+        id: `voxl-${beforeCount}`,
+        name: 'sourced',
+        visible: true,
+        color: '#ffffff',
+        polygonCount: 12,
+        sourcePath,
+        originalRef: {
+          mode: 'external-file',
+          fileName: originalFileName,
+        },
+        transform: {
+          position: { x: 0, y: 0, z: 0 },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+        mesh: {
+          mode: 'embedded-chunk',
+          chunkIndex: 0,
+          fileName: 'cube.stl',
+          mimeType: 'model/stl',
+        },
+      }],
+      activeModelId: `voxl-${beforeCount}`,
+      selectedModelIds: [],
+      supports: { version: 1, meta: { source: 'test', objectCenter: { x: 0, y: 0, z: 0 } }, roots: [] } as never,
+    },
+    new Map([[0, new TextEncoder().encode(CUBE_STL)]]),
+    undefined,
+    { embedOriginalMesh: false },
+  );
+  const fileBytes = Uint8Array.from(bin).buffer;
+  const ok = await scene().importSceneFiles([new File([fileBytes], 'sourced.voxl', { type: 'application/octet-stream' })]);
+  assert.equal(ok, true, 'voxl scene import must succeed');
+  await waitFor(() => scene().models.length === beforeCount + 1, 'voxl model to load');
+  await settle(50);
+  return scene().models[scene().models.length - 1];
+}
+
+test('replaceModelGeometry and splitModelIntoParts clear sourcePath and originalRef and restore them on undo', async (t) => {
+  const { tree, scene } = await mountScene();
+  try {
+    await t.test('replaceModelGeometry clears sourcePath and originalRef with undo/redo symmetry', async () => {
+      const loaded = await loadVoxlWithMetadata(scene, '/tmp/original-a.stl', 'sidecars/original-a.stl');
+      const model = () => scene().models.find((m) => m.id === loaded.id);
+      assert.equal(model()?.sourcePath, '/tmp/original-a.stl');
+      assert.equal(model()?.originalRef?.fileName, 'sidecars/original-a.stl');
+
+      clearHistory();
+      const nextGeom = new THREE.BoxGeometry(4, 4, 4);
+      const replaced = scene().replaceModelGeometry(loaded.id, nextGeom, msg`Replace geometry`, {
+        historyBefore: {},
+      });
+      assert.equal(replaced, true);
+      await settle(20);
+
+      assert.equal(model()?.sourcePath, null, 'replaceModelGeometry must clear stale sourcePath');
+      assert.equal(model()?.originalRef, undefined, 'replaceModelGeometry must clear stale originalRef');
+
+      undo();
+      await settle(20);
+      assert.equal(model()?.sourcePath, '/tmp/original-a.stl', 'undo restores sourcePath');
+      assert.equal(model()?.originalRef?.fileName, 'sidecars/original-a.stl', 'undo restores originalRef');
+
+      redo();
+      await settle(20);
+      assert.equal(model()?.sourcePath, null, 'redo clears sourcePath again');
+      assert.equal(model()?.originalRef, undefined, 'redo clears originalRef again');
+    });
+
+    await t.test('splitModelIntoParts clears sourcePath and originalRef on part0 and extra parts, restoring on undo', async () => {
+      const loaded = await loadVoxlWithMetadata(scene, '/tmp/original-b.stl', 'sidecars/original-b.stl');
+      const model = () => scene().models.find((m) => m.id === loaded.id);
+      assert.equal(model()?.sourcePath, '/tmp/original-b.stl');
+      assert.equal(model()?.originalRef?.fileName, 'sidecars/original-b.stl');
+
+      clearHistory();
+      const extraIds = scene().splitModelIntoParts(
+        loaded.id,
+        [new THREE.BoxGeometry(4, 4, 4), new THREE.BoxGeometry(3, 3, 3)],
+        msg`Split model`,
+      );
+      assert.ok(extraIds && extraIds.length === 1);
+      await settle(20);
+
+      const part0 = model();
+      const part1 = scene().models.find((m) => m.id === extraIds[0]);
+      assert.equal(part0?.sourcePath, null, 'part0 must clear stale sourcePath');
+      assert.equal(part0?.originalRef, undefined, 'part0 must clear stale originalRef');
+      assert.equal(part1?.sourcePath ?? null, null, 'extra part must not carry sourcePath');
+      assert.equal(part1?.originalRef, undefined, 'extra part must not carry originalRef');
+
+      undo();
+      await settle(20);
+      assert.equal(model()?.sourcePath, '/tmp/original-b.stl', 'undo restores sourcePath on unsplit model');
+      assert.equal(model()?.originalRef?.fileName, 'sidecars/original-b.stl', 'undo restores originalRef on unsplit model');
+
+      redo();
+      await settle(20);
+      assert.equal(model()?.sourcePath, null, 'redo clears sourcePath on part0 again');
+      assert.equal(model()?.originalRef, undefined, 'redo clears originalRef on part0 again');
+    });
   } finally {
     await tree.unmount();
   }

@@ -1062,8 +1062,10 @@ export function useOrganicCutSession({
   // drag never lets a stale result overwrite a newer one.
   const cutMode = panelState.cutMode;
   React.useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- the seam preview is owned
+       by this effect's cancellable solve; clearing it belongs with the request it
+       would otherwise start. */
     if (!toolActive || loop.length < 2 || !activeGeometry || !activeGeometryKey) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- the seam preview is owned by this effect's cancellable solve; clearing it belongs with the request it would otherwise start.
       setGeodesicPolyline(null);
       setPlaneCurves(null);
       return;
@@ -1111,6 +1113,7 @@ export function useOrganicCutSession({
     return () => {
       cancelled = true;
     };
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [toolActive, loop, activeGeometry, activeGeometryKey, cutScale, panelState.smoothing, cutMode]);
 
   // THE cut preview: one effect for both modes.
@@ -1181,7 +1184,7 @@ export function useOrganicCutSession({
       // Don't clear just because a drag started — keep the last preview up for the
       // duration of the drag (the lean is client-side, so no rebuild is needed until
       // the tenon/waypoint drag ends); only clear when there is truly nothing to show.
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- the cut preview is owned by this effect's cancellable Rust request; clearing it belongs with the request it would otherwise start.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing the preview is this request-owning effect's cleanup.
       if (!isDraggingPoint && !isDraggingTenon) clearCutPreview();
       return;
     }

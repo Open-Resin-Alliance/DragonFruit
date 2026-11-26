@@ -1976,16 +1976,15 @@ and `EXTD` are inflate + `JSON.parse` synchronously, one task. Only
 MESH/HSRC/CAVT/PSRC are in the async bulk path. Moving their `unzlibSync` to the
 existing async inflate removes the blocking decompress; the parse order stays.
 
-**Auto-support generate** (`autoPlaceWorkerClient.ts`):
-every run posts `baseState: getSnapshot()` — the whole plate's support state,
-structured-cloned in the calling task — plus `mesh`/`cavityMesh` slices that the
-worker already caches by key (`autoPlace.worker.shared.ts`). Omitting
-what the worker already holds, and transferring the first copies, removes the
-per-run clone.
+**Auto-support generate** (`autoPlaceWorkerClient.ts`, `autoPlace.worker.shared.ts` — **fixed**):
+repeat runs reuse the worker's cached `mesh`/`cavityMesh` by `meshKey` (`BUG-PERF-WIRE[a]`),
+skipping redundant serialization/BVH rebuilds, and worker-side `createOwnedDraft`
+passes use `payloadOwned` with sealed `[OWNED_DRAFT]` ownership (`BUG-PERF-WIRE[b]`)
+alongside in-place Phase 3c `draft` gap-fill convergence (`HIGH-02`).
 
-**Auto-support generate** (`AutoSupportPanel.tsx`):
-the replace pre-pass walks every model's supports, rebuilds the knot map and then
-`setSnapshot`s — and the commit rebuilds it again.
+**Auto-support generate** (`AutoSupportPanel.tsx` — **fixed**):
+`Replace all` now pushes a single atomic `Ctrl+Z` history entry across both the
+strip and regenerate steps (`MED-06[b]`), including deferred post-scan and no-op runs.
 
 **Every support write** (`src/supports/state.ts`, `normaliseSupportState`): the
 canonical `supports` map is rebuilt one entity at a time and each supplied
@@ -2253,3 +2252,28 @@ Two smaller directions the plugin SDK notes but does not pursue:
 - **Per-material geometry on import.** The scene import payload has one material per
   model, so a multi-material source file flattens. That follows from the scene
   model, not from the plugin tier; it lands with multi-material support.
+
+## Wider trunk spacing is not a reed-bed fix
+
+Measured while tuning organic tree structure: raising `MIN_TRUNK_SPACING_MM`
+from 2.5 to 3.0 mm cut coverage 0.7 pp on `sloped-cantilever` and left the
+standalone-mast count higher on the tree corpus (a separate 3.0 mm
+cluster-spacing experiment raised trunks 47 → 58). Wider spacing makes fewer
+pillars share a crown, which is the opposite of the intended snap-off chunk.
+The 2.5 mm guard is deliberate; the levers that do shrink the reed bed are
+chunk consolidation, the root merge, and the 8-contact chunk cap.
+
+## Silhouette-front routing needs a view authority
+
+The requested "prefer side/back grounded hosts over a front-curtain pillar" has
+no input to act on today: the placement pipeline is geometric and has no
+camera/view direction, so any "front" heuristic would guess. The closest
+geometric proxies (model bbox centre, tip surface normal) do not distinguish
+front from back and would re-rank every merge/fan globally, which is how a
+cosmetic change becomes a coverage regression. The intended interface is an
+optional view-direction field on the auto-support request, threaded into
+`findMergeHost`/`fanLeafToHost` as a soft `dot(hostDir, viewDir) < 0` bias
+(a tie-break under the existing distance/load score), plus a bench-visible
+metric for how many new front-side pillars were avoided. Until that signal
+exists, routing uses `findOffsetSilhouetteRoute`'s contour escape and the
+existing steepest/nearest host order only.

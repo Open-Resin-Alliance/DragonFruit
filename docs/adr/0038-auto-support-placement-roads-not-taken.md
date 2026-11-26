@@ -73,6 +73,15 @@ its own cluster minimum, so the band stopped discriminating — logged evidence
 showed 5 of 5 regions anchored. Only the **lowest** cluster is the anchor layer;
 higher clusters are suction surfaces and keep scale 1.
 
+## 2026-11 Supersession Note
+
+Several v1 constants and mechanisms recorded above have since been superseded while preserving the core decisions (no area-inverted physics sizing, standalone near-plate supports, tight grid-host fan radius, model-wide brace pairing, lowest-cluster anchoring):
+
+- **Sizing source**: the locked v1 table (`0.60 / 0.70 / 0.80 mm` shafts) was superseded by Support Studio preset resolution via `autoSupport.sizingPreset` (`detail` / `structure` / `anchor` or any user preset, `≈ 0.8 / 1.0 / 1.4 mm` fallback bands), modulated by monotone, ×1-floored `modelSizingFactors` (model size, load share, and support height).
+- **Fan radius**: `LEAF_FAN_RADIUS_MM` / `leafFanRadiusMm` default and minimum moved from `5 mm` to `8 mm` (`GRID_HOST_FAN_RADIUS_MM` remains `2.5 mm`).
+- **Near-plate primitive rename**: v1 `anchor` primitives were renamed to `stump` (`stumpBuilder.ts`, `stumpAutoPlacement.ts`).
+- **Density modulation**: per-region anchor/grid multipliers were unified under `areaPerSupportMm2` modulated by angle (`SLOPE_RELAX_RAMP_START`) and suction.
+
 ## Consequences
 
 - Anything reintroducing load-based sizing has to explain the preset inversion

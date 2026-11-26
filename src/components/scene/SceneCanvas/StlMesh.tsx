@@ -6,7 +6,8 @@ import { getSceneClipPlanes } from '@/features/slicing/sceneClipStore';
 import { MODEL_EDGE_OVERLAY_ENABLED } from '@/hooks/useStlGeometry';
 import { useFrame, useThree } from '@react-three/fiber';
 import { usePicking } from '@/components/picking';
-import { MeshShaderMaterial, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
+import { MeshShaderMaterial, StressForceHeatmapMaterial, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
+import type { PrintabilityReport, SupportFrameStressReport } from '@/supports/autoSupport';
 import { isKeyPressedSync } from '@/hotkeys/hotkeyStore';
 import { OpaqueWireOverlayMaterial } from '@/features/shaders/mesh/opaqueWireMesh';
 import {
@@ -96,6 +97,8 @@ function BodySurface({
   heatmapMaxAngle,
   heatmapColors,
   bakedAoStrength,
+  stressHeatmapReport,
+  printabilityHeatmap,
 }: {
   geometry: THREE.BufferGeometry;
   position: THREE.Vector3;
@@ -119,6 +122,9 @@ function BodySurface({
   heatmapMaxAngle?: number;
   heatmapColors?: string[];
   bakedAoStrength?: number;
+  stressHeatmapReport?: SupportFrameStressReport | null;
+  /** Demand-side paint; drawn by the same heatmap material when present. */
+  printabilityHeatmap?: PrintabilityReport | null;
 }) {
   const meshRef = React.useRef<THREE.Mesh>(null);
   // An X-rayed neighbour is stencil-masked against the selected body's silhouette,
@@ -174,26 +180,35 @@ function BodySurface({
       renderOrder={selected ? 0 : 10010}
       raycast={() => {}}
     >
-      <MeshShaderMaterial
-        shaderType={shaderType}
-        isSelected={selected}
-        isHovered={hovered}
-        useVertexColors={useVertexColors}
-        hoverTintColor={hoverTintColor}
-        selectedTintColor={selectedTintColor}
-        hoverTintStrength={hoverTintStrength}
-        selectedTintStrength={selectedTintStrength}
-        meshColor={color}
-        matcapVariant={matcapVariant}
-        flatUseVertexColors={flatUseVertexColors}
-        materialRoughness={materialRoughness}
-        clippingPlanes={clippingPlanes}
-        xrayOpacity={xrayOpacity}
-        heatmapMinAngle={heatmapMinAngle}
-        heatmapMaxAngle={heatmapMaxAngle}
-        heatmapColors={heatmapColors}
-        bakedAoStrength={bakedAoStrength}
-      />
+      {stressHeatmapReport || printabilityHeatmap ? (
+        <StressForceHeatmapMaterial
+          report={stressHeatmapReport}
+          printability={printabilityHeatmap}
+          clippingPlanes={clippingPlanes}
+          materialRoughness={materialRoughness}
+        />
+      ) : (
+        <MeshShaderMaterial
+          shaderType={shaderType}
+          isSelected={selected}
+          isHovered={hovered}
+          useVertexColors={useVertexColors}
+          hoverTintColor={hoverTintColor}
+          selectedTintColor={selectedTintColor}
+          hoverTintStrength={hoverTintStrength}
+          selectedTintStrength={selectedTintStrength}
+          meshColor={color}
+          matcapVariant={matcapVariant}
+          flatUseVertexColors={flatUseVertexColors}
+          materialRoughness={materialRoughness}
+          clippingPlanes={clippingPlanes}
+          xrayOpacity={xrayOpacity}
+          heatmapMinAngle={heatmapMinAngle}
+          heatmapMaxAngle={heatmapMaxAngle}
+          heatmapColors={heatmapColors}
+          bakedAoStrength={bakedAoStrength}
+        />
+      )}
     </mesh>
   );
 }
@@ -473,6 +488,8 @@ function StlMeshComponent({
   blockerEditMode = false,
   interiorView = false,
   cavityGeometry,
+  stressHeatmapReport = null,
+  printabilityHeatmap = null,
   children,
 }: {
   /** The model's own mesh: picking, painting, smoothing and the triangle-id overlays use it. */
@@ -576,6 +593,10 @@ function StlMeshComponent({
   /** When true, the model failed the manifold_csg status check (any non-manifold
    *  status). A red/clear checkerboard pattern is overlaid on the part to flag it. */
   nonManifold?: boolean;
+  /** Frame stress report driving the surface peel force & hotspot heatmap shader. */
+  stressHeatmapReport?: SupportFrameStressReport | null;
+  /** Live printability verdict; its mask paints uncovered footprint cells on the underside. */
+  printabilityHeatmap?: PrintabilityReport | null;
   children?: React.ReactNode;
 }) {
   // Access GPU picking state to detect gizmo hover
@@ -809,6 +830,7 @@ function StlMeshComponent({
    */
   React.useEffect(() => {
     if ((mode !== 'prepare' && mode !== 'support') || !isActiveModel) return;
+    if (transform && transform.scale.x * transform.scale.y * transform.scale.z < 0) return;
     const mesh = internalMeshRef.current;
     if (!mesh) return;
 
@@ -1868,6 +1890,13 @@ if (uDitherAmount > 0.0) {
           />
         ) : typeof supportNonSelectedOpacity === 'number' ? (
           supportDimMaterialObj ? <primitive object={supportDimMaterialObj} attach="material" /> : null
+        ) : stressHeatmapReport || printabilityHeatmap ? (
+          <StressForceHeatmapMaterial
+            report={stressHeatmapReport}
+            printability={printabilityHeatmap}
+            clippingPlanes={planes}
+            materialRoughness={materialRoughness}
+          />
         ) : (
           <MeshShaderMaterial
             shaderType={baseShaderType}
@@ -1916,6 +1945,8 @@ if (uDitherAmount > 0.0) {
             heatmapMaxAngle={heatmapMaxAngle}
             heatmapColors={heatmapColors}
             bakedAoStrength={bakedAoStrength}
+            stressHeatmapReport={stressHeatmapReport}
+            printabilityHeatmap={printabilityHeatmap}
           />
           {info.selected && (
             <MaterialOutlineRim

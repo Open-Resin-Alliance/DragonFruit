@@ -57,28 +57,55 @@ pub fn rle_encode(data: &[u8], width: i32, height: i32) -> RleMask {
 /// Used to find "supported" regions: current layer pixels that overlap with
 /// the dilated previous layer.
 pub fn rle_intersect_dilated(a: &RleMask, b: &RleMask, buffer: i32) -> RleMask {
+    if a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0 {
+        return RleMask::empty(a.width.max(0), a.height.max(0));
+    }
+
     let width = a.width;
     let height = a.height;
+    let b_height = b.height.min(b.rows.len() as i32);
+    if b_height <= 0 {
+        return RleMask::empty(width, height);
+    }
+
+    let r = buffer.max(0);
+    let rr = r as i64;
     let mut result_rows = Vec::with_capacity(height as usize);
+    let valid_a_rows = height.min(a.rows.len() as i32);
 
     for y in 0..height {
+        if y >= valid_a_rows {
+            result_rows.push(Vec::new());
+            continue;
+        }
         let a_row = &a.rows[y as usize];
         if a_row.is_empty() {
             result_rows.push(Vec::new());
             continue;
         }
 
-        // Gather relevant B rows within [y - buffer, y + buffer]
-        let start_y = (y - buffer).max(0);
-        let end_y = (y + buffer).min(height - 1);
+        // Gather relevant B rows within Euclidean disk [y - r, y + r]
+        let start_y = y.saturating_sub(r).max(0);
+        let end_y = y.saturating_add(r).min(b_height - 1);
+        if start_y > end_y {
+            result_rows.push(Vec::new());
+            continue;
+        }
 
-        // Collect all dilated B intervals
+        // Collect all dilated B intervals using Euclidean L2 horizontal reach
         let mut b_intervals: Vec<(i32, i32)> = Vec::new();
         for by in start_y..=end_y {
+            if b.rows[by as usize].is_empty() {
+                continue;
+            }
+            let dy = (by - y) as i64;
+            let dx = ((rr * rr - dy * dy) as f64).sqrt().floor() as i32;
             for run in &b.rows[by as usize] {
-                let s = (run.start - buffer).max(0);
-                let e = (run.start + run.length + buffer).min(width);
-                b_intervals.push((s, e));
+                let s = run.start.saturating_sub(dx).max(0);
+                let e = (run.start + run.length).saturating_add(dx).min(width);
+                if s < e {
+                    b_intervals.push((s, e));
+                }
             }
         }
 
@@ -345,6 +372,7 @@ pub fn rle_label_components(
                     size: area[root] as i32,
                     centroid_sum_x: sum_x[root],
                     centroid_sum_y: sum_y[root],
+                    is_detached: false,
                 });
                 fid
             });
@@ -360,6 +388,272 @@ pub fn rle_label_components(
     };
 
     (labels, components)
+}
+
+// ---------------------------------------------------------------------------
+// Detached Component Classification & Wall-Halo Rescue
+// ---------------------------------------------------------------------------
+
+/// Classify each candidate component on layer `L > 0` as `Detached` vs
+/// `CantileverFringe` by running a 1D run-level union-find over the enclosing
+/// solid mask `current` (`S_L`, honoring `connectivity`), testing Chebyshev-1
+/// polymer bridging (`[start - 1, end + 1)` across `y-1..=y+1`) against
+/// `prev_solid` (`S_{L-1}`), and rescuing any detached solid runs that were
+/// clipped out of `candidate_mask` by a nearby wall's `B`-pixel dilation halo.
+pub fn mark_detached_and_rescue_candidates(
+    current: &RleMask,
+    prev_solid: &RleMask,
+    candidate_mask: &mut RleMask,
+    labels: &mut RleLabels,
+    components: &mut Vec<ComponentInfo>,
+    connectivity: Connectivity,
+) {
+    let height = current.height.max(0).min(current.rows.len() as i32) as usize;
+    if height == 0 {
+        for comp in components.iter_mut() {
+            comp.is_detached = false;
+        }
+        return;
+    }
+
+    let prev_height = prev_solid.height.max(0).min(prev_solid.rows.len() as i32) as usize;
+    let expand = if connectivity == Connectivity::Eight {
+        1
+    } else {
+        0
+    };
+
+    fn find_u32(parent: &mut [u32], mut i: u32) -> u32 {
+        while parent[i as usize] != i {
+            let p = parent[i as usize];
+            parent[i as usize] = parent[p as usize];
+            i = parent[i as usize];
+        }
+        i
+    }
+
+    let run_bridges_prev_chebyshev1 = |y: usize, start: i32, end: i32| -> bool {
+        if prev_height == 0 {
+            return false;
+        }
+        let py_start = y.saturating_sub(1);
+        let py_end = (y + 1).min(prev_height - 1);
+        if py_start > py_end {
+            return false;
+        }
+        let search_start = start.saturating_sub(1);
+        let search_end = end.saturating_add(1);
+        for py in py_start..=py_end {
+            for p_run in &prev_solid.rows[py] {
+                let p_start = p_run.start;
+                if p_start >= search_end {
+                    break;
+                }
+                let p_end = p_start + p_run.length;
+                if search_start.max(p_start) < search_end.min(p_end) {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+
+    let mut parent: Vec<u32> = Vec::new();
+    let mut has_bridge: Vec<bool> = Vec::new();
+    let mut row_run_offset: Vec<usize> = Vec::with_capacity(height);
+
+    for y in 0..height {
+        let cur_offset = parent.len();
+        row_run_offset.push(cur_offset);
+        let row = &current.rows[y];
+
+        for run in row {
+            let my_id = parent.len() as u32;
+            let end = run.start + run.length;
+            parent.push(my_id);
+            has_bridge.push(run_bridges_prev_chebyshev1(y, run.start, end));
+
+            if y > 0 {
+                let prev_row = &current.rows[y - 1];
+                let prev_off = row_run_offset[y - 1];
+                let search_start = run.start - expand;
+                let search_end = end + expand;
+
+                for (pi, p_run) in prev_row.iter().enumerate() {
+                    if p_run.start >= search_end {
+                        break;
+                    }
+                    let p_end = p_run.start + p_run.length;
+                    if search_start.max(p_run.start) < search_end.min(p_end) {
+                        let ri = find_u32(&mut parent, my_id);
+                        let rj = find_u32(&mut parent, (prev_off + pi) as u32);
+                        if ri != rj {
+                            parent[rj as usize] = ri;
+                            has_bridge[ri as usize] |= has_bridge[rj as usize];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if parent.is_empty() {
+        for comp in components.iter_mut() {
+            comp.is_detached = false;
+        }
+        return;
+    }
+
+    // Flatten roots once so subsequent lookups are O(1).
+    let mut any_detached = false;
+    for i in 0..parent.len() {
+        let root = find_u32(&mut parent, i as u32);
+        parent[i] = root;
+        if !has_bridge[root as usize] {
+            any_detached = true;
+        }
+    }
+
+    if !any_detached {
+        for comp in components.iter_mut() {
+            comp.is_detached = false;
+        }
+        return;
+    }
+
+    // Wall-halo rescue: restore any detached solid runs that were clipped from
+    // candidate_mask by an adjacent neighbor wall's B-px dilation halo.
+    if candidate_mask.rows.len() < height {
+        candidate_mask.rows.resize_with(height, Vec::new);
+    }
+
+    let is_interval_covered = |cand_row: &[RleRun], start: i32, end: i32| -> bool {
+        let mut cur = start;
+        for c in cand_row {
+            let c_end = c.start + c.length;
+            if c_end <= cur {
+                continue;
+            }
+            if c.start > cur {
+                return false;
+            }
+            cur = cur.max(c_end);
+            if cur >= end {
+                return true;
+            }
+        }
+        cur >= end
+    };
+
+    let mut rescued = false;
+    for y in 0..height {
+        let cur_row = &current.rows[y];
+        if cur_row.is_empty() {
+            continue;
+        }
+        let off = row_run_offset[y];
+        let cand_row = &mut candidate_mask.rows[y];
+        let mut needs_row_merge = false;
+        for (i, s_run) in cur_row.iter().enumerate() {
+            let root = parent[off + i] as usize;
+            if !has_bridge[root]
+                && !is_interval_covered(cand_row, s_run.start, s_run.start + s_run.length)
+            {
+                needs_row_merge = true;
+                break;
+            }
+        }
+        if needs_row_merge {
+            rescued = true;
+            let mut intervals: Vec<(i32, i32)> =
+                Vec::with_capacity(cand_row.len() + cur_row.len());
+            for c in cand_row.iter() {
+                intervals.push((c.start, c.start + c.length));
+            }
+            for (i, s_run) in cur_row.iter().enumerate() {
+                let root = parent[off + i] as usize;
+                if !has_bridge[root] {
+                    intervals.push((s_run.start, s_run.start + s_run.length));
+                }
+            }
+            intervals.sort_unstable_by_key(|&(s, _)| s);
+            let merged = merge_intervals(&intervals);
+            *cand_row = merged
+                .into_iter()
+                .map(|(s, e)| RleRun {
+                    start: s,
+                    length: e - s,
+                })
+                .collect();
+        }
+    }
+
+    if rescued {
+        let (new_labels, new_components) = rle_label_components(candidate_mask, connectivity);
+        *labels = new_labels;
+        *components = new_components;
+    }
+
+    // Align candidate labels -> enclosing solid components to stamp is_detached.
+    for comp in components.iter_mut() {
+        comp.is_detached = false;
+    }
+    if components.is_empty() {
+        return;
+    }
+
+    let sequential_ids = components
+        .iter()
+        .enumerate()
+        .all(|(idx, c)| c.id == idx as i32 + 1);
+    let id_lookup: std::collections::HashMap<i32, usize> = if sequential_ids {
+        std::collections::HashMap::new()
+    } else {
+        components
+            .iter()
+            .enumerate()
+            .map(|(idx, c)| (c.id, idx))
+            .collect()
+    };
+
+    for y in 0..height.min(labels.rows.len()) {
+        let cur_row = &current.rows[y];
+        let lab_row = &labels.rows[y];
+        if cur_row.is_empty() || lab_row.is_empty() {
+            continue;
+        }
+        let off = row_run_offset[y];
+        let mut ci = 0usize;
+
+        for l_run in lab_row {
+            if l_run.id <= 0 {
+                continue;
+            }
+            let l_end = l_run.start + l_run.length;
+            while ci < cur_row.len() && cur_row[ci].start + cur_row[ci].length <= l_run.start {
+                ci += 1;
+            }
+            let mut tci = ci;
+            let mut detached = false;
+            while tci < cur_row.len() && cur_row[tci].start < l_end {
+                let root = parent[off + tci] as usize;
+                if !has_bridge[root] {
+                    detached = true;
+                    break;
+                }
+                tci += 1;
+            }
+            if detached {
+                if sequential_ids {
+                    if let Some(comp) = components.get_mut((l_run.id - 1) as usize) {
+                        comp.is_detached = true;
+                    }
+                } else if let Some(&idx) = id_lookup.get(&l_run.id) {
+                    components[idx].is_detached = true;
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -390,7 +684,6 @@ fn merge_intervals(intervals: &[(i32, i32)]) -> Vec<(i32, i32)> {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::*;
     use crate::rle::*;
 
     // Test-local decode helpers (the crate no longer exports decode functions;
@@ -558,13 +851,53 @@ mod tests {
             width: w,
             height: h,
         };
-        // buffer=1: dilated B covers [4,7) across rows 0-2
+        // buffer=1 (Euclidean L2 disk): cross around (5, 1) — corners excluded.
         let result = rle_intersect_dilated(&a, &b, 1);
-        // All three rows should have a run [4, 3]
-        for row in &result.rows {
-            assert_eq!(row.len(), 1);
-            assert_eq!(row[0], RleRun { start: 4, length: 3 });
-        }
+        assert_eq!(result.rows[0], vec![RleRun { start: 5, length: 1 }]);
+        assert_eq!(result.rows[1], vec![RleRun { start: 4, length: 3 }]);
+        assert_eq!(result.rows[2], vec![RleRun { start: 5, length: 1 }]);
+    }
+
+    #[test]
+    fn nbr02_euclidean_disk_eliminates_diagonal_square_bias() {
+        let w = 8;
+        let h = 8;
+        // Support pixel at (0, 0)
+        let mut b_data = vec![0u8; (w * h) as usize];
+        b_data[0] = 1;
+        let b = rle_encode(&b_data, w, h);
+
+        // Candidate pixels at (3, 4) [3^2 + 4^2 = 25 <= 25] and (4, 4) [4^2 + 4^2 = 32 > 25]
+        let mut a_data = vec![0u8; (w * h) as usize];
+        a_data[(4 * w + 3) as usize] = 1;
+        a_data[(4 * w + 4) as usize] = 1;
+        let a = rle_encode(&a_data, w, h);
+
+        let supported = rle_intersect_dilated(&a, &b, 5);
+        let candidates = rle_subtract(&a, &supported);
+
+        let supported_px = decode(&supported);
+        let candidate_px = decode(&candidates);
+        assert_eq!(
+            supported_px[(4 * w + 3) as usize],
+            1,
+            "(3, 4) with r^2=25 must be supported"
+        );
+        assert_eq!(
+            supported_px[(4 * w + 4) as usize],
+            0,
+            "(4, 4) with r^2=32 must NOT be supported"
+        );
+        assert_eq!(
+            candidate_px[(4 * w + 3) as usize],
+            0,
+            "(3, 4) must not remain candidate"
+        );
+        assert_eq!(
+            candidate_px[(4 * w + 4) as usize],
+            1,
+            "(4, 4) must remain candidate"
+        );
     }
 
     #[test]
@@ -609,6 +942,29 @@ mod tests {
     }
 
     #[test]
+    fn nbr02_zero_negative_buffer_and_mismatched_mask_heights() {
+        let a = rle_encode(&[1, 0, 1, 0, 0, 1, 0, 1], 4, 2);
+        let b = rle_encode(&[1, 1, 0, 0, 0, 0, 0, 1], 4, 2);
+
+        // Zero and negative buffers perform exact identity intersection without dilation
+        assert_eq!(rle_intersect_dilated(&a, &b, 0), rle_encode(&[1, 0, 0, 0, 0, 0, 0, 1], 4, 2));
+        assert_eq!(rle_intersect_dilated(&a, &b, -2), rle_encode(&[1, 0, 0, 0, 0, 0, 0, 1], 4, 2));
+
+        // Mismatched mask heights & short rows vec never panic and only sample valid B rows
+        let tall_a = rle_encode(&vec![1u8; 4 * 5], 4, 5);
+        let short_b = RleMask {
+            rows: vec![vec![RleRun { start: 1, length: 1 }]],
+            width: 4,
+            height: 3, // rows.len() == 1 < height
+        };
+        let out_short = rle_intersect_dilated(&tall_a, &short_b, 1);
+        assert_eq!(out_short.height, 5);
+        assert_eq!(decode(&out_short)[0..4], [1, 1, 1, 0]);
+        assert_eq!(decode(&out_short)[4..8], [0, 1, 0, 0]);
+        assert_eq!(decode(&out_short)[8..20], [0u8; 12]);
+    }
+
+    #[test]
     fn pixel_count() {
         let mask = RleMask {
             rows: vec![
@@ -623,5 +979,58 @@ mod tests {
             height: 3,
         };
         assert_eq!(mask.pixel_count(), 10);
+    }
+
+    #[test]
+    fn c2_mark_detached_and_rescue_candidates_handles_halo_and_chebyshev1() {
+        let w = 16;
+        let h = 6;
+        // prev_solid: wall at x=1..4, y=1..5 and single pixel at (10, 1)
+        let mut prev_data = vec![0u8; (w * h) as usize];
+        for y in 1..5 {
+            for x in 1..4 {
+                prev_data[(y * w + x) as usize] = 1;
+            }
+        }
+        prev_data[(1 * w + 10) as usize] = 1;
+        let prev_solid = rle_encode(&prev_data, w, h);
+
+        // current: wall continues, detached needle at x=6..8, y=2..4 (inside B=5 halo),
+        // and diagonally-bridged cantilever at (11, 2) extending to x=11..15, y=2..3
+        let mut cur_data = vec![0u8; (w * h) as usize];
+        for y in 1..5 {
+            for x in 1..4 {
+                cur_data[(y * w + x) as usize] = 1;
+            }
+        }
+        for y in 2..4 {
+            for x in 6..8 {
+                cur_data[(y * w + x) as usize] = 1;
+            }
+        }
+        for x in 11..15 {
+            cur_data[(2 * w + x) as usize] = 1;
+        }
+        let current = rle_encode(&cur_data, w, h);
+
+        let supported = rle_intersect_dilated(&current, &prev_solid, 5);
+        let mut cand_mask = rle_subtract(&current, &supported);
+        // Note: (11,2)-(14,2) is within L2 distance 5 of (10,1), and (6..8,2..4) is within L2 5 of (3,2..4)
+        assert_eq!(cand_mask.pixel_count(), 0);
+
+        let (mut labels, mut comps) = rle_label_components(&cand_mask, Connectivity::Eight);
+        mark_detached_and_rescue_candidates(
+            &current,
+            &prev_solid,
+            &mut cand_mask,
+            &mut labels,
+            &mut comps,
+            Connectivity::Eight,
+        );
+
+        assert_eq!(comps.len(), 1);
+        assert_eq!(comps[0].area_px, 4);
+        assert!(comps[0].is_detached);
+        assert_eq!(cand_mask.pixel_count(), 4);
     }
 }

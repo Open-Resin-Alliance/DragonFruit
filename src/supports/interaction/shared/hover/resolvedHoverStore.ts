@@ -29,6 +29,18 @@ let resolvedHoverSnapshot: ResolvedHoverState = EMPTY_RESOLVED_HOVER_STATE;
 
 let orbitActive = false;
 let marqueeActive = false;
+/** The one hover snapshot every subscriber sees while the camera moves. The
+ *  live hit changes with the camera even though the hover is suppressed, and
+ *  publishing that made the whole app root (and the supports panel) re-render
+ *  per pointer move during an orbit. */
+const ORBIT_HOVER_STATE: ResolvedHoverState = {
+    activeSource: 'none',
+    intent: 'suppressed',
+    modelHit: null,
+    supportHit: null,
+    blockedReason: 'orbit-active',
+    isStale: false,
+};
 /**
  * A release that should not republish hover yet.
  *
@@ -185,6 +197,11 @@ function resolveIntent(activeSource: ResolvedHoverState['activeSource'], blocked
 
 export function getResolvedHoverSnapshot(): ResolvedHoverState {
     ensureInitialized();
+
+    if (orbitActive) {
+        resolvedHoverSnapshot = ORBIT_HOVER_STATE;
+        return resolvedHoverSnapshot;
+    }
 
     const hoveredCategory = getHoveredCategory();
     const hoveredId = getHoveredId();

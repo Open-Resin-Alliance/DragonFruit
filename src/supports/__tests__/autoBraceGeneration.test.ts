@@ -315,3 +315,82 @@ test('a generated kickstand is braced to the trunk it stabilises', () => {
         'a generated kickstand must be braced to its host trunk, not just touch it at the terminal knot',
     );
 });
+
+import { axisSeparationDeg, hasQualifiedTwoAxisBracing, normalizeAxisAngleRad } from '../autoBracing/twoAxisDetection';
+
+test('buildAutoBracedSnapshot stabilises a single tall 25mm trunk with 2 orthogonal kickstands and braces', () => {
+    resetKickstandsInState();
+    const snapshot = createEmptySnapshot();
+    const modelId = 'model-single-tall';
+
+    const rootA = createRoot('root-solo', modelId, 0, 0);
+    const trunkA = createTrunk('trunk-solo', modelId, rootA.id, 'seg-solo', 0, 0, 25);
+    snapshot.roots[rootA.id] = rootA;
+    snapshot.trunks[trunkA.id] = trunkA;
+
+    const result = buildAutoBracedSnapshot(snapshot, createDefaultAutoBracingSettings());
+    assert.equal(result.changed, true, 'Expected single tall trunk to be stabilised');
+    assert.equal(result.skippedSupportCount, 0);
+
+    const kickstands = Object.values(result.snapshot.kickstands);
+    assert.equal(kickstands.length, 2, `Expected 2 orthogonal kickstands for solo 25mm trunk, got ${kickstands.length}`);
+
+    const ksAxes = kickstands.map((ks) => {
+        const ksRoot = result.snapshot.roots[ks.rootId]!;
+        return normalizeAxisAngleRad(Math.atan2(ksRoot.transform.pos.y, ksRoot.transform.pos.x));
+    });
+    assert.ok(
+        axisSeparationDeg(ksAxes[0], ksAxes[1]) >= 45,
+        `Expected orthogonal kickstand axes, got separation ${axisSeparationDeg(ksAxes[0], ksAxes[1])}`,
+    );
+    assert.ok(result.generatedBraceCount > 0, 'Expected ladder braces connecting solo trunk to its kickstands');
+});
+
+test('buildAutoBracedSnapshot pairs 2 tall 25mm trunks and adds orthogonal kickstand + braces for 2-axis stability', () => {
+    resetKickstandsInState();
+    const snapshot = createEmptySnapshot();
+    const modelId = 'model-pair-tall';
+
+    const rootA = createRoot('root-pair-a', modelId, 0, 0);
+    const rootB = createRoot('root-pair-b', modelId, 4, 0);
+    const trunkA = createTrunk('trunk-pair-a', modelId, rootA.id, 'seg-pair-a', 0, 0, 25);
+    const trunkB = createTrunk('trunk-pair-b', modelId, rootB.id, 'seg-pair-b', 4, 0, 25);
+
+    snapshot.roots[rootA.id] = rootA;
+    snapshot.roots[rootB.id] = rootB;
+    snapshot.trunks[trunkA.id] = trunkA;
+    snapshot.trunks[trunkB.id] = trunkB;
+
+    const result = buildAutoBracedSnapshot(snapshot, createDefaultAutoBracingSettings());
+    assert.equal(result.changed, true, 'Expected 2 tall trunks to be braced and stabilised');
+    assert.equal(result.skippedSupportCount, 0);
+
+    const built = result.snapshot;
+    const kickstands = Object.values(built.kickstands);
+    assert.ok(kickstands.length >= 1, `Expected orthogonal kickstand on 2-trunk pair, got ${kickstands.length}`);
+
+    let hasTrunkToTrunkBrace = false;
+    let hasKickstandBrace = false;
+    const kickstandSegIds = new Set(kickstands.flatMap((ks) => ks.segments.map((s) => s.id)));
+    const allAxes: number[] = [];
+
+    for (const brace of Object.values(built.braces)) {
+        const sk = built.knots[brace.startKnotId]!;
+        const ek = built.knots[brace.endKnotId]!;
+        if (
+            (sk.parentShaftId === 'seg-pair-a' && ek.parentShaftId === 'seg-pair-b') ||
+            (sk.parentShaftId === 'seg-pair-b' && ek.parentShaftId === 'seg-pair-a')
+        ) {
+            hasTrunkToTrunkBrace = true;
+        }
+        if (kickstandSegIds.has(sk.parentShaftId) || kickstandSegIds.has(ek.parentShaftId)) {
+            hasKickstandBrace = true;
+        }
+        allAxes.push(normalizeAxisAngleRad(Math.atan2(ek.pos.y - sk.pos.y, ek.pos.x - sk.pos.x)));
+    }
+
+    assert.equal(hasTrunkToTrunkBrace, true, 'Expected trunk-to-trunk braces between the 2 tall trunks');
+    assert.equal(hasKickstandBrace, true, 'Expected braces connecting orthogonal kickstand to its host trunk');
+    assert.equal(hasQualifiedTwoAxisBracing(allAxes, 45), true, 'Expected combined braces to span 2 qualified axes');
+});
+

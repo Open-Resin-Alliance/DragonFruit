@@ -1,4 +1,4 @@
-import { ComponentInfo } from './types';
+import { ComponentInfo, type Connectivity } from './types';
 
 // RLE Row: [start, length, start, length, ...]
 // Represents a single row of binary data.
@@ -175,71 +175,66 @@ export function rleDecode(mask: RleMask): Uint8Array {
  * Used to find "Supported" regions.
  */
 export function rleIntersectDilated(a: RleMask, b: RleMask, buffer: number): RleMask {
-    const { width, height } = a;
-    const resultRows: RleRow[] = new Array(height);
+    if (a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0) {
+        const outWidth = Math.max(0, a.width);
+        const outHeight = Math.max(0, a.height);
+        return { rows: new Array<RleRow>(outHeight).fill(EMPTY_ROW), width: outWidth, height: outHeight };
+    }
 
-    // Optimization: Pre-calculate dilated bounds for B rows?
-    // Or just iterate.
+    const { width, height } = a;
+    const r = Number.isNaN(buffer) ? 0 : Math.max(0, Math.trunc(buffer));
+    const rSq = r * r;
+    const resultRows: RleRow[] = new Array(height);
 
     for (let y = 0; y < height; y++) {
         const aRow = a.rows[y];
-        if (aRow.length === 0) {
+        if (!aRow || aRow.length === 0) {
             resultRows[y] = EMPTY_ROW;
             continue;
         }
 
-        // Gather relevant rows from B (y +/- buffer)
-        // We treat B as if every run is expanded by 'buffer' in X and Y.
-        // So a run in B at 'by' covers Y range [by - buffer, by + buffer].
-        // Conversely, for current Y, we look at B rows in [y - buffer, y + buffer].
-
-        const relevantBRows: RleRow[] = [];
-        const startY = Math.max(0, y - buffer);
-        const endY = Math.min(height - 1, y + buffer);
+        // Gather intervals from B rows within Euclidean L2 radius r around y,
+        // expanding each span horizontally by dx = floor(sqrt(r^2 - dy^2)).
+        const startY = Math.max(0, y - r);
+        const endY = Math.min(b.height - 1, y + r);
+        const bIntervals: { start: number; end: number }[] = [];
 
         for (let by = startY; by <= endY; by++) {
-            if (b.rows[by].length > 0) {
-                relevantBRows.push(b.rows[by]);
+            const bRow = b.rows[by];
+            if (!bRow || bRow.length === 0) continue;
+
+            const dy = by - y;
+            const dx = Math.floor(Math.sqrt(rSq - dy * dy));
+
+            for (let i = 0; i < bRow.length; i += 2) {
+                const s = Math.max(0, bRow[i] - dx);
+                const e = Math.min(width, bRow[i] + bRow[i + 1] + dx);
+                if (s < e) {
+                    bIntervals.push({ start: s, end: e });
+                }
             }
         }
 
-        if (relevantBRows.length === 0) {
+        if (bIntervals.length === 0) {
             resultRows[y] = EMPTY_ROW;
             continue;
-        }
-
-        // Intersect 'aRow' with the union of 'relevantBRows' (dilated horizontally)
-        // We can merge relevantBRows into a single sorted list of intervals, merging overlaps,
-        // and expanding each by 'buffer'.
-
-        const bIntervals: { start: number, end: number }[] = [];
-        for (const bRow of relevantBRows) {
-            for (let i = 0; i < bRow.length; i += 2) {
-                // Dilate horizontally
-                bIntervals.push({
-                    start: Math.max(0, bRow[i] - buffer),
-                    end: Math.min(width, bRow[i] + bRow[i + 1] + buffer)
-                });
-            }
         }
 
         // Sort and merge B intervals
         bIntervals.sort((p, q) => p.start - q.start);
 
-        const mergedB: { start: number, end: number }[] = [];
-        if (bIntervals.length > 0) {
-            let curr = bIntervals[0];
-            for (let i = 1; i < bIntervals.length; i++) {
-                const next = bIntervals[i];
-                if (next.start <= curr.end) {
-                    curr.end = Math.max(curr.end, next.end);
-                } else {
-                    mergedB.push(curr);
-                    curr = next;
-                }
+        const mergedB: { start: number; end: number }[] = [];
+        let curr = bIntervals[0];
+        for (let i = 1; i < bIntervals.length; i++) {
+            const next = bIntervals[i];
+            if (next.start <= curr.end) {
+                curr.end = Math.max(curr.end, next.end);
+            } else {
+                mergedB.push(curr);
+                curr = next;
             }
-            mergedB.push(curr);
         }
+        mergedB.push(curr);
 
         // Now intersect aRow with mergedB
         const resSpans: number[] = [];
@@ -272,7 +267,7 @@ export function rleIntersectDilated(a: RleMask, b: RleMask, buffer: number): Rle
             }
         }
 
-        resultRows[y] = new Int32Array(resSpans);
+        resultRows[y] = resSpans.length === 0 ? EMPTY_ROW : new Int32Array(resSpans);
     }
 
     return { rows: resultRows, width, height };
@@ -341,7 +336,7 @@ export function rleSubtract(a: RleMask, b: RleMask): RleMask {
  * Connected Components Labeling on RLE Mask.
  * Returns labeled RLE and component info.
  */
-export function rleLabelComponents(mask: RleMask, connectivity: 4 | 8 = 4): { labels: RleLabels, components: ComponentInfo[] } {
+export function rleLabelComponents(mask: RleMask, connectivity: 4 | 8 = 8): { labels: RleLabels, components: ComponentInfo[] } {
     const { rows, width, height } = mask;
     const labelRows: RleLabelRow[] = new Array(height);
 
@@ -490,4 +485,319 @@ export function rleDecodeLabels(labels: RleLabels): Int32Array {
     }
 
     return data;
+}
+
+/**
+ * Classify each candidate component on layer `L > 0` as `Detached` vs
+ * `CantileverFringe` via 1D run-level union-find over `current` (`S_L`),
+ * testing Chebyshev-1 bridging `[start - 1, end + 1)` across
+ * `prevSolid.rows[max(0, y - 1)..min(prevHeight - 1, y + 1)]`, and rescue
+ * any detached solid runs clipped out of `candidateMask` by an adjacent
+ * wall's `B`-px dilation halo.
+ */
+export function markDetachedAndRescueCandidates(
+    current: RleMask,
+    prevSolid: RleMask,
+    candidateMask: RleMask,
+    labels: RleLabels,
+    components: ComponentInfo[],
+    connectivity: Connectivity = 8,
+): void {
+    const height = Math.max(0, Math.min(current.height, current.rows.length));
+    if (height === 0) {
+        for (const comp of components) {
+            comp.isDetached = false;
+        }
+        return;
+    }
+
+    const prevHeight = Math.max(0, Math.min(prevSolid.height, prevSolid.rows.length));
+    const expand = connectivity === 8 ? 1 : 0;
+
+    const parent: number[] = [];
+    const hasBridge: number[] = [];
+    const rowRunOffset = new Int32Array(height);
+
+    function find(i: number): number {
+        while (parent[i] !== i) {
+            const p = parent[i];
+            parent[i] = parent[p];
+            i = parent[i];
+        }
+        return i;
+    }
+
+    function runBridgesPrevChebyshev1(y: number, start: number, end: number): boolean {
+        if (prevHeight === 0) return false;
+        const pyStart = Math.max(0, y - 1);
+        const pyEnd = Math.min(prevHeight - 1, y + 1);
+        if (pyStart > pyEnd) return false;
+        const searchStart = start - 1;
+        const searchEnd = end + 1;
+
+        for (let py = pyStart; py <= pyEnd; py++) {
+            const pRow = prevSolid.rows[py];
+            if (!pRow || pRow.length === 0) continue;
+            for (let j = 0; j < pRow.length; j += 2) {
+                const pStart = pRow[j];
+                if (pStart >= searchEnd) break;
+                const pEnd = pStart + pRow[j + 1];
+                if (Math.max(searchStart, pStart) < Math.min(searchEnd, pEnd)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    for (let y = 0; y < height; y++) {
+        rowRunOffset[y] = parent.length;
+        const row = current.rows[y];
+        if (!row || row.length === 0) continue;
+
+        for (let i = 0; i < row.length; i += 2) {
+            const start = row[i];
+            const len = row[i + 1];
+            const end = start + len;
+            const myId = parent.length;
+            parent.push(myId);
+            hasBridge.push(runBridgesPrevChebyshev1(y, start, end) ? 1 : 0);
+
+            if (y > 0) {
+                const prevRow = current.rows[y - 1];
+                if (prevRow && prevRow.length > 0) {
+                    const prevOff = rowRunOffset[y - 1];
+                    const searchStart = start - expand;
+                    const searchEnd = end + expand;
+
+                    for (let pi = 0, pRunIdx = 0; pi < prevRow.length; pi += 2, pRunIdx++) {
+                        const pStart = prevRow[pi];
+                        if (pStart >= searchEnd) break;
+                        const pEnd = pStart + prevRow[pi + 1];
+                        if (Math.max(searchStart, pStart) < Math.min(searchEnd, pEnd)) {
+                            const ri = find(myId);
+                            const rj = find(prevOff + pRunIdx);
+                            if (ri !== rj) {
+                                parent[rj] = ri;
+                                hasBridge[ri] |= hasBridge[rj];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (parent.length === 0) {
+        for (const comp of components) {
+            comp.isDetached = false;
+        }
+        return;
+    }
+
+    let anyDetached = false;
+    for (let i = 0; i < parent.length; i++) {
+        const root = find(i);
+        parent[i] = root;
+        if (!hasBridge[root]) {
+            anyDetached = true;
+        }
+    }
+
+    if (!anyDetached) {
+        for (const comp of components) {
+            comp.isDetached = false;
+        }
+        return;
+    }
+
+    while (candidateMask.rows.length < height) {
+        candidateMask.rows.push(EMPTY_ROW);
+    }
+
+    const isIntervalCovered = (candRow: RleRow, start: number, end: number): boolean => {
+        let cur = start;
+        for (let j = 0; j < candRow.length; j += 2) {
+            const cStart = candRow[j];
+            const cEnd = cStart + candRow[j + 1];
+            if (cEnd <= cur) continue;
+            if (cStart > cur) return false;
+            cur = Math.max(cur, cEnd);
+            if (cur >= end) return true;
+        }
+        return cur >= end;
+    };
+
+    let rescued = false;
+    for (let y = 0; y < height; y++) {
+        const curRow = current.rows[y];
+        if (!curRow || curRow.length === 0) continue;
+        const off = rowRunOffset[y];
+        const candRow = candidateMask.rows[y] ?? EMPTY_ROW;
+        let needsRowMerge = false;
+        for (let i = 0, runIdx = 0; i < curRow.length; i += 2, runIdx++) {
+            const root = parent[off + runIdx];
+            const s = curRow[i];
+            if (!hasBridge[root] && !isIntervalCovered(candRow, s, s + curRow[i + 1])) {
+                needsRowMerge = true;
+                break;
+            }
+        }
+        if (needsRowMerge) {
+            rescued = true;
+            const intervals: Array<[number, number]> = [];
+            for (let j = 0; j < candRow.length; j += 2) {
+                intervals.push([candRow[j], candRow[j] + candRow[j + 1]]);
+            }
+            for (let i = 0, runIdx = 0; i < curRow.length; i += 2, runIdx++) {
+                const root = parent[off + runIdx];
+                if (!hasBridge[root]) {
+                    intervals.push([curRow[i], curRow[i] + curRow[i + 1]]);
+                }
+            }
+            intervals.sort((a, b) => a[0] - b[0]);
+            const mergedSpans: number[] = [];
+            if (intervals.length > 0) {
+                let curStart = intervals[0][0];
+                let curEnd = intervals[0][1];
+                for (let k = 1; k < intervals.length; k++) {
+                    const s = intervals[k][0];
+                    const e = intervals[k][1];
+                    if (s <= curEnd) {
+                        if (e > curEnd) curEnd = e;
+                    } else {
+                        mergedSpans.push(curStart, curEnd - curStart);
+                        curStart = s;
+                        curEnd = e;
+                    }
+                }
+                mergedSpans.push(curStart, curEnd - curStart);
+            }
+            // Assign a fresh Int32Array so shared EMPTY_ROW is never mutated in place.
+            candidateMask.rows[y] = mergedSpans.length === 0 ? EMPTY_ROW : new Int32Array(mergedSpans);
+        }
+    }
+
+    if (rescued) {
+        const relabeled = rleLabelComponents(candidateMask, connectivity);
+        labels.rows = relabeled.labels.rows;
+        labels.width = relabeled.labels.width;
+        labels.height = relabeled.labels.height;
+        components.length = 0;
+        for (const c of relabeled.components) components.push(c);
+    }
+
+    for (const comp of components) {
+        comp.isDetached = false;
+    }
+    if (components.length === 0) return;
+
+    let sequentialIds = true;
+    for (let idx = 0; idx < components.length; idx++) {
+        if (components[idx].id !== idx + 1) {
+            sequentialIds = false;
+            break;
+        }
+    }
+    const idLookup = sequentialIds ? null : new Map<number, number>();
+    if (idLookup) {
+        for (let idx = 0; idx < components.length; idx++) {
+            idLookup.set(components[idx].id, idx);
+        }
+    }
+
+    const alignHeight = Math.min(height, labels.rows.length);
+    for (let y = 0; y < alignHeight; y++) {
+        const curRow = current.rows[y];
+        const labRow = labels.rows[y];
+        if (!curRow || curRow.length === 0 || !labRow || labRow.length === 0) continue;
+
+        const off = rowRunOffset[y];
+        const curRunCount = curRow.length >> 1;
+        let ci = 0;
+
+        for (let li = 0; li < labRow.length; li += 3) {
+            const lId = labRow[li + 2];
+            if (lId <= 0) continue;
+            const lStart = labRow[li];
+            const lEnd = lStart + labRow[li + 1];
+
+            while (ci < curRunCount && curRow[ci * 2] + curRow[ci * 2 + 1] <= lStart) {
+                ci++;
+            }
+            let tci = ci;
+            let detached = false;
+            while (tci < curRunCount && curRow[tci * 2] < lEnd) {
+                const root = parent[off + tci];
+                if (!hasBridge[root]) {
+                    detached = true;
+                    break;
+                }
+                tci++;
+            }
+            if (detached) {
+                if (sequentialIds) {
+                    const comp = components[lId - 1];
+                    if (comp) comp.isDetached = true;
+                } else {
+                    const idx = idLookup!.get(lId);
+                    if (idx !== undefined) {
+                        components[idx].isDetached = true;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Pack labeled candidate runs as flat `[y, start, length, compId, ...]` (4 ints/run)
+ * alongside a compact `componentDetached` flag array indexed by `compId`.
+ */
+export function packCandidateLayerRuns(
+    labels: RleLabels,
+    components: ComponentInfo[],
+): { candidateRuns: Int32Array; componentDetached: Uint8Array } {
+    let runCount = 0;
+    let maxCompId = 0;
+
+    for (const comp of components) {
+        if (comp.id > maxCompId) maxCompId = comp.id;
+    }
+
+    for (let y = 0; y < labels.rows.length; y++) {
+        const row = labels.rows[y];
+        if (!row || row.length === 0) continue;
+        for (let i = 0; i < row.length; i += 3) {
+            const compId = row[i + 2];
+            if (compId > 0) {
+                runCount += 1;
+                if (compId > maxCompId) maxCompId = compId;
+            }
+        }
+    }
+
+    const candidateRuns = new Int32Array(runCount * 4);
+    let at = 0;
+    for (let y = 0; y < labels.rows.length; y++) {
+        const row = labels.rows[y];
+        if (!row || row.length === 0) continue;
+        for (let i = 0; i < row.length; i += 3) {
+            const compId = row[i + 2];
+            if (compId <= 0) continue;
+            candidateRuns[at++] = y;
+            candidateRuns[at++] = row[i];
+            candidateRuns[at++] = row[i + 1];
+            candidateRuns[at++] = compId;
+        }
+    }
+
+    const componentDetached = new Uint8Array(maxCompId + 1);
+    for (const comp of components) {
+        if (comp.id > 0 && comp.isDetached === true) {
+            componentDetached[comp.id] = 1;
+        }
+    }
+
+    return { candidateRuns, componentDetached };
 }

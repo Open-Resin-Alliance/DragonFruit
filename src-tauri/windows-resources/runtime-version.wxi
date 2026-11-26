@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Include xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <?define DF_VC_VERSION="14.51.36247.0" ?>
+</Include>

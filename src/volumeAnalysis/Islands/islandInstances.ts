@@ -1,4 +1,4 @@
-import { footprintX, footprintY, type VoxelFootprint } from './voxelFootprint';
+import { footprintX, footprintY, footprintZ, type VoxelFootprint } from './voxelFootprint';
 
 /**
  * One visible island: the point selection and camera focus key on, plus the
@@ -37,6 +37,7 @@ export interface IslandInstances {
   /** `(markerId, type)` per instance. */
   meta: Float32Array;
   count: number;
+  layerHeightMm?: number;
 }
 
 export const EMPTY_ISLAND_INSTANCES: IslandInstances = {
@@ -62,6 +63,7 @@ export const VOXEL_DISC_RADIUS_FACTOR = 0.75;
 export function buildIslandInstances(
   visuals: readonly IslandVisual[],
   voxelRadiusMm: number,
+  layerHeightMm?: number,
 ): IslandInstances {
   let count = 0;
   for (const visual of visuals) {
@@ -80,7 +82,7 @@ export function buildIslandInstances(
       for (let voxel = 0; voxel < footprint.count; voxel++, i++) {
         centerRadius[i * 4] = footprintX(footprint, voxel);
         centerRadius[i * 4 + 1] = footprintY(footprint, voxel);
-        centerRadius[i * 4 + 2] = visual.baseZ;
+        centerRadius[i * 4 + 2] = footprintZ(footprint, voxel) ?? visual.baseZ;
         centerRadius[i * 4 + 3] = voxelRadiusMm;
         meta[i * 2] = visual.markerId;
         meta[i * 2 + 1] = visual.type;
@@ -96,5 +98,44 @@ export function buildIslandInstances(
     }
   }
 
-  return { centerRadius, meta, count };
+  return layerHeightMm !== undefined && Number.isFinite(layerHeightMm) && layerHeightMm > 0
+    ? { centerRadius, meta, count, layerHeightMm }
+    : { centerRadius, meta, count };
+}
+
+/**
+ * Keep only the instances whose world-space centre satisfies `predicate`.
+ * Used by interior view: the scan is one set of buffers, and the cavity
+ * overlay needs the subset that lies on the inner wall without rebuilding the
+ * whole scan.
+ */
+export function filterIslandInstances(
+  instances: IslandInstances,
+  predicate: (x: number, y: number, z: number) => boolean,
+): IslandInstances {
+  if (!instances || instances.count === 0) return EMPTY_ISLAND_INSTANCES;
+  const centers = instances.centerRadius;
+  const meta = instances.meta;
+  let keep = 0;
+  for (let i = 0; i < instances.count; i++) {
+    if (predicate(centers[i * 4], centers[i * 4 + 1], centers[i * 4 + 2])) keep++;
+  }
+  if (keep === 0) return EMPTY_ISLAND_INSTANCES;
+  if (keep === instances.count) return instances;
+  const centerRadius = new Float32Array(keep * 4);
+  const keptMeta = new Float32Array(keep * 2);
+  let out = 0;
+  for (let i = 0; i < instances.count; i++) {
+    if (!predicate(centers[i * 4], centers[i * 4 + 1], centers[i * 4 + 2])) continue;
+    centerRadius[out * 4] = centers[i * 4];
+    centerRadius[out * 4 + 1] = centers[i * 4 + 1];
+    centerRadius[out * 4 + 2] = centers[i * 4 + 2];
+    centerRadius[out * 4 + 3] = centers[i * 4 + 3];
+    keptMeta[out * 2] = meta[i * 2];
+    keptMeta[out * 2 + 1] = meta[i * 2 + 1];
+    out++;
+  }
+  return instances.layerHeightMm !== undefined && Number.isFinite(instances.layerHeightMm) && instances.layerHeightMm > 0
+    ? { centerRadius, meta: keptMeta, count: keep, layerHeightMm: instances.layerHeightMm }
+    : { centerRadius, meta: keptMeta, count: keep };
 }

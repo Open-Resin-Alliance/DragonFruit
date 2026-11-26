@@ -183,6 +183,7 @@ const DEFAULT_PANEL_DOCKS: Record<string, PanelDock> = {
   'support-islands': 'right',
   'support-settings': 'right',
   'support-auto': 'right',
+  'support-stress': 'right',
   'support-hollowing': 'right',
   'support-hole-punch': 'right',
   'export-slicing': 'right',

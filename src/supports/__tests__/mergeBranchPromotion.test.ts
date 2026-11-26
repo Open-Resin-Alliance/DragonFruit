@@ -82,50 +82,50 @@ function runAgainstHost(
     } as never);
 }
 
-test('a long merge onto a host becomes a BRANCH, not a leaf', () => {
+test('a long merge onto a host under default off-grid settings becomes a BRANCH, not a leaf', () => {
     const host = builtHost(40);
-    const result = runAgainstHost(host, islandAt(3.8, host.midJointZ + 20), 20);
+    const result = runAgainstHost(host, islandAt(3.8, host.midJointZ + 20), 60);
 
     assert.equal(result.placed.branch, 1, 'the long member should be a branch');
     assert.equal(result.placed.leaf, 0, 'and not a leaf');
     assert.equal(result.placed.trunk, 0, 'and not a standalone trunk');
 });
 
-test('the same scene under DEFAULT settings places a standalone trunk instead', () => {
+test('off-grid Dumas merge ignores grid.minBranchAngleDeg', () => {
     const host = builtHost(40);
-    const result = runAgainstHost(host, islandAt(3.8, host.midJointZ + 20), 60);
+    const result = runAgainstHost(host, islandAt(3.8, host.midJointZ + 20), 75);
 
-    assert.equal(result.placed.branch, 0);
-    assert.equal(result.placed.trunk, 1, 'the merge is refused and the candidate stands alone');
+    assert.equal(result.placed.branch, 1, 'off-grid merge uses the 50° departure cap, not grid.minBranchAngleDeg');
+    assert.equal(result.placed.trunk, 0, 'the candidate attaches to the host rather than standing alone');
 });
 
 /**
- * The boundary, not just the two ends: the arm turns on the departure angle, so
- * the setting that admits it is exactly one degree either side of this line.
+ * Off-grid Dumas merge still enforces the 50° shaft departure cap from vertical:
+ * a shallower > 50° departure on a > 6mm span is refused and stands alone.
  */
-test('the branch arm turns on grid.minBranchAngleDeg within one degree', () => {
+test('a long off-grid merge shallower than 50° from vertical is refused and stands alone', () => {
     const host = builtHost(40);
-    const refused = runAgainstHost(host, islandAt(3.8, host.midJointZ + 20), 51);
-    const admitted = runAgainstHost(host, islandAt(3.8, host.midJointZ + 20), 50);
+    const refused = runAgainstHost(host, islandAt(3.9, host.midJointZ + 17.3), 60);
 
-    assert.equal(refused.placed.branch, 0, 'gate 51 (39° from vertical) refuses the 40° departure');
-    assert.equal(admitted.placed.branch, 1, 'gate 50 (40°) admits it');
+    assert.equal(refused.placed.branch, 0, 'shaft departure > 50° from vertical is refused');
+    assert.equal(refused.placed.leaf, 0, 'span > 6mm does not fall back to a spindly leaf');
+    assert.equal(refused.placed.trunk, 1, 'the candidate stands alone as a trunk');
 });
 
 /**
  * And the arm is bounded: the reach is a PLAN radius, so a candidate outside it
  * is not a merge at all and stands alone. Height is not part of the bound, so a
  * candidate level with (or above) the host's joints is still in reach and
- * attaches lower down the shaft. Without this the two tests above could be
+ * attaches lower down the shaft. Without this the tests above could be
  * passing for the wrong reason: if EVERY candidate branched, they would too.
  */
 test('a candidate out of merge reach stands alone', () => {
     const host = builtHost(40);
-    const outOfReach = runAgainstHost(host, islandAt(8, host.midJointZ), 20);
+    const outOfReach = runAgainstHost(host, islandAt(8, host.midJointZ), 60);
     assert.equal(outOfReach.placed.trunk, 1, '8mm away in plan is out of the 4mm merge reach');
     assert.equal(outOfReach.placed.branch + outOfReach.placed.leaf, 0, 'and nothing was bridged');
 
-    const sameHeight = runAgainstHost(host, islandAt(3.8, host.midJointZ + 20), 20);
+    const sameHeight = runAgainstHost(host, islandAt(3.8, host.midJointZ + 20), 60);
     assert.equal(sameHeight.placed.trunk, 0,
         'inside the plan reach a second plate contact is not stood, whatever the height');
     assert.equal(sameHeight.placed.branch, 1, 'the arm attaches lower down the host shaft');
@@ -133,7 +133,7 @@ test('a candidate out of merge reach stands alone', () => {
 
 test('the run is deterministic', () => {
     const host = builtHost(40);
-    const a = runAgainstHost(host, islandAt(3.8, host.midJointZ), 20);
-    const b = runAgainstHost(host, islandAt(3.8, host.midJointZ), 20);
+    const a = runAgainstHost(host, islandAt(3.8, host.midJointZ + 20), 60);
+    const b = runAgainstHost(host, islandAt(3.8, host.midJointZ + 20), 60);
     assert.deepEqual(a.placed, b.placed);
 });

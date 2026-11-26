@@ -32,6 +32,8 @@ export interface FootprintMask {
 
 export interface OverhangRegion {
   triangleIds: number[];
+  /** World-space centroid per triangle id, in the same order. */
+  triangleCentroids?: Array<[number, number, number]>;
   areaMm2: number;
   projectedAreaMm2: number;
   angleDeg: number;
@@ -80,6 +82,10 @@ export interface PoseStabilityWire {
   pushDirDeg: number;
   dragTopMm: number;
   bearingIsRaft: boolean;
+  /** Worst bearing edge line, world XY (mm): a point on it and its outward unit
+   *  normal. The solved topple-risk evaluation measures peel moments about it. */
+  worstEdgePointMm?: [number, number];
+  worstEdgeNormal?: [number, number];
 }
 
 /** Classification once the voxel and minima sets are intersected (Part C). */
@@ -96,13 +102,23 @@ export interface DetectedIsland {
   contact: THREE.Vector3;
   /** Z-ordering sort key, equal to `contact.z` (world mm). */
   baseZ: number;
+  /** Unsnapped layer base Z (world mm) before surface snap, from native scan. */
+  rawBaseZ?: number;
   /** Contact lies on a cavity (internal) surface. Filled by the auto-support
    *  run from the cavity mesh; absent on scan output. */
   interior?: boolean;
+  /** Lowest connected cross-section of a detached island, i.e. a start with
+   *  nothing below it. Stamped by the auto-support run from `isDetached`; the
+   *  start recipe and the forest report read this one field. */
+  startIsland?: boolean;
 
   // --- voxel-detector extras (undefined for minima) ---
   /** Contact footprint area at the island's base layer (mm^2). */
   areaMm2?: number;
+  /** Peak pre-merge layer area across the island's span (mm^2). */
+  peakAreaMm2?: number;
+  /** True when the enclosing solid component is mid-air detached (0-bridge to layer L-1, or L=0). */
+  isDetached?: boolean;
   // --- overhang-detector extras (undefined for others) ---
   /** Mean surface angle from horizontal (degrees) — set by the overhang detector. */
   overhangAngleDeg?: number;
@@ -148,10 +164,14 @@ export interface DetectedIsland {
   /** Contact sits on the build-plate plane. */
   grounded?: boolean;
 
-  // --- classification + grouping (set by `intersection.ts` / `ordering.ts`) ---
+  // --- classification + grouping (set by `intersection.ts` / `ordering.ts` / overhang merge) ---
   /** Id of the matched island from the other detector, or null if none. */
   matchedWith?: string | null;
   class?: IslandClass;
+  /** Additional coincident mesh minima grouped onto this `'intersection'` island (plain `{x,y,z}` points). */
+  subApexes?: Array<{ x: number; y: number; z: number }>;
+  /** Non-destructive annotation identifying a covering overhang region on `'voxel'` or `'minima'` islands. */
+  coveredByOverhangId?: string;
   /** Cluster-walk grouping index. */
   clusterId?: number;
 

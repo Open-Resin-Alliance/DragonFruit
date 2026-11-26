@@ -10,7 +10,6 @@ import { VOXEL_OFFSET_X, VOXEL_OFFSET_Y, VOXEL_OFFSET_Z, type ScanResults } from
 import { rleDecode } from '@/volumeAnalysis/IslandScan/rle';
 
 import type { ModelTransform } from '@/hooks/useModelTransform';
-import { getScanVisualPosition } from '@/utils/scanPositioning';
 import { generateMeshFromRLE } from '@/volumeAnalysis/VoxelSystem/RleMeshing';
 
 interface IslandVoxelVisualizationProps {
@@ -248,7 +247,6 @@ export function IslandVoxelVisualization({
   showTerritory = false,
   centerOffset,
   zOffset = 0,
-  transform,
 }: IslandVoxelVisualizationProps) {
 
   // Generate island mesh data (geometry, color, etc.) - expensive, cached
@@ -385,7 +383,7 @@ export function IslandVoxelVisualization({
   if (!enabled) return null;
 
   return (
-    <group position={getScanVisualPosition(transform)}>
+    <group>
       {islandMeshData.map((data) => (
         <group key={data.id}> {/* Wrap chunks in a group (or fragment) */}
           {data.geometries.map((geom, idx) => (

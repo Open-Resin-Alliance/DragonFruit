@@ -267,15 +267,15 @@ test('candidateFromIsland shrinks tips for small islands', () => {
     const big = candidateFromIsland(makeIsland({ id: 'b', areaMm2: 5 }));
     assert.equal(big.tipDiameterMm, undefined, 'larger island takes the band default');
 });
-test('deduplicateCandidates suppresses close shelves via grown influence', () => {
-    // Same XY, 3mm apart in Z with a 0.5mm base radius: the grown gate
-    // (0.5 + influence(3) − 3.0 ≈ 1.26) covers the upper candidate, so the
-    // lower tip's cone is assumed to cover it — one support, not two.
-    // Overhang-lattice pairs only: discrete islands never merge (see below).
-    const mk = (id: string, z: number, priority: number): CandidatePoint => ({
+test('deduplicateCandidates suppresses close shelves via grown influence on sloped overhangs while preserving flat soles', () => {
+    // Same XY, 3mm apart in Z with a 0.5mm base radius: on sloped overhangs
+    // (|nz| <= 0.90), the grown gate (0.5 + influence(3) − 3.0 ≈ 1.26) covers
+    // the upper candidate — one support, not two. On flat overhangs (|nz| > 0.90),
+    // the flat 3D ball is kept so lower heels never erase higher-Z toe tips.
+    const mk = (id: string, z: number, priority: number, tipNormal = { x: 0.574, y: 0, z: -0.819 }): CandidatePoint => ({
         id,
         tipPos: { x: 0, y: 0, z },
-        tipNormal: { x: 0, y: 0, z: -1 },
+        tipNormal,
         modelId: '',
         source: 'overhang',
         islandAreaMm2: 0.1,
@@ -283,10 +283,15 @@ test('deduplicateCandidates suppresses close shelves via grown influence', () =>
         priority,
     });
     const settings = { ...createDefaultAutoSupportSettings(), tipInfluenceRadiusMm: 0.5 };
-    const deduped = deduplicateCandidates(
+    const dedupedSloped = deduplicateCandidates(
         [mk('low', 10, 0.9), mk('high', 13, 0.8)], settings);
-    assert.equal(deduped.length, 1, 'close shelf deduped into the lower support cone');
-    assert.equal(deduped[0].id, 'low');
+    assert.equal(dedupedSloped.length, 1, 'close sloped shelf deduped into the lower support cone');
+    assert.equal(dedupedSloped[0].id, 'low');
+
+    const flatNormal = { x: 0, y: 0, z: -1 };
+    const dedupedFlat = deduplicateCandidates(
+        [mk('heel', 10, 0.9, flatNormal), mk('toe', 13, 0.8, flatNormal)], settings);
+    assert.equal(dedupedFlat.length, 2, 'flat overhang pair keeps both contacts across Z step');
 });
 
 test('deduplicateCandidates never merges discrete islands', () => {

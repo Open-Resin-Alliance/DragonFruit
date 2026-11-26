@@ -14,40 +14,35 @@ import { steepFlatNeedsCoverage } from '@/supports/autoSupport/poseStability';
  * of our own: the model matrix positions the highlight with the model.
  */
 
+export const OVERHANG_OVERLAY_RENDER_ORDER = 995;
+export const OVERHANG_POLYGON_OFFSET = { factor: -1, units: -2 } as const;
+
 const OVERHANG_COLOR = '#ffa500';
+const STEEP_FLAT_COLOR = '#ffd28a';
 const OVERHANG_OPACITY = 0.4;
 /** ...and what a patch gets when the pose needs no topple coverage: visible
  *  enough to read the classification, quiet enough not to promise support. */
 const MUTED_OPACITY = 0.12;
-/** A topple patch carrying little of the pose's drag moment: light amber, so it
- *  stays clearly visible on the model. The ramp encodes the share in
- *  saturation, never in brightness — a dim end reads as "the overlay is broken"
- *  rather than as "this patch matters less". */
+/** A topple patch carrying little of the pose's drag moment: light amber. */
 const TOPPLE_COOL = new THREE.Color('#ffd28a');
 /** ...and the patch carrying the most: saturated orange-red. */
 const TOPPLE_HOT = new THREE.Color('#ff3d00');
-/**
- * The patches are copied from the model's own triangles, but the viewport may draw
- * its display mesh, the same surface split differently. Coplanar triangles on two
- * tessellations do not round to the same depth, so without an offset the patch
- * loses the depth test on scattered pixels.
- */
-const OVER_DRAWN_MESH = { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 } as const;
+
+/** Formation overhangs keep a flat colour: they print on their own mechanism
+ *  (unsupported material formation) distinct from steep-flat anchoring. */
+export function formationOverhangColor(): THREE.Color {
+  return new THREE.Color(OVERHANG_COLOR);
+}
+
+/** Uniform colour for steep self-supporting flat patches. */
+export function steepFlatOverlayColor(): THREE.Color {
+  return new THREE.Color(STEEP_FLAT_COLOR);
+}
 
 /**
  * Per-vertex topple weight: the average of the load shares carried by the faces
- * meeting at that vertex.
- *
- * Painting whole regions leaves the boundary between two of them running along
- * a triangle edge, which on a coarse mesh reads as a staircase. A vertex weight
- * shared by both sides of that boundary is what removes it: the rasteriser then
- * interpolates from one patch's value to the other's across the adjacent
- * triangles instead of stepping at the edge. Faces are matched by welded
- * position, so the shared corners of two patches average.
- *
- * `faceShare` is one share per triangle (the patch's fraction of the pose's
- * drag moment, normalised by the largest patch in the scan, so no calibrated
- * constant is involved).
+ * meeting at that vertex. Painting whole regions leaves boundaries as a
+ * staircase on a coarse mesh; shared vertex weights blend across them.
  */
 export function toppleVertexWeights(
   positions: ArrayLike<number>,
@@ -80,24 +75,12 @@ export function toppleVertexWeights(
   return out;
 }
 
-/** Quantized position key. Shared by the weight field and the boundary test, so
- *  the two agree on what "the same vertex" means. */
+/** Quantized position key. Shared by the weight field and the boundary test. */
 export function vertexKey(x: number, y: number, z: number): string {
   return `${Math.round(x * 1e3)},${Math.round(y * 1e3)},${Math.round(z * 1e3)}`;
 }
 
-/**
- * Shader injection for an overlay material.
- *
- * `aWeight`, when ramped, blends the colour across the seams inside the
- * painted set. An alpha feather at the set's outer edge was tried and removed:
- * semi-transparent overlay triangles glitch against the model.
- *
- * The colours travel as uniforms, not as a vertex colour attribute: three
- * converts a uniform Color exactly as it converts material.color, so the ramp
- * lands in the same space as the flat material that already rendered correctly.
- * Only the weights are per-vertex, and a scalar has no colour space.
- */
+/** Shader injection for the topple ramp; the flat formation material skips it. */
 function applyOverhangShader(material: THREE.MeshBasicMaterial, ramped: boolean): void {
   material.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
@@ -126,34 +109,22 @@ function applyOverhangShader(material: THREE.MeshBasicMaterial, ramped: boolean)
   material.customProgramCacheKey = () => (ramped ? 'overhang-topple-ramp' : 'overhang-fade');
 }
 
-/** Formation overhangs keep a flat colour: they are a different mechanism from
- *  topple patches, and the two should not look alike. */
-export function formationOverhangColor(): THREE.Color {
-  return new THREE.Color(OVERHANG_COLOR);
-}
-
 interface IslandOverhangOverlayProps {
   /** Raw model geometry (local frame, may be indexed or non-indexed). */
   geometry: THREE.BufferGeometry;
   /** Overhang islands for this model (source 'overhang', with triangleIds). */
   regions: DetectedIsland[];
   /** False when the pose needs no anti-topple contact. The steep-flat patches
-   *  are then muted rather than drawn as if they were about to be covered:
-   *  showing everything that was classified reads as "this will be supported",
-   *  and it is not. */
+   *  are then muted rather than drawn as if they were about to be covered. */
   toppleCoverage?: boolean;
-  /** The pose's total drag moment (mm³). A patch whose share of it clears the
-   *  floor keeps its contacts, because a large flat is the best anchoring
-   *  surface the part has, so it is drawn at full strength too. */
+  /** The pose's total drag moment (mm³), kept for caller compatibility. */
   dragTotalMm3?: number;
-  /** Cross-section planes: the overlay must disappear with the solid it marks. */
 }
 
 export function IslandOverhangOverlay({
   geometry,
   regions,
   toppleCoverage = true,
-  dragTotalMm3 = 0,
 }: IslandOverhangOverlayProps) {
   const centerOffset = useMemo(() => {
     if (!geometry) return new THREE.Vector3();
@@ -165,40 +136,41 @@ export function IslandOverhangOverlay({
 
   const built = useMemo(() => {
     const pos = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
-    if (!pos) return { meshes: [], toppleGeometry: null as THREE.BufferGeometry | null, mutedGeometry: null as THREE.BufferGeometry | null };
+    if (!pos) {
+      return {
+        formationGeometry: null as THREE.BufferGeometry | null,
+        toppleGeometry: null as THREE.BufferGeometry | null,
+        mutedGeometry: null as THREE.BufferGeometry | null,
+      };
+    }
     const index = geometry.index;
-    const meshes: Array<{ id: string; geometry: THREE.BufferGeometry; color: THREE.Color }> = [];
-    // The ramp is normalised by the largest patch in the scan, so it needs no
-    // calibrated constant and every scan shows its own relative loads.
     const maxMomentMm3 = regions.reduce((m, r) => Math.max(m, r.dragMomentMm3 ?? 0), 0);
 
-    // Topple patches go into ONE mesh so a shared boundary vertex can carry the
-    // average of both sides: per-region meshes cannot blend across an edge.
-    // Patches the placement will not touch go into a second one, drawn muted:
-    // a covered patch and an ignored one must not look alike.
+    // One merged geometry per class instead of one mesh per region: a scan can
+    // produce hundreds of formation patches, and each extra transparent mesh is
+    // its own draw call plus sort entry. These materials are unlit, so no
+    // normals are needed either — only positions.
+    const formationPositions: number[] = [];
     const topplePositions: number[] = [];
-    const toppleShares: number[] = [];
     const mutedPositions: number[] = [];
+    const toppleShares: number[] = [];
     const mutedShares: number[] = [];
-    const copyRegion = (region: DetectedIsland): Float32Array => {
+    const appendRegion = (region: DetectedIsland, into: number[], shares?: number[]): void => {
       const ids = region.triangleIds as number[];
-      const arr = new Float32Array(ids.length * 9);
-      let o = 0;
+      const share = maxMomentMm3 > 0
+        ? Math.min(1, Math.max(0, (region.dragMomentMm3 ?? 0) / maxMomentMm3))
+        : 0;
       for (const ti of ids) {
         const i0 = index ? index.getX(ti * 3) : ti * 3;
         const i1 = index ? index.getX(ti * 3 + 1) : ti * 3 + 1;
         const i2 = index ? index.getX(ti * 3 + 2) : ti * 3 + 2;
-        arr[o++] = pos.getX(i0);
-        arr[o++] = pos.getY(i0);
-        arr[o++] = pos.getZ(i0);
-        arr[o++] = pos.getX(i1);
-        arr[o++] = pos.getY(i1);
-        arr[o++] = pos.getZ(i1);
-        arr[o++] = pos.getX(i2);
-        arr[o++] = pos.getY(i2);
-        arr[o++] = pos.getZ(i2);
+        into.push(
+          pos.getX(i0), pos.getY(i0), pos.getZ(i0),
+          pos.getX(i1), pos.getY(i1), pos.getZ(i1),
+          pos.getX(i2), pos.getY(i2), pos.getZ(i2),
+        );
+        if (shares) shares.push(share);
       }
-      return arr;
     };
 
     for (const region of regions) {
@@ -206,55 +178,47 @@ export function IslandOverhangOverlay({
       if (!ids || ids.length === 0) continue;
 
       if (region.steepFlat) {
-        const arr = copyRegion(region);
-        const share = maxMomentMm3 > 0 ? Math.min(1, Math.max(0, (region.dragMomentMm3 ?? 0) / maxMomentMm3)) : 0;
         const covered = steepFlatNeedsCoverage(region.surfaceAreaMm2, toppleCoverage);
-        const into = covered ? topplePositions : mutedPositions;
-        const shares = covered ? toppleShares : mutedShares;
-        for (let i = 0; i < arr.length; i++) into.push(arr[i]);
-        for (let t = 0; t < ids.length; t++) shares.push(share);
+        appendRegion(
+          region,
+          covered ? topplePositions : mutedPositions,
+          covered ? toppleShares : mutedShares,
+        );
         continue;
       }
 
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(copyRegion(region), 3));
-      g.computeVertexNormals();
-      meshes.push({ id: region.id, geometry: g, color: formationOverhangColor() });
+      appendRegion(region, formationPositions);
     }
 
+    const buildFlat = (positions: number[]): THREE.BufferGeometry | null => {
+      if (positions.length === 0) return null;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      return g;
+    };
     const buildTopple = (positions: number[], shares: number[]): THREE.BufferGeometry | null => {
       if (positions.length === 0) return null;
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       g.setAttribute('aWeight', new THREE.BufferAttribute(toppleVertexWeights(positions, shares), 1));
-      g.computeVertexNormals();
       return g;
     };
-    const mutedGeometry = buildTopple(mutedPositions, mutedShares);
-    let toppleGeometry: THREE.BufferGeometry | null = null;
-    if (topplePositions.length > 0) {
-      toppleGeometry = new THREE.BufferGeometry();
-      toppleGeometry.setAttribute('position', new THREE.Float32BufferAttribute(topplePositions, 3));
-      toppleGeometry.setAttribute(
-        'aWeight',
-        new THREE.BufferAttribute(toppleVertexWeights(topplePositions, toppleShares), 1),
-      );
-      toppleGeometry.computeVertexNormals();
-    }
-    return { meshes, toppleGeometry, mutedGeometry };
-  }, [geometry, regions, toppleCoverage, dragTotalMm3]);
+    return {
+      formationGeometry: buildFlat(formationPositions),
+      mutedGeometry: buildTopple(mutedPositions, mutedShares),
+      toppleGeometry: buildTopple(topplePositions, toppleShares),
+    };
+  }, [geometry, regions, toppleCoverage]);
 
-  // Colours travel as uniforms, not as a vertex colour attribute: three
-  // converts a uniform Color exactly as it converts material.color, so the
-  // ramp lands in the same space as the flat material that already rendered
-  // correctly. Only the weight is per-vertex, and a scalar has no colour space.
   const toppleMaterial = useMemo(() => {
     const material = new THREE.MeshBasicMaterial({
       transparent: true,
       opacity: OVERHANG_OPACITY,
       side: THREE.DoubleSide,
       depthWrite: false,
-      ...OVER_DRAWN_MESH,
+      polygonOffset: true,
+      polygonOffsetFactor: OVERHANG_POLYGON_OFFSET.factor,
+      polygonOffsetUnits: OVERHANG_POLYGON_OFFSET.units,
     });
     applyOverhangShader(material, true);
     return material;
@@ -266,7 +230,9 @@ export function IslandOverhangOverlay({
       opacity: MUTED_OPACITY,
       side: THREE.DoubleSide,
       depthWrite: false,
-      ...OVER_DRAWN_MESH,
+      polygonOffset: true,
+      polygonOffsetFactor: OVERHANG_POLYGON_OFFSET.factor,
+      polygonOffsetUnits: OVERHANG_POLYGON_OFFSET.units,
     });
     applyOverhangShader(material, true);
     return material;
@@ -279,7 +245,9 @@ export function IslandOverhangOverlay({
       opacity: OVERHANG_OPACITY,
       side: THREE.DoubleSide,
       depthWrite: false,
-      ...OVER_DRAWN_MESH,
+      polygonOffset: true,
+      polygonOffsetFactor: OVERHANG_POLYGON_OFFSET.factor,
+      polygonOffsetUnits: OVERHANG_POLYGON_OFFSET.units,
     });
     applyOverhangShader(material, false);
     return material;
@@ -298,7 +266,7 @@ export function IslandOverhangOverlay({
 
   useEffect(() => {
     return () => {
-      for (const b of built.meshes) b.geometry.dispose();
+      built.formationGeometry?.dispose();
       built.toppleGeometry?.dispose();
       built.mutedGeometry?.dispose();
     };
@@ -313,7 +281,7 @@ export function IslandOverhangOverlay({
     [toppleMaterial, formationMaterial, mutedMaterial],
   );
 
-  if (built.meshes.length === 0 && !built.toppleGeometry && !built.mutedGeometry) return null;
+  if (!built.formationGeometry && !built.toppleGeometry && !built.mutedGeometry) return null;
 
   return (
     <group
@@ -323,18 +291,18 @@ export function IslandOverhangOverlay({
       // cut-away region wherever an overhang was scanned.
       userData={{ noStencil: true }}
     >
-      {built.meshes.map((b) => (
-        <mesh key={b.id} geometry={b.geometry} renderOrder={1001} raycast={() => null}>
+      {built.formationGeometry && (
+        <mesh geometry={built.formationGeometry} renderOrder={OVERHANG_OVERLAY_RENDER_ORDER} raycast={() => null}>
           <primitive object={formationMaterial} attach="material" />
         </mesh>
-      ))}
+      )}
       {built.toppleGeometry && (
-        <mesh geometry={built.toppleGeometry} renderOrder={1001} raycast={() => null}>
+        <mesh geometry={built.toppleGeometry} renderOrder={OVERHANG_OVERLAY_RENDER_ORDER} raycast={() => null}>
           <primitive object={toppleMaterial} attach="material" />
         </mesh>
       )}
       {built.mutedGeometry && (
-        <mesh geometry={built.mutedGeometry} renderOrder={1001} raycast={() => null}>
+        <mesh geometry={built.mutedGeometry} renderOrder={OVERHANG_OVERLAY_RENDER_ORDER} raycast={() => null}>
           <primitive object={mutedMaterial} attach="material" />
         </mesh>
       )}

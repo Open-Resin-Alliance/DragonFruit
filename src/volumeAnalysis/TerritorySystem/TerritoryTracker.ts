@@ -46,7 +46,10 @@ export class TerritoryTracker {
      */
     private resolveId(id: number): number {
         let current = id;
+        const visited = new Set<number>();
         while (this.parentMap.has(current)) {
+            if (visited.has(current)) break;
+            visited.add(current);
             current = this.parentMap.get(current)!;
         }
         return current;
@@ -147,8 +150,9 @@ export class TerritoryTracker {
                         for (const candId of candidatesArray) {
                             const cand = this.kingdoms.get(candId);
                             if (cand) {
-                                // Distance to that Kingdom's TERMINAL Centroid (set in constructor)
-                                const d = distSq3D(absX, y, layerIndex, cand.centroid.x, cand.centroid.y, cand.centroid.z);
+                                // Distance to that Kingdom's TERMINAL Centroid (clamped vertically at current layer)
+                                const candZ = Math.min(layerIndex, cand.centroid.z);
+                                const d = distSq3D(absX, y, layerIndex, cand.centroid.x, cand.centroid.y, candZ);
                                 if (d < minDist) {
                                     minDist = d;
                                     bestId = candId;

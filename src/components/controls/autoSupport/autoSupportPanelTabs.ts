@@ -140,26 +140,42 @@ export const ADVANCED_CALIBRATION_NUMERIC_KEYS = [
   'heightFactorCap',
 ] as const satisfies readonly NumericAutoSupportSettingKey[];
 
-const KNOBS: readonly KnobDef[] = [
+const KNOB_SOURCE: ReadonlyArray<{
+  key: NumericAutoSupportSettingKey;
+  section: AutoSupportSectionKey;
+  label: MessageDescriptor;
+  unit: string;
+  hint: MessageDescriptor;
+}> = [
   // Detection — what needs support.
-  { key: 'minIslandAreaMm2', section: 'detection', label: msg`Min Island Size`, min: 0.01, max: 2, step: 0.01, unit: 'mm²', hint: msg`Skip detected areas smaller than this — tiny specks rarely need supports` },
-  { key: 'tipInfluenceRadiusMm', section: 'detection', label: msg`Merge Radius`, min: 0.1, max: 10, step: 0.1, unit: 'mm', hint: msg`A candidate within this 3D distance of an existing support merges into it instead of starting a new trunk` },
+  { key: 'minIslandAreaMm2', section: 'detection', label: msg`Min Island Size`, unit: 'mm²', hint: msg`Skip detected areas smaller than this — tiny specks rarely need supports` },
+  { key: 'tipInfluenceRadiusMm', section: 'detection', label: msg`Merge Radius`, unit: 'mm', hint: msg`Candidate dedup radius — nearby support candidate points within this distance are merged, keeping the highest-priority point` },
   // Distribution — where contacts land and how members fan out.
-  { key: 'leafFanRadiusMm', section: 'distribution', label: msg`Fan Reach`, min: 2, max: 15, step: 0.5, unit: 'mm', hint: msg`Max horizontal distance a fan-out leaf may span from a trunk shaft` },
-  { key: 'leafFanMaxAngleDeg', section: 'distribution', label: msg`Fan Angle`, min: 20, max: 80, step: 5, unit: '°', hint: msg`Max angle from vertical for fan-out leaves` },
+  { key: 'leafFanRadiusMm', section: 'distribution', label: msg`Fan Reach`, unit: 'mm', hint: msg`Max horizontal distance a fan-out leaf may span from a trunk shaft` },
+  { key: 'leafFanMaxAngleDeg', section: 'distribution', label: msg`Fan Angle`, unit: '°', hint: msg`Max angle from vertical for fan-out leaves` },
   // Density & Sizing — how many and how thick.
-  { key: 'areaPerSupportMm2', section: 'density', label: msg`Support Density`, min: 1, max: 30, step: 0.5, unit: 'mm²', hint: msg`Projected area each support carries — smaller = more, tighter supports (grid spacing ≈ √value)` },
-  { key: 'sizeScale', section: 'density', label: msg`Support Size`, min: 0.5, max: 2, step: 0.05, unit: '×', hint: msg`Master multiplier over the preset sizing bands — thicker or thinner everywhere` },
-  { key: 'gridAreaThresholdMm2', section: 'density', label: msg`Grid Threshold`, min: 5, max: 200, step: 5, unit: 'mm²', hint: msg`Flat regions at/above this area get a full grid; smaller regions get a single support` },
-  { key: 'flatDensityBoost', section: 'density', label: msg`Flat Boost`, min: 0.5, max: 1, step: 0.05, unit: '×', hint: msg`Grid spacing on flat ceilings — lower = denser supports on anchor surfaces (0.7 = ~2× the supports)` },
-  { key: 'slopeRelaxFactor', section: 'density', label: msg`Slope Relax`, min: 1, max: 2, step: 0.1, unit: '×', hint: msg`Grid spacing on slopes at the self-support angle — higher = sparser` },
-  { key: 'suctionAreaExponent', section: 'density', label: msg`Suction Scale`, min: 0, max: 0.4, step: 0.05, unit: '', hint: msg`How strongly flat density grows with region area — large shallow ceilings carry more peel. 0 = off` },
+  { key: 'areaPerSupportMm2', section: 'density', label: msg`Support Density`, unit: 'mm²', hint: msg`Projected area each support carries — smaller = more, tighter supports (grid spacing ≈ √value)` },
+  { key: 'sizeScale', section: 'density', label: msg`Support Size`, unit: '×', hint: msg`Master multiplier over the preset sizing bands — thicker or thinner everywhere` },
+  { key: 'gridAreaThresholdMm2', section: 'density', label: msg`Grid Threshold`, unit: 'mm²', hint: msg`Flat regions at/above this area get a full grid; smaller regions get a single support` },
+  { key: 'flatDensityBoost', section: 'density', label: msg`Flat Boost`, unit: '×', hint: msg`Grid spacing on flat ceilings — lower = denser supports on anchor surfaces (0.7 = ~2× the supports)` },
+  { key: 'slopeRelaxFactor', section: 'density', label: msg`Slope Relax`, unit: '×', hint: msg`Grid spacing on slopes at the self-support angle — higher = sparser` },
+  { key: 'suctionAreaExponent', section: 'density', label: msg`Suction Scale`, unit: '', hint: msg`How strongly flat density grows with region area — large shallow ceilings carry more peel. 0 = off` },
   // Stability — will it stay put, and stay straight.
-  { key: 'overhangSelfSupportAngleDeg', section: 'stability', label: msg`Self-Support Angle`, min: 20, max: 75, step: 5, unit: '°', hint: msg`Surfaces flatter than this angle get supports (resin standard: 45°). Higher = fewer, mostly on the steepest parts.` },
+  { key: 'overhangSelfSupportAngleDeg', section: 'stability', label: msg`Self-Support Angle`, unit: '°', hint: msg`Surfaces flatter than this angle get supports (resin standard: 45°). Higher = fewer, mostly on the steepest parts.` },
   // Post-processing — the passes after placement.
-  { key: 'maxAttachmentsPerTrunk', section: 'postProcessing', label: msg`Branches per Column`, min: 2, max: 50, step: 1, unit: '', hint: msg`Max branches + leaves one trunk may carry before new trunks are started — the cap on chunk consolidation` },
-  { key: 'coverageTargetPercent', section: 'postProcessing', label: msg`Coverage Target`, min: 75, max: 100, step: 5, unit: '%', hint: msg`How much of each region's footprint the grid must cover before gap-filling stops` },
+  { key: 'maxAttachmentsPerTrunk', section: 'postProcessing', label: msg`Branches per Column`, unit: '', hint: msg`Max branches + leaves one trunk may carry before new trunks are started — the cap on chunk consolidation` },
+  { key: 'coverageTargetPercent', section: 'postProcessing', label: msg`Coverage Target`, unit: '%', hint: msg`How much of each region's footprint the grid must cover before gap-filling stops` },
 ];
+
+export const KNOBS: readonly KnobDef[] = KNOB_SOURCE.map((knob) => {
+  const constraint = AUTO_SUPPORT_CONSTRAINTS[knob.key];
+  return {
+    ...knob,
+    min: constraint.min,
+    max: constraint.max,
+    step: constraint.step,
+  };
+});
 
 /**
  * The Advanced (calibration) fields. Bounds come from `AUTO_SUPPORT_CONSTRAINTS`,
@@ -191,7 +207,7 @@ export const ADVANCED_CALIBRATION_KNOBS: readonly KnobDef[] = CALIBRATION_KNOB_S
 });
 
 const TOGGLES: readonly ToggleDef[] = [
-  { key: 'enabled', section: 'detection', label: msg`Enabled`, hint: msg`Generate supports automatically on scan` },
+  { key: 'enabled', section: 'detection', label: msg`Enabled`, hint: msg`Enable automatic support generation on explicit run` },
   { key: 'prioritizeIntersection', section: 'detection', label: msg`Prioritize Dual`, hint: msg`Islands found by BOTH the slice and mesh scans are placed first (they are the most certain)` },
   { key: 'stabilizationEnabled', section: 'stability', label: msg`Stabilization Anchors`, hint: msg`Add contacts along the edge or corner a pose bears on, so a leaning part is held against toppling and peel (default on)` },
   { key: 'minimaReinforcementEnabled', section: 'stability', label: msg`Minima Reinforcement`, hint: msg`Ring each mesh minima with contacts on its own flank, so a section starts on a base instead of a needle (default on)` },

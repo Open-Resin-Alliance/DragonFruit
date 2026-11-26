@@ -28,6 +28,12 @@ pub enum Connectivity {
     Eight = 8,
 }
 
+impl Default for Connectivity {
+    fn default() -> Self {
+        Connectivity::Eight
+    }
+}
+
 // ---------------------------------------------------------------------------
 // RLE Value Objects
 // ---------------------------------------------------------------------------
@@ -111,6 +117,8 @@ pub struct ComponentInfo {
     pub size: i32,
     pub centroid_sum_x: f64,
     pub centroid_sum_y: f64,
+    #[serde(default)]
+    pub is_detached: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +175,12 @@ pub struct Island {
     pub volume_mm3: Option<f64>,
     pub max_area_mm2: Option<f64>,
     pub max_area_layer: Option<u32>,
+    #[serde(default)]
+    pub is_detached: bool,
+    #[serde(default)]
+    pub pre_merge_max_area_mm2: Option<f64>,
+    #[serde(skip)]
+    pub(crate) has_saddle_merged: bool,
     pub is_merged_placeholder: bool,
     pub centroid_sum_x: f64,
     pub centroid_sum_y: f64,
@@ -177,11 +191,17 @@ pub struct Island {
     pub centroid_count: u64,
     pub centroid: Option<Centroid>,
     pub last_layer_centroid: Option<Centroid>,
-    /// Last-layer centroid in **pixel coordinates** (x, y) with Z as a
-    /// **layer index** — the island's final layer center, not a world-space
-    /// "center voxel". World conversion must use `first_layer`:
+    /// First-layer (birth) centroid in **pixel coordinates** (x, y) with Z as
+    /// the **`first_layer` index** (not a world-space coordinate). Used for
+    /// support contact snapping; world Z conversion must use `first_layer`:
     /// `bbox_min_z + first_layer * layer_height_mm` for the contact base.
     pub seed_voxel: Option<Centroid>,
+    #[serde(skip)]
+    birth_centroid_sum_x: f64,
+    #[serde(skip)]
+    birth_centroid_sum_y: f64,
+    #[serde(skip)]
+    birth_centroid_count: u64,
 }
 
 impl Island {
@@ -191,28 +211,44 @@ impl Island {
         area_mm2: f64,
         comp: Option<&ComponentInfo>,
     ) -> Self {
-        let (centroid_sum_x, centroid_sum_y, centroid_sum_z, centroid_count, last_layer_centroid) =
-            if let Some(c) = comp {
-                let count = c.size as u64;
-                let llc = if c.size > 0 {
+        let (
+            centroid_sum_x,
+            centroid_sum_y,
+            centroid_sum_z,
+            centroid_count,
+            last_layer_centroid,
+            birth_centroid_sum_x,
+            birth_centroid_sum_y,
+            birth_centroid_count,
+        ) = if let Some(c) = comp {
+            let count = c.size as u64;
+            let (llc, bx, by, bc) = if c.size > 0 {
+                (
                     Some(Centroid {
                         x: c.centroid_sum_x / c.size as f64,
                         y: c.centroid_sum_y / c.size as f64,
                         z: layer as f64,
-                    })
-                } else {
-                    None
-                };
-                (
+                    }),
                     c.centroid_sum_x,
                     c.centroid_sum_y,
-                    count as f64 * layer as f64,
                     count,
-                    llc,
                 )
             } else {
-                (0.0, 0.0, 0.0, 0, None)
+                (None, 0.0, 0.0, 0)
             };
+            (
+                c.centroid_sum_x,
+                c.centroid_sum_y,
+                count as f64 * layer as f64,
+                count,
+                llc,
+                bx,
+                by,
+                bc,
+            )
+        } else {
+            (0.0, 0.0, 0.0, 0, None, 0.0, 0.0, 0)
+        };
 
         let mut per_layer = HashMap::new();
         per_layer.insert(layer, area_mm2);
@@ -229,6 +265,9 @@ impl Island {
             volume_mm3: None,
             max_area_mm2: Some(area_mm2),
             max_area_layer: Some(layer),
+            is_detached: comp.map_or(layer == 0, |c| c.is_detached),
+            pre_merge_max_area_mm2: Some(area_mm2),
+            has_saddle_merged: false,
             is_merged_placeholder: false,
             centroid_sum_x,
             centroid_sum_y,
@@ -237,18 +276,51 @@ impl Island {
             centroid: None,
             last_layer_centroid,
             seed_voxel: last_layer_centroid,
+            birth_centroid_sum_x,
+            birth_centroid_sum_y,
+            birth_centroid_count,
         }
     }
 
     /// Update island with new layer data (continuation).
     pub fn update(&mut self, layer: u32, area_mm2: f64, comp: Option<&ComponentInfo>) {
-        self.last_layer = layer;
+        let prev_first_layer = self.first_layer;
+        if layer < self.first_layer {
+            self.first_layer = layer;
+        }
+        if layer >= self.last_layer {
+            self.last_layer = layer;
+        }
         self.total_area_mm2 += area_mm2;
-        self.per_layer_area_mm2.insert(layer, area_mm2);
+        let layer_area = match self.per_layer_area_mm2.entry(layer) {
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                *e.get_mut() += area_mm2;
+                *e.get()
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(area_mm2);
+                area_mm2
+            }
+        };
 
-        if self.max_area_mm2.map_or(true, |m| area_mm2 > m) {
-            self.max_area_mm2 = Some(area_mm2);
+        if self.max_area_mm2.map_or(true, |m| layer_area > m) {
+            self.max_area_mm2 = Some(layer_area);
             self.max_area_layer = Some(layer);
+        }
+        if !self.has_saddle_merged
+            && self
+                .pre_merge_max_area_mm2
+                .map_or(true, |m| layer_area > m)
+        {
+            self.pre_merge_max_area_mm2 = Some(layer_area);
+        }
+
+        if layer < prev_first_layer {
+            self.is_detached = comp.map_or(layer == 0, |c| c.is_detached);
+        } else if layer == prev_first_layer {
+            if let Some(c) = comp {
+                self.is_detached = self.is_detached || c.is_detached;
+            }
         }
 
         if let Some(c) = comp {
@@ -258,11 +330,35 @@ impl Island {
             self.centroid_count += c.size as u64;
 
             if c.size > 0 {
-                self.last_layer_centroid = Some(Centroid {
+                let layer_centroid = Centroid {
                     x: c.centroid_sum_x / c.size as f64,
                     y: c.centroid_sum_y / c.size as f64,
                     z: layer as f64,
-                });
+                };
+                if layer >= self.last_layer {
+                    self.last_layer_centroid = Some(layer_centroid);
+                }
+
+                if layer < prev_first_layer {
+                    self.birth_centroid_sum_x = c.centroid_sum_x;
+                    self.birth_centroid_sum_y = c.centroid_sum_y;
+                    self.birth_centroid_count = c.size as u64;
+                    self.seed_voxel = Some(layer_centroid);
+                } else if layer == prev_first_layer {
+                    self.birth_centroid_sum_x += c.centroid_sum_x;
+                    self.birth_centroid_sum_y += c.centroid_sum_y;
+                    self.birth_centroid_count += c.size as u64;
+                    self.seed_voxel = Some(Centroid {
+                        x: self.birth_centroid_sum_x / self.birth_centroid_count as f64,
+                        y: self.birth_centroid_sum_y / self.birth_centroid_count as f64,
+                        z: layer as f64,
+                    });
+                } else if self.seed_voxel.is_none() {
+                    self.birth_centroid_sum_x = c.centroid_sum_x;
+                    self.birth_centroid_sum_y = c.centroid_sum_y;
+                    self.birth_centroid_count = c.size as u64;
+                    self.seed_voxel = Some(layer_centroid);
+                }
             }
         }
     }
@@ -296,6 +392,18 @@ pub struct GridRef {
     pub px_mm: f64,
 }
 
+impl GridRef {
+    /// Map 0-based grid `(col, row)` coordinates to world `(x, y)` mm at pixel centers.
+    /// `origin_z` stores `-bbox_max_y` (`mask_y = -world_y`), so `+0.5 * px_mm` sits inside negation.
+    #[inline]
+    pub fn pixel_center_to_world_xy(&self, col: f64, row: f64) -> (f64, f64) {
+        (
+            self.origin_x + (col + 0.5) * self.px_mm,
+            -(self.origin_z + (row + 0.5) * self.px_mm),
+        )
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Island Scan Job (Value Object / Command)
 // ---------------------------------------------------------------------------
@@ -304,6 +412,7 @@ pub struct GridRef {
 pub struct IslandScanJob {
     pub px_mm: f64,
     pub support_buffer_mm: f64,
+    #[serde(default)]
     pub connectivity: Connectivity,
     pub min_island_area_mm2: f64,
     pub layer_height_mm: f64,
@@ -318,6 +427,18 @@ pub struct IslandScanJob {
 impl IslandScanJob {
     pub fn support_buffer_px(&self) -> i32 {
         (self.support_buffer_mm / self.px_mm).round().max(0.0) as i32
+    }
+
+    /// Overlap neighborhood radius (in pixels) passed to `IslandTracker` for
+    /// `CantileverFringe` candidate tracking (`candidate_only == true`).
+    ///
+    /// Unsupported candidates on layer `L` are outside the support moat of
+    /// radius `B = support_buffer_px()`, so consecutive candidate strips on a
+    /// sloped overhang sit at least `B + 1` px apart; this returns
+    /// `overlap_neighborhood_px.max(B + 1)` without inflating solid-mode reach.
+    pub fn cantilever_overlap_neighborhood_px(&self) -> i32 {
+        self.overlap_neighborhood_px
+            .max(self.support_buffer_px() + 1)
     }
 }
 
@@ -341,4 +462,215 @@ pub struct IslandScanResult {
     pub grid: GridRef,
     pub islands: Vec<Island>,
     pub island_labels_per_layer: Vec<RleLabels>,
+}
+
+impl IslandScanResult {
+    /// Extract flat `[x0, y0, x1, y1, ...]` world-mm base-layer pixel centers (`f32`) for each island.
+    pub fn extract_first_layer_footprints_world_f32(&self) -> Vec<Vec<f32>> {
+        let num_layers = self.island_labels_per_layer.len();
+        let mut footprints: Vec<Vec<f32>> = vec![Vec::new(); self.islands.len()];
+        let mut by_layer: Vec<Vec<(i32, usize)>> = vec![Vec::new(); num_layers];
+        for (idx, island) in self.islands.iter().enumerate() {
+            if let Some(slot) = by_layer.get_mut(island.first_layer as usize) {
+                slot.push((island.id.0 as i32, idx));
+            }
+        }
+        for (layer, entries) in by_layer.iter().enumerate() {
+            if entries.is_empty() {
+                continue;
+            }
+            let labels = &self.island_labels_per_layer[layer];
+            for (row, runs) in labels.rows.iter().enumerate() {
+                for run in runs {
+                    if run.id <= 0 {
+                        continue;
+                    }
+                    let Some(&(_, idx)) = entries.iter().find(|(id, _)| *id == run.id) else {
+                        continue;
+                    };
+                    let (_, y_f64) = self.grid.pixel_center_to_world_xy(0.0, row as f64);
+                    let y = y_f64 as f32;
+                    let out = &mut footprints[idx];
+                    for col in run.start..run.start + run.length {
+                        let (x_f64, _) = self.grid.pixel_center_to_world_xy(col as f64, row as f64);
+                        out.push(x_f64 as f32);
+                        out.push(y);
+                    }
+                }
+            }
+        }
+        footprints
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn comp(id: i32, size: i32, cx: f64, cy: f64) -> ComponentInfo {
+        ComponentInfo {
+            id,
+            label: id,
+            area_px: size,
+            size,
+            centroid_sum_x: cx * size as f64,
+            centroid_sum_y: cy * size as f64,
+            is_detached: false,
+        }
+    }
+
+    #[test]
+    fn island_birth_layer_update_computes_canonical_seed_voxel() {
+        // Born at layer 2 with a single corner pixel at (1, 1), then updated on
+        // the same birth layer 2 with a 3-pixel body centered at (5, 3), and then
+        // continued onto higher layer 3 at (50, 50). `seed_voxel` must reflect the
+        // pixel-weighted birth-layer centroid ((1*1 + 3*5)/4 = 4.0, (1*1 + 3*3)/4 = 2.5)
+        // at z = 2.0, neither locked to (1, 1) nor overwritten by layer 3.
+        let corner = comp(1, 1, 1.0, 1.0);
+        let birth_body = comp(2, 3, 5.0, 3.0);
+        let upper = comp(3, 10, 50.0, 50.0);
+
+        let mut island = Island::new(IslandId(1), 2, 0.05, Some(&corner));
+        island.update(2, 0.15, Some(&birth_body));
+        island.update(3, 0.50, Some(&upper));
+
+        assert_eq!(island.first_layer, 2);
+        assert_eq!(island.last_layer, 3);
+        let seed = island.seed_voxel.expect("seed_voxel present");
+        assert!((seed.x - 4.0).abs() < 1e-9, "seed.x = {}", seed.x);
+        assert!((seed.y - 2.5).abs() < 1e-9, "seed.y = {}", seed.y);
+        assert!((seed.z - 2.0).abs() < 1e-9, "seed.z = {}", seed.z);
+    }
+
+    #[test]
+    fn island_update_anchors_seed_voxel_to_first_layer_and_backfills_none() {
+        // 1. Backfill when Island::new starts with comp = None, then lock to
+        //    that seed rather than overwriting on upper layers.
+        let mut from_none = Island::new(IslandId(10), 2, 0.0, None);
+        assert!(from_none.seed_voxel.is_none());
+        let c_fill = comp(1, 4, 6.5, 8.25);
+        from_none.update(3, 0.20, Some(&c_fill));
+        from_none.update(4, 0.50, Some(&comp(2, 10, 30.0, 40.0)));
+        assert_eq!(
+            from_none.seed_voxel,
+            Some(Centroid {
+                x: 6.5,
+                y: 8.25,
+                z: 3.0,
+            })
+        );
+
+        // 2. Updating an islandborn at layer 5 with a lower birth layer 2
+        //    anchors `first_layer == 2` and `seed_voxel` to layer 2 regardless
+        //    of update order.
+        let tip_2 = comp(3, 2, 3.5, 7.0);
+        let tip_5 = comp(4, 6, 18.0, 14.0);
+
+        let mut a_then_b = Island::new(IslandId(11), 2, 0.10, Some(&tip_2));
+        a_then_b.update(5, 0.30, Some(&tip_5));
+
+        let mut b_then_a = Island::new(IslandId(12), 5, 0.30, Some(&tip_5));
+        b_then_a.update(2, 0.10, Some(&tip_2));
+
+        let expected_seed = Some(Centroid {
+            x: 3.5,
+            y: 7.0,
+            z: 2.0,
+        });
+        assert_eq!(a_then_b.first_layer, 2);
+        assert_eq!(b_then_a.first_layer, 2);
+        assert_eq!(b_then_a.last_layer, 5);
+        assert_eq!(a_then_b.seed_voxel, expected_seed);
+        assert_eq!(b_then_a.seed_voxel, expected_seed);
+    }
+
+    #[test]
+    fn connectivity_default_is_eight_and_explicit_four_preserved() {
+        assert_eq!(Connectivity::default(), Connectivity::Eight);
+        let four = Connectivity::Four;
+        assert_eq!(four, Connectivity::Four);
+    }
+
+    #[test]
+    fn job_serde_defaults_missing_connectivity_to_eight() {
+        let json = r#"{
+            "px_mm": 0.05,
+            "support_buffer_mm": 0.25,
+            "min_island_area_mm2": 0.02,
+            "layer_height_mm": 0.05,
+            "grid": { "origin_x": 0.0, "origin_z": 0.0, "width": 10, "height": 10, "px_mm": 0.05 },
+            "num_layers": 2,
+            "min_overlap_px": 1,
+            "overlap_neighborhood_px": 1
+        }"#;
+        let parsed: IslandScanJob = serde_json::from_str(json).expect("job JSON should deserialize");
+        assert_eq!(parsed.connectivity, Connectivity::Eight);
+        assert!(!parsed.candidate_only);
+        assert_eq!(parsed.overlap_neighborhood_px, 1);
+        assert_eq!(parsed.cantilever_overlap_neighborhood_px(), 6);
+    }
+
+    #[test]
+    fn cantilever_overlap_neighborhood_bounds_moat_reach() {
+        let base_job = IslandScanJob {
+            px_mm: 0.05,
+            support_buffer_mm: 0.25, // B = 5
+            connectivity: Connectivity::default(),
+            min_island_area_mm2: 0.0001,
+            layer_height_mm: 0.05,
+            grid: GridRef {
+                origin_x: 0.0,
+                origin_z: 0.0,
+                width: 32,
+                height: 32,
+                px_mm: 0.05,
+            },
+            num_layers: 5,
+            min_overlap_px: 1,
+            overlap_neighborhood_px: 1,
+            candidate_only: false,
+        };
+
+        assert_eq!(base_job.support_buffer_px(), 5);
+        // Solid-mode neighborhood remains uninflated while cantilever reach uses max(B + 1)
+        assert_eq!(base_job.overlap_neighborhood_px, 1);
+        assert_eq!(base_job.cantilever_overlap_neighborhood_px(), 6);
+
+        let large_explicit = IslandScanJob {
+            overlap_neighborhood_px: 10,
+            ..base_job
+        };
+        assert_eq!(large_explicit.cantilever_overlap_neighborhood_px(), 10);
+    }
+
+    #[test]
+    fn island_tracks_is_detached_and_pre_merge_max_area() {
+        let mut c0 = comp(1, 2, 1.0, 1.0);
+        c0.is_detached = true;
+        let mut c1 = comp(2, 5, 2.0, 2.0);
+        c1.is_detached = false;
+        let mut c2 = comp(3, 20, 3.0, 3.0);
+        c2.is_detached = false;
+
+        let mut island = Island::new(IslandId(1), 4, 0.01, Some(&c0));
+        assert!(island.is_detached);
+        assert_eq!(island.pre_merge_max_area_mm2, Some(0.01));
+
+        // Upper-layer growth keeps birth is_detached and updates pre_merge_max_area_mm2
+        island.update(5, 0.04, Some(&c1));
+        assert!(island.is_detached);
+        assert_eq!(island.pre_merge_max_area_mm2, Some(0.04));
+
+        // Once saddle-merged, pre_merge_max_area_mm2 freezes while max_area_mm2 advances
+        island.has_saddle_merged = true;
+        island.update(6, 0.50, Some(&c2));
+        assert_eq!(island.pre_merge_max_area_mm2, Some(0.04));
+        assert_eq!(island.max_area_mm2, Some(0.50));
+
+        // Lower birth layer updates is_detached
+        let mut c_lower = comp(4, 1, 0.5, 0.5);
+        c_lower.is_detached = false;
+        island.update(2, 0.02, Some(&c_lower));
+        assert!(!island.is_detached);
+    }
 }

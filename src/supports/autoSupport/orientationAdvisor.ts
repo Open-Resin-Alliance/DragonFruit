@@ -91,6 +91,10 @@ export interface AdvisorOptions {
      *  bad pose when every candidate is unstable. Set 0 to rank on contact
      *  area alone, as before. */
     stabilityWeight?: number;
+    /** Whether a raft is enabled for this model (`bottomMode !== 'off'`).
+     *  When true, the raft provides plate anchorage so static instability
+     *  penalty is waived. Default false. */
+    hasRaft?: boolean;
     /** Fibonacci-sphere candidate count. Default 120. */
     candidateCount?: number;
     /** Max convex-hull resting poses folded into the sweep. Default 12. */
@@ -390,7 +394,8 @@ export function evaluateOrientationCost(
         cupCos: CUP_FLAT_COS,
     });
     const net = netSupportAreas({ overhang, cup, scarArea, blockedArea }, stability.restingContact);
-    const stabilityPenaltyMm2 = isStaticallyUnstable(stability) ? stabilityWeight * footprintMm2 : 0;
+    const hasRaft = opts.hasRaft ?? false;
+    const stabilityPenaltyMm2 = !hasRaft && isStaticallyUnstable(stability) ? stabilityWeight * footprintMm2 : 0;
     const scar = net.overhang + scarWeight * net.scarArea;
     const base =
         objective === 'scarring' ? scar + cupWeight * net.cup : net.overhang + cupWeight * net.cup;
@@ -475,7 +480,8 @@ export function restingPoseCandidates(mesh: AdvisorMesh, maxPoses: number): Orie
     const cell = Math.max(maxDim / 50, 1e-6);
     const seen = new Set<string>();
     const points: THREE.Vector3[] = [];
-    for (let i = 0; i < vertCount && points.length < HULL_POINT_CAP; i++) {
+    const stride = Math.max(1, Math.ceil(vertCount / HULL_POINT_CAP));
+    for (let i = 0; i < vertCount && points.length < HULL_POINT_CAP; i += stride) {
         const x = positions[i * 3];
         const y = positions[i * 3 + 1];
         const z = positions[i * 3 + 2];
@@ -618,6 +624,7 @@ export function suggestOrientation(mesh: AdvisorMesh, opts: AdvisorOptions = {})
     const scarWeight = opts.scarWeight ?? DEFAULT_SCAR_WEIGHT;
     const blockedWeight = opts.blockedWeight ?? DEFAULT_BLOCKED_WEIGHT;
     const stabilityWeight = opts.stabilityWeight ?? DEFAULT_STABILITY_WEIGHT;
+    const hasRaft = opts.hasRaft ?? false;
     const objective = opts.objective ?? 'supports';
     const blocked = toBlockedSet(opts.blockedTriangleIndices);
     const prep = prepareTriangles(mesh);
@@ -639,7 +646,7 @@ export function suggestOrientation(mesh: AdvisorMesh, opts: AdvisorOptions = {})
             cupCos: CUP_FLAT_COS,
         });
         const net = netSupportAreas({ overhang, cup, scarArea, blockedArea }, stability.restingContact);
-        const stabilityPenalty = isStaticallyUnstable(stability) ? stabilityWeight * footprintMm2 : 0;
+        const stabilityPenalty = !hasRaft && isStaticallyUnstable(stability) ? stabilityWeight * footprintMm2 : 0;
         const scar = net.overhang + scarWeight * net.scarArea;
         const primary =
             (objective === 'scarring' ? scar + cupWeight * net.cup : net.overhang + cupWeight * net.cup) +
@@ -650,15 +657,21 @@ export function suggestOrientation(mesh: AdvisorMesh, opts: AdvisorOptions = {})
     const descend = (start: ScoredOrientation, eps: RankEps, obj: OrientationObjective, preferFootprint: boolean): ScoredOrientation => {
         let cur = start;
         for (const step of REFINEMENT_STEPS_RAD) {
-            const neighbors = [
-                { rotXRad: wrapAngle(cur.rotXRad + step), rotYRad: cur.rotYRad },
-                { rotXRad: wrapAngle(cur.rotXRad - step), rotYRad: cur.rotYRad },
-                { rotXRad: cur.rotXRad, rotYRad: wrapAngle(cur.rotYRad + step) },
-                { rotXRad: cur.rotXRad, rotYRad: wrapAngle(cur.rotYRad - step) },
-            ];
-            for (const n of neighbors) {
-                const s = scoreFull(n);
-                if (compareScored(s, cur, eps, obj, preferFootprint) < 0) cur = s;
+            for (let iter = 0; iter < 8; iter++) {
+                const center = cur;
+                const neighbors = [
+                    { rotXRad: wrapAngle(center.rotXRad + step), rotYRad: center.rotYRad },
+                    { rotXRad: wrapAngle(center.rotXRad - step), rotYRad: center.rotYRad },
+                    { rotXRad: center.rotXRad, rotYRad: wrapAngle(center.rotYRad + step) },
+                    { rotXRad: center.rotXRad, rotYRad: wrapAngle(center.rotYRad - step) },
+                ];
+                let bestNeighbor = center;
+                for (const n of neighbors) {
+                    const s = scoreFull(n);
+                    if (compareScored(s, bestNeighbor, eps, obj, preferFootprint) < 0) bestNeighbor = s;
+                }
+                if (bestNeighbor === center) break;
+                cur = bestNeighbor;
             }
         }
         return cur;

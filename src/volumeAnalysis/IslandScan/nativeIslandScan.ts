@@ -146,7 +146,7 @@ export async function runIslandScanNative(
     const paramsJson = JSON.stringify({
       px_mm: params.px_mm,
       support_buffer_mm: params.support_buffer_mm,
-      connectivity: params.connectivity ?? 4,
+      connectivity: params.connectivity ?? 8,
       min_island_area_mm2: params.min_island_area_mm2 ?? 0.01,
       min_overlap_px: params.min_overlap_px ?? 1,
       overlap_neighborhood_px: params.overlap_neighborhood_px ?? 1,

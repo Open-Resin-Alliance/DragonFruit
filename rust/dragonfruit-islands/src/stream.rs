@@ -1,5 +1,5 @@
 use crate::model::*;
-use crate::pipeline::postprocess;
+use crate::pipeline::postprocess_with_mode;
 use crate::rasterize::rasterize_triangles_for_island_scan;
 use crate::scan::scan_layer;
 use crate::tracker::IslandTracker;
@@ -43,10 +43,12 @@ pub fn run_island_scan_streaming(
 ) -> IslandScanResult {
     let num_layers = job.num_layers as usize;
 
-    let mut tracker = IslandTracker::new(
+    let mut tracker = IslandTracker::with_candidate_reach(
         job.px_mm,
         job.min_overlap_px,
         job.overlap_neighborhood_px,
+        job.cantilever_overlap_neighborhood_px(),
+        job.connectivity,
     );
 
     // ── Pre-index triangles into Z-buckets (mirrors rasterize_for_island_scan) ──
@@ -163,12 +165,13 @@ pub fn run_island_scan_streaming(
 
     // Phase 3: Volume calculation, max-area, placeholder resolution, and
     // min-area filtering — shared with the batch pipeline.
-    postprocess(
+    postprocess_with_mode(
         job.grid.clone(),
         tracker.get_islands(),
         island_labels_per_layer,
         job.layer_height_mm,
         job.min_island_area_mm2,
+        job.candidate_only,
     )
 }
 
@@ -345,5 +348,116 @@ mod tests {
                 _ => panic!("volume presence differs"),
             }
         }
+    }
+
+    #[test]
+    fn nbr01_and_nbr03_streaming_moat_and_eight_connectivity() {
+        // Streaming oblique staircase (NBR-03) and sloped cantilever (NBR-01):
+        // Box A [0..0.5, 0..0.2] at Z=0..0.5 and box B [0.5..1.0, 0.2..0.4] touching diagonally at (0.5, 0.2)
+        // plus sloped overhang cantilever stepping 6 px/layer (0.30 mm/layer) with px_mm=0.05, support_buffer_mm=0.25.
+        let mut flat: Vec<f32> = Vec::new();
+        let push_box = |dst: &mut Vec<f32>, x0: f32, x1: f32, y0: f32, y1: f32, z0: f32, z1: f32| {
+            dst.extend_from_slice(&[x0, y0, z0, x0, y1, z0, x0, y1, z1]);
+            dst.extend_from_slice(&[x0, y0, z0, x0, y1, z1, x0, y0, z1]);
+            dst.extend_from_slice(&[x1, y0, z0, x1, y0, z1, x1, y1, z1]);
+            dst.extend_from_slice(&[x1, y0, z0, x1, y1, z1, x1, y1, z0]);
+            dst.extend_from_slice(&[x0, y0, z0, x1, y0, z0, x1, y0, z1]);
+            dst.extend_from_slice(&[x0, y0, z0, x1, y0, z1, x0, y0, z1]);
+            dst.extend_from_slice(&[x0, y1, z0, x0, y1, z1, x1, y1, z1]);
+            dst.extend_from_slice(&[x0, y1, z0, x1, y1, z1, x1, y1, z0]);
+            dst.extend_from_slice(&[x0, y0, z1, x1, y0, z1, x1, y1, z1]);
+            dst.extend_from_slice(&[x0, y0, z1, x1, y1, z1, x0, y1, z1]);
+            dst.extend_from_slice(&[x0, y0, z0, x0, y1, z0, x1, y1, z0]);
+            dst.extend_from_slice(&[x0, y0, z0, x1, y1, z0, x1, y0, z0]);
+        };
+        // Sloped cantilever overhang: at Z = z0 + t*(z1-z0), x spans [0.5 + 0.30*layers, 1.5 + 0.30*layers]
+        // Use thin stacked prism steps aligned cleanly to layers 1..4 (0.05..0.25) anchored on pedestal [0..0.5, 0..0.2, 0..0.25]
+        push_box(&mut flat, 0.05, 0.50, 0.05, 0.25, 0.0, 0.25);
+        for l in 1..=4 {
+            let x0 = 0.05 + l as f32 * 0.30;
+            let x1 = x0 + 0.60;
+            let z0 = l as f32 * 0.05;
+            let z1 = z0 + 0.06;
+            push_box(&mut flat, x0, x1, 0.05, 0.25, z0, z1);
+        }
+        let tris = parse_triangles(&flat);
+        let job = IslandScanJob {
+            px_mm: 0.05,
+            support_buffer_mm: 0.25, // B = 5 px; each step = 6 px > B
+            connectivity: Connectivity::default(),
+            min_island_area_mm2: 0.01,
+            layer_height_mm: 0.05,
+            grid: GridRef {
+                origin_x: 0.0,
+                origin_z: -0.5,
+                width: 60,
+                height: 10,
+                px_mm: 0.05,
+            },
+            num_layers: 5,
+            min_overlap_px: 1,
+            overlap_neighborhood_px: 1,
+            candidate_only: true,
+        };
+        assert_eq!(job.connectivity, Connectivity::Eight);
+        assert_eq!(job.cantilever_overlap_neighborhood_px(), 6);
+        let res = run_island_scan_streaming(&job, &tris, 0.0, 0.30, false, None);
+        assert!(
+            res.islands.iter().any(|isl| isl.last_layer > isl.first_layer),
+            "streaming candidate_only moat must chain sloped overhang across layers, got {:?}",
+            res.islands.iter().map(|i| (i.first_layer, i.last_layer)).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn c2_streaming_moat_rescue_and_detached_min_area_immunity() {
+        let mut flat: Vec<f32> = Vec::new();
+        let push_box = |dst: &mut Vec<f32>, x0: f32, x1: f32, y0: f32, y1: f32, z0: f32, z1: f32| {
+            dst.extend_from_slice(&[x0, y0, z0, x0, y1, z0, x0, y1, z1]);
+            dst.extend_from_slice(&[x0, y0, z0, x0, y1, z1, x0, y0, z1]);
+            dst.extend_from_slice(&[x1, y0, z0, x1, y0, z1, x1, y1, z1]);
+            dst.extend_from_slice(&[x1, y0, z0, x1, y1, z1, x1, y1, z0]);
+            dst.extend_from_slice(&[x0, y0, z0, x1, y0, z0, x1, y0, z1]);
+            dst.extend_from_slice(&[x0, y0, z0, x1, y0, z1, x0, y0, z1]);
+            dst.extend_from_slice(&[x0, y1, z0, x0, y1, z1, x1, y1, z1]);
+            dst.extend_from_slice(&[x0, y1, z0, x1, y1, z1, x1, y1, z0]);
+            dst.extend_from_slice(&[x0, y0, z1, x1, y0, z1, x1, y1, z1]);
+            dst.extend_from_slice(&[x0, y0, z1, x1, y1, z1, x0, y1, z1]);
+            dst.extend_from_slice(&[x0, y0, z0, x0, y1, z0, x1, y1, z0]);
+            dst.extend_from_slice(&[x0, y0, z0, x1, y1, z0, x1, y0, z0]);
+        };
+        // Vertical wall at x=0.05..0.25, y=0.05..0.45, z=0..0.30
+        push_box(&mut flat, 0.05, 0.25, 0.05, 0.45, 0.0, 0.30);
+        // Tiny detached floating needle 0.10 mm (2px) away at x=0.35..0.45, y=0.20..0.30, z=0.09..0.25
+        // Area = 0.10 * 0.10 = 0.01 mm2, well inside wall's B=5px (0.25mm) halo and BELOW min_island_area_mm2=0.05!
+        push_box(&mut flat, 0.35, 0.45, 0.20, 0.30, 0.09, 0.25);
+
+        let tris = parse_triangles(&flat);
+        let job = IslandScanJob {
+            px_mm: 0.05,
+            support_buffer_mm: 0.25, // B = 5px = 0.25mm
+            connectivity: Connectivity::Eight,
+            min_island_area_mm2: 0.05, // larger than detached needle area (0.01 mm2)
+            layer_height_mm: 0.05,
+            grid: GridRef {
+                origin_x: 0.0,
+                origin_z: -0.6,
+                width: 20,
+                height: 12,
+                px_mm: 0.05,
+            },
+            num_layers: 5,
+            min_overlap_px: 1,
+            overlap_neighborhood_px: 1,
+            candidate_only: true,
+        };
+        let res = run_island_scan_streaming(&job, &tris, 0.0, 0.30, false, None);
+        assert_eq!(
+            res.islands.len(),
+            2,
+            "streaming must rescue detached needle inside wall halo and preserve it above min_island_area_mm2"
+        );
+        let rescued = res.islands.iter().find(|i| i.first_layer > 0).unwrap();
+        assert!(rescued.is_detached);
     }
 }

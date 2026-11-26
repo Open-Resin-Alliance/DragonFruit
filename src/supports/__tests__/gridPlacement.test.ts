@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
 
-import { generateGridCandidates, computeRegionSpacing, GRID_SPACING_FLOOR_MM, MAX_GRID_CANDIDATES_PER_REGION, steepFlatAnchorBandTop, steepFlatSpacingMultiplier, STEEP_FLAT_SPACING_MULTIPLIER, shouldUseDensityGrid } from '../autoSupport/gridPlacement';
+import { baseOverhangWindowMm, generateGridCandidates, computeRegionSpacing, GRID_SPACING_FLOOR_MM, MAX_GRID_CANDIDATES_PER_REGION, sampleBoundary2D, steepFlatAnchorBandTop, steepFlatSpacingMultiplier, STEEP_FLAT_SPACING_MULTIPLIER, shouldUseDensityGrid } from '../autoSupport/gridPlacement';
+import { deduplicateCandidates } from '../autoSupport/candidateGeneration';
 import { createDefaultAutoSupportSettings } from '../autoSupport/settings';
 import { SLOPE_RELAX_RAMP_START } from '../autoSupport/constants';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
@@ -122,10 +123,10 @@ test('angle-aware density: flat anchor surfaces grid denser than slopes', () => 
 
 test('skips regions below the grid area threshold', () => {
     const settings = { ...createDefaultAutoSupportSettings(), gridAreaThresholdMm2: 25 };
-    // A compact patch: 3 × 3 mm, under the gate and shorter than the two-point
-    // band, so it keeps the single-candidate path. (Longer footprints go to
-    // the grid path on shape — see the rib test below.)
-    const candidates = generateGridCandidates([rectRegion('o0', -1.5, 1.5, -1.5, 1.5, 9)], settings);
+    // A compact patch: 2 × 2 mm, under the gate and shorter than the shape-grid
+    // span threshold (3 mm), so it keeps the single-candidate path. (Longer
+    // footprints go to the grid path on shape — see the rib test below.)
+    const candidates = generateGridCandidates([rectRegion('o0', -1.0, 1.0, -1.0, 1.0, 4)], settings);
     assert.equal(candidates.length, 0, 'small region gets a single support, not a grid');
 });
 
@@ -287,6 +288,63 @@ test('per-region candidate count is capped (densification never exceeds the cap)
         `capped (${candidates.length} ≤ ${MAX_GRID_CANDIDATES_PER_REGION})`);
 });
 
+test('MED-04: suction-boosted overflow (> 800) falls back to angle-only spacing and caps interior lattice at 800', () => {
+    // Case 1: 80×80 mm flat overhang (area 6400 mm²) with suctionAreaExponent 0.35 and
+    // areaPerSupportMm2 18: suction-boosted spacing hits the 1.2 mm floor (estimate = 4624 > 800),
+    // while angle-only fallbackSpacing = √18 × 0.7 ≈ 2.97 mm gives baseEstimate = 784 ≤ 800.
+    // Leaving spacing unassigned kept the 1.2 mm lattice with stride = 1 (4489 interior points).
+    const baseOverflowSettings = {
+        ...createDefaultAutoSupportSettings(),
+        areaPerSupportMm2: 18,
+        gridAreaThresholdMm2: 25,
+        flatDensityBoost: 0.7,
+        suctionAreaExponent: 0.35,
+    };
+    const slab80 = rectRegion('o-med04-a', -40, 40, -40, 40, 6400, 6.5, 0);
+    const candidatesA = generateGridCandidates([slab80], baseOverflowSettings);
+    const interiorA = candidatesA.filter((c) => c.id.startsWith('grid-'));
+    assert.ok(interiorA.length > 0, 'interior lattice is emitted');
+    assert.ok(
+        interiorA.length <= MAX_GRID_CANDIDATES_PER_REGION,
+        `baseEstimate ≤ 800 regime caps interior lattice (${interiorA.length} ≤ ${MAX_GRID_CANDIDATES_PER_REGION})`,
+    );
+
+    // Case 2: 80×80 mm flat overhang with default areaPerSupportMm2 = 10 and suctionAreaExponent 0.35
+    // where BOTH estimate (4624) and baseEstimate (1369) exceed 800.
+    const doubleOverflowSettings = {
+        ...createDefaultAutoSupportSettings(),
+        areaPerSupportMm2: 10,
+        gridAreaThresholdMm2: 25,
+        flatDensityBoost: 0.7,
+        suctionAreaExponent: 0.35,
+    };
+    const candidatesB = generateGridCandidates([slab80], doubleOverflowSettings);
+    const interiorB = candidatesB.filter((c) => c.id.startsWith('grid-'));
+    assert.ok(interiorB.length > 0, 'subsampled interior lattice is emitted');
+    assert.ok(
+        interiorB.length <= MAX_GRID_CANDIDATES_PER_REGION,
+        `baseEstimate > 800 regime caps interior lattice (${interiorB.length} ≤ ${MAX_GRID_CANDIDATES_PER_REGION})`,
+    );
+
+    // Case 3: Ceiling-rounding edge case where ceil(sqrt(baseEstimate / 800)) = 2
+    // on nx = 56, ny = 55 would yield 29 × 28 = 812 > 800 without the post-stride guard.
+    const edgeSlab = rectRegion('o-med04-c', -39.55, 39.55, -38.85, 38.85, 6146, 6.5, 0);
+    const edgeSettings = {
+        ...createDefaultAutoSupportSettings(),
+        areaPerSupportMm2: 4.08,
+        gridAreaThresholdMm2: 25,
+        flatDensityBoost: 0.7,
+        suctionAreaExponent: 0.35,
+    };
+    const candidatesC = generateGridCandidates([edgeSlab], edgeSettings);
+    const interiorC = candidatesC.filter((c) => c.id.startsWith('grid-'));
+    assert.ok(interiorC.length > 0, 'edge-case lattice is emitted');
+    assert.ok(
+        interiorC.length <= MAX_GRID_CANDIDATES_PER_REGION,
+        `ceiling guard keeps interior lattice ≤ ${MAX_GRID_CANDIDATES_PER_REGION} (got ${interiorC.length})`,
+    );
+});
+
 /**
  * A thin rib under the area threshold used to take the single-candidate path:
  * one pillar at its centre, both ends of the anchoring edge unsupported. Shape
@@ -294,19 +352,19 @@ test('per-region candidate count is capped (densification never exceeds the cap)
  */
 test('a long thin rib under the area threshold gets its edge supported', () => {
     const settings = createDefaultAutoSupportSettings();
-    const plank = rectRegion('p0', -7.5, 7.5, -0.65, 0.65, 19.5); // 15 × 1.3 mm
+    const plank = rectRegion('p0', -3.0, 3.0, -0.25, 0.25, 3.0); // 6 × 0.5 mm (< 4 mm² area gate, >= 3 mm span)
 
     assert.ok((plank.areaMm2 ?? 0) < settings.gridAreaThresholdMm2, 'fixture sits under the area gate');
     assert.equal(shouldUseDensityGrid(plank, settings), true, 'shape, not area, decides');
 
     const candidates = generateGridCandidates([plank], settings);
     const xs = candidates.map((c) => c.tipPos.x);
-    assert.ok(candidates.length >= 5, `an edge line, not one pillar (${candidates.length})`);
-    assert.ok(Math.max(...xs) - Math.min(...xs) > 10,
+    assert.ok(candidates.length >= 3, `an edge line, not one pillar (${candidates.length})`);
+    assert.ok(Math.max(...xs) - Math.min(...xs) > 3.5,
         `supports span the rib (${(Math.max(...xs) - Math.min(...xs)).toFixed(1)}mm)`);
 
-    // ...and a compact patch stays on the single-candidate path.
-    const patch = rectRegion('p1', -2, 2, -2, 2, 16);
+    // ...and a compact patch under both area and span stays on the single-candidate path.
+    const patch = rectRegion('p1', -0.75, 0.75, -0.75, 0.75, 2.25);
     assert.equal(shouldUseDensityGrid(patch, settings), false, 'small patches keep the pillar path');
 });
 
@@ -438,4 +496,171 @@ test('an interior cavity ceiling gets a far sparser grid', () => {
     assert.ok(interior.length > 0, 'the interior region still has candidates');
     assert.ok(interior.length <= Math.ceil(exterior.length / 4),
         `interior forest is much sparser (${interior.length} vs ${exterior.length})`);
+});
+
+test('near-plate flat overhangs (e.g. 32mm mini feet) get perimeter and infill below gridAreaThresholdMm2', () => {
+    const settings = createDefaultAutoSupportSettings();
+    const nearPlateFoot: DetectedIsland = {
+        ...rectRegion('foot-near-plate', -2, 2, -2, 2, 16, 2.0), // 4×4 = 16 mm² (< 25 mm² threshold)
+        perimeterLoops: [[[-2, -2, 2.0], [2, -2, 2.0], [2, 2, 2.0], [-2, 2, 2.0]]],
+        steepFlat: false,
+        interior: false,
+    };
+    assert.equal(shouldUseDensityGrid(nearPlateFoot, settings), true, 'near-plate flat overhang should use density grid');
+    const candidates = generateGridCandidates([nearPlateFoot], settings);
+    assert.ok(candidates.some((c) => c.id.startsWith('fill-')), 'near-plate foot emits perimeter ring candidates');
+    assert.ok(candidates.some((c) => c.id.startsWith('grid-')), 'near-plate foot emits grid infill candidates');
+    assert.ok(candidates.length >= 4, `near-plate foot emits multiple perimeter/infill candidates (${candidates.length})`);
+
+    // Even a narrow 2×2 mm low-poly foot patch near the plate gets infill + perimeter.
+    const narrowFoot: DetectedIsland = {
+        ...rectRegion('foot-narrow-plate', -1, 1, -1, 1, 4, 1.5),
+        perimeterLoops: [[[-1, -1, 1.5], [1, -1, 1.5], [1, 1, 1.5], [-1, 1, 1.5]]],
+        steepFlat: false,
+        interior: false,
+    };
+    assert.equal(shouldUseDensityGrid(narrowFoot, settings), true);
+    const narrowCandidates = generateGridCandidates([narrowFoot], settings);
+    assert.ok(narrowCandidates.some((c) => c.id.startsWith('grid-')), 'narrow near-plate foot emits infill');
+    assert.ok(narrowCandidates.some((c) => c.id.startsWith('fill-')), 'narrow near-plate foot emits perimeter');
+
+    // Tiny sub-2mm near-plate patches (1.2×1.2 mm) stay off the density grid so
+    // closely packed bottom-layer tips do not bloom/fuse under UV bleed.
+    const smallFoot: DetectedIsland = {
+        ...rectRegion('foot-small-plate', -0.6, 0.6, -0.6, 0.6, 1.44, 1.0),
+        perimeterLoops: [[[-0.6, -0.6, 1.0], [0.6, -0.6, 1.0], [0.6, 0.6, 1.0], [-0.6, 0.6, 1.0]]],
+        steepFlat: false,
+        interior: false,
+    };
+    assert.equal(shouldUseDensityGrid(smallFoot, settings), false, 'sub-2mm near-plate patch stays on discrete 1-2 point path');
+});
+
+test('lifted modelMinZ preserves base-overhang density window and deduplicateCandidates keeps sloped grid points', () => {
+    const settings = { ...createDefaultAutoSupportSettings(), gridAreaThresholdMm2: 25 };
+    const liftedFoot: DetectedIsland = {
+        ...rectRegion('foot-lifted', -1, 1, -1, 1, 4, 6.5), // z = 6.5mm (> 5mm world, <= 5mm above modelMinZ = 5mm)
+        perimeterLoops: [[[-1, -1, 6.5], [1, -1, 6.5], [1, 1, 6.5], [-1, 1, 6.5]]],
+        steepFlat: false,
+        interior: false,
+    };
+    assert.equal(shouldUseDensityGrid(liftedFoot, settings, 0), false, 'world Z=6.5 without modelMinZ is above anchor window');
+    assert.equal(shouldUseDensityGrid(liftedFoot, settings, 5.0), true, 'model-relative Z=1.5 stays in base overhang window');
+
+    const liftedCandidates = generateGridCandidates([liftedFoot], settings, undefined, undefined, false, 0, 5.0);
+    assert.ok(liftedCandidates.some((c) => c.id.startsWith('grid-')), 'lifted near-base foot emits infill');
+    assert.ok(liftedCandidates.some((c) => c.id.startsWith('fill-')), 'lifted near-base foot emits perimeter');
+
+    // Simulate sloped sole points 0.85mm apart in XY with 2.0mm Z rise:
+    // grown influenceRadiusMm(2.0) would suppress at ~1.01mm in XY, erasing the sloped sole.
+    const slopedGrid = [0, 1, 2].map((i) => ({
+        id: `sloped-${i}`,
+        tipPos: { x: i * 0.85, y: 0, z: 1.0 + i * 1.5 },
+        tipNormal: { x: 0, y: 0, z: -1 },
+        modelId: 'm',
+        source: 'overhang' as const,
+        islandAreaMm2: settings.areaPerSupportMm2,
+        zHeight: 1.0 + i * 1.5,
+        priority: 0,
+        gridPoint: true,
+        nearBase: true,
+    }));
+    const retained = deduplicateCandidates(slopedGrid, settings);
+    assert.equal(retained.length, 3, 'sloped gridPoint candidates are not suppressed by vertical influence growth');
+
+    // 28mm mini base window = 2.8mm: excludes mid-height crotch overhang at 5.0mm.
+    const miniWindow = baseOverhangWindowMm(28);
+    assert.ok(Math.abs(miniWindow - 2.8) < 1e-6);
+    const crotchOverhang: DetectedIsland = {
+        ...rectRegion('crotch-5mm', -1, 1, -1, 1, 4, 5.0),
+        steepFlat: false,
+        interior: false,
+    };
+    assert.equal(shouldUseDensityGrid(crotchOverhang, settings, 0, miniWindow), false, '5mm crotch stays out of 28mm mini base window');
+
+    // A tall continuous overhang starting near the base (z=1.0..15.0mm) must not
+    // receive near-base over-densification or nearBase dedup bypass.
+    const climbingOverhang: DetectedIsland = {
+        ...rectRegion('climbing-15mm', -4, 4, -4, 4, 64, 1.0),
+        maxZ: 15.0,
+        steepFlat: false,
+        interior: false,
+    };
+    const climbingCandidates = generateGridCandidates([climbingOverhang], settings, undefined, undefined, false, 0, 0, miniWindow);
+    assert.ok(climbingCandidates.every((c) => !c.nearBase), 'climbing overhang does not inherit nearBase dedup bypass');
+});
+
+test('perimeter-first corner preservation, uniform edge subdivision, and hex interior infill', () => {
+    const settings = createDefaultAutoSupportSettings();
+    settings.areaPerSupportMm2 = 6;
+    settings.gridAreaThresholdMm2 = 4;
+
+    const flatRect: DetectedIsland = {
+        ...rectRegion('flat-perim-hex', -6, 6, -4, 4, 96, 10, 0),
+        perimeterLoops: [[[-6, -4, 10], [6, -4, 10], [6, 4, 10], [-6, 4, 10]]],
+    };
+    const candidates = generateGridCandidates([flatRect], settings, undefined, undefined, false, 0, 0);
+    const ring = candidates.filter((c) => c.id.startsWith('fill-'));
+    const interior = candidates.filter((c) => c.id.startsWith('grid-'));
+
+    assert.ok(ring.length >= 8, `perimeter emits ring candidates (got ${ring.length})`);
+    assert.ok(interior.length >= 4, `staggered hex infill emits interior candidates (got ${interior.length})`);
+
+    // Sharp inset rectangle corners (~ ±5.75, ±3.75) are preserved on the ring.
+    for (const [cx, cy] of [[-5.75, -3.75], [5.75, -3.75], [5.75, 3.75], [-5.75, 3.75]]) {
+        assert.ok(
+            ring.some((p) => Math.hypot(p.tipPos.x - cx, p.tipPos.y - cy) < 0.45),
+            `sharp corner near (${cx}, ${cy}) is preserved on perimeter`,
+        );
+    }
+
+    // Bottom edge samples between adjacent corners have near-uniform X spacing.
+    const bottomEdge = ring
+        .filter((p) => p.tipPos.y < -3.3)
+        .sort((a, b) => a.tipPos.x - b.tipPos.x);
+    assert.ok(bottomEdge.length >= 4, 'bottom edge subdivided between corners');
+    const gaps = bottomEdge.slice(1).map((p, idx) => p.tipPos.x - bottomEdge[idx].tipPos.x);
+    const minGap = Math.min(...gaps);
+    const maxGap = Math.max(...gaps);
+    assert.ok(maxGap / minGap <= 1.25, `bottom edge spacing stays uniform (${minGap.toFixed(2)}..${maxGap.toFixed(2)}mm)`);
+
+    // Hex interior rows stagger alternating X positions rather than lining up identically.
+    const byRow = new Map<number, number[]>();
+    for (const p of interior) {
+        const key = Math.round(p.tipPos.y * 10);
+        const xs = byRow.get(key) ?? [];
+        xs.push(p.tipPos.x);
+        byRow.set(key, xs);
+    }
+    const rowFirstXs = [...byRow.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, xs]) => Math.min(...xs));
+    assert.ok(rowFirstXs.length >= 2, 'multiple interior hex rows generated');
+    assert.ok(
+        rowFirstXs.some((x, i) => i > 0 && Math.abs(x - rowFirstXs[i - 1]) > 0.2),
+        'hex infill staggers X across adjacent rows',
+    );
+});
+
+test('sampleBoundary2D densifies lower-Z leading edge over higher-Z trailing edge on tilted flats', () => {
+    const zLow = 10;
+    const zHigh = 13.2; // ~15° tilt across 12mm in X
+    const tiltedLoop: Array<[number, number, number]> = [
+        [-6, -6, zLow],
+        [6, -6, zHigh],
+        [6, 6, zHigh],
+        [-6, 6, zLow],
+    ];
+    const samples = sampleBoundary2D(
+        [tiltedLoop],
+        2.2,
+        (x) => ({ z: zLow + ((x + 6) / 12) * (zHigh - zLow) }),
+        { tiltEnabled: true },
+    );
+    assert.ok(samples && samples.length > 0, 'tilted loop sampled');
+    const leadingCount = samples.filter((p) => p.x < -5.5).length;
+    const trailingCount = samples.filter((p) => p.x > 5.5).length;
+    assert.ok(
+        leadingCount > trailingCount,
+        `lower-Z leading edge gets denser sampling than trailing edge (${leadingCount} vs ${trailingCount})`,
+    );
 });

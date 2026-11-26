@@ -18,9 +18,10 @@ import {
 } from '@/components/scene/CrossSectionStencilCap';
 import { IslandOverlay } from '@/components/scene/IslandOverlay';
 import IslandInstancesOverlay from '@/components/scene/IslandInstancesOverlay';
-import type { IslandInstances } from '@/volumeAnalysis/Islands/islandInstances';
+import { EMPTY_ISLAND_INSTANCES, filterIslandInstances, type IslandInstances } from '@/volumeAnalysis/Islands/islandInstances';
 import { IslandOverhangOverlay } from '@/components/scene/IslandOverhangOverlay';
 import { SupportBlockerOverlay } from '@/features/support-blockers/SupportBlockerOverlay';
+import { createCavityTester } from '@/supports/interiorSupportGeometry';
 import { useSupportBlockerSceneBindings } from '@/features/support-blockers/useSupportBlockerSceneBindings';
 import { subscribeSupportBlockers, isSupportBlockerStrokeActive } from '@/supports/autoSupport/supportBlockers';
 import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
@@ -218,6 +219,9 @@ import { Toast } from '@/components/atoms';
 import { getCenteredPositionSource, type CenteredPositionSource } from '@/utils/modelBounds';
 import { emitImmediateModelHover } from '@/supports/interaction/pointerOcclusion';
 import { SupportPathfindingDebugHud, SupportPathfindingDebugOverlay } from '@/components/scene/SupportPathfindingDebugOverlay';
+import { SupportStressOverlay } from '@/components/scene/SupportStressOverlay';
+import { CenterOfMassOverlay } from '@/components/scene/CenterOfMassOverlay';
+import { getFrameStressSnapshot, subscribeFrameStress } from '@/supports/autoSupport';
 import {
   getSupportPathfindingDebugState,
   subscribeToSupportPathfindingDebugState,
@@ -959,6 +963,11 @@ export function SceneCanvas({
     getSupportPathfindingDebugState,
     getSupportPathfindingDebugState,
   );
+  const frameStressSnap = React.useSyncExternalStore(
+    subscribeFrameStress,
+    getFrameStressSnapshot,
+    getFrameStressSnapshot,
+  );
   const supportPathfindingDebugLastTapMsRef = React.useRef<number>(0);
   const [showSupportPathfindingTuningSuggestions, setShowSupportPathfindingTuningSuggestions] = React.useState(false);
 
@@ -1188,6 +1197,18 @@ export function SceneCanvas({
   }, [activeModelId, visualActiveModelId]);
 
   const colorActiveModelId = React.useMemo(() => committedActiveModelId, [committedActiveModelId]);
+
+  const stressOverlayActive = mode === 'support'
+    && frameStressSnap.overlayEnabled
+    && Boolean(activeModelId);
+  const activeStressReport = stressOverlayActive && activeModelId
+    ? frameStressSnap.byModelId[activeModelId] ?? null
+    : null;
+  // The demand-side paint does not need a solved frame: an unsupported model is
+  // exactly the case with no stress report to show.
+  const activePrintabilityReport = stressOverlayActive && activeModelId
+    ? frameStressSnap.printabilityByModelId[activeModelId] ?? null
+    : null;
 
   const meshRefs = React.useRef<Record<string, THREE.Group | null>>({});
   const actualMeshRefs = React.useRef<Record<string, THREE.Mesh | null>>({});
@@ -3279,6 +3300,52 @@ export function SceneCanvas({
     }
     return map;
   }, [models]);
+
+  /**
+   * Interior view shows the cavity mesh, but the island scan is one set of
+   * exterior-frame buffers. Split it against the cavity surface so the overlay
+   * only paints islands and overhangs on the wall that is in view; clamped to
+   * the same tight wall distance the auto-support run uses to classify a
+   * contact as interior.
+   */
+  const interiorIslandOverlay = React.useMemo(() => {
+    if (!interiorView || !activeModelId) return null;
+    const cavity = cavityGeometryByModelId?.get(activeModelId);
+    if (!cavity) return null;
+    const tester = createCavityTester(cavityGeometryByModelId, modelWorldInverseById);
+    const wallMm = 0.15;
+    const isInterior = (x: number, y: number, z: number): boolean =>
+      tester.distanceToSurface({ x, y, z }, activeModelId) <= wallMm;
+    return {
+      overhang: (overhangIslands ?? []).filter(
+        (region) => isInterior(region.contact.x, region.contact.y, region.contact.z),
+      ),
+      markers: (islandMarkers ?? []).filter(
+        (marker) => isInterior(marker.centerX, marker.centerY, marker.baseZ),
+      ),
+      instances: filterIslandInstances(
+        islandInstances ?? EMPTY_ISLAND_INSTANCES,
+        isInterior,
+      ),
+    };
+  }, [
+    interiorView,
+    activeModelId,
+    cavityGeometryByModelId,
+    modelWorldInverseById,
+    overhangIslands,
+    islandMarkers,
+    islandInstances,
+  ]);
+  const visibleOverhangIslands = interiorView
+    ? (interiorIslandOverlay?.overhang ?? [])
+    : (overhangIslands ?? []);
+  const visibleIslandInstances = interiorView
+    ? (interiorIslandOverlay?.instances ?? EMPTY_ISLAND_INSTANCES)
+    : islandInstances;
+  const visibleSelectedMarker = interiorView
+    ? (interiorIslandOverlay?.markers.find((marker) => marker.id === overlaySelectedIslandId) ?? null)
+    : selectedMarker;
 
   // Model matrices for the marquee, rebuilt whenever a model moves.
   const modelMarqueeMatrices = React.useMemo(() => {
@@ -6125,7 +6192,11 @@ export function SceneCanvas({
   }, [freezeViewportActive, frozenViewportDataUrl]);
 
   React.useEffect(() => {
-    const navigating = cameraInteractionCycleEnabled && spaceMouseNavigationActive;
+    // Mouse orbit/wheel navigation can still deliver hover points (the support
+    // layer is not the model picker), and routing a trunk preview per move is
+    // the heavy path. Freeze previews for every camera interaction, not only
+    // SpaceMouse; the preview re-routes on the next hover once motion stops.
+    const navigating = spaceMouseNavigationActive || isOrbitInteracting || isWheelZoomInteracting;
     // Placement previews freeze while navigating, so the trunk router does not run
     // per frame now that SpaceMouse navigation keeps picking live.
     setSupportNavigationActive(navigating);
@@ -6138,7 +6209,7 @@ export function SceneCanvas({
     }
 
     window.dispatchEvent(new Event('spacemouse-navigation-end'));
-  }, [cameraInteractionCycleEnabled, spaceMouseNavigationActive]);
+  }, [cameraInteractionCycleEnabled, isOrbitInteracting, isWheelZoomInteracting, spaceMouseNavigationActive]);
 
   const {
     thumbnailCaptureActive,
@@ -6998,6 +7069,8 @@ export function SceneCanvas({
                       hoverTintStrength={hoverTintStrength}
                       selectedTintStrength={selectedTintStrength}
                       supportNonSelectedOpacity={supportNonSelectedOpacity}
+                      stressHeatmapReport={isActive ? activeStressReport : null}
+                      printabilityHeatmap={isActive ? activePrintabilityReport : null}
                       interactionLodActive={interactionLodEnabled}
                       showOutOfBoundsOverlay={showOutOfBoundsOverlay}
                       outOfBoundsMin={shaderOutOfBoundsBounds?.min ?? null}
@@ -7066,6 +7139,8 @@ export function SceneCanvas({
                       {PREPARE_MERGED_SUPPORTS && mode === 'prepare' && perfLayerEnabled('mergedMesh') && (
                         <PrepareMergedSupportMesh
                           entry={prepareMergedSupports.entries.get(model.id) ?? null}
+                          clipLower={clipLower}
+                          clipUpper={clipUpper}
                           selectedModelIds={selectedModelIds}
                           marqueeCandidateModelIds={marqueeCandidateModelIds}
                           hoverModelId={supportHoverModelId}
@@ -7084,10 +7159,10 @@ export function SceneCanvas({
                         />
                       )}
 
-                      {isActive && (mode === 'support' || mode === 'analysis') && showOverhangs && overhangIslands && overhangIslands.length > 0 && (
+                      {isActive && !stressOverlayActive && (mode === 'support' || mode === 'analysis') && showOverhangs && visibleOverhangIslands.length > 0 && (
                         <IslandOverhangOverlay
                           geometry={model.geometry.geometry}
-                          regions={overhangIslands}
+                          regions={visibleOverhangIslands}
                           toppleCoverage={toppleCoverage !== false}
                           dragTotalMm3={dragTotalMm3}
                         />
@@ -7373,7 +7448,8 @@ export function SceneCanvas({
                   excludeModelId={duplicateSourceSupportPreviewModelId}
                   excludeModelIds={supportBaseExcludeModelIds}
                   supportExcludeModelIds={prepareMergedSupportProxyExcludeModelIds}
-                  hideRaftPrimitives={hideRaftPrimitives}
+                  hideSupports={stressOverlayActive}
+                  hideRaftPrimitives={hideRaftPrimitives || stressOverlayActive}
                   hideRaftPrimitivesForInactiveModels={mode === 'support' && !!activeModelId}
                   hidePlateContactPrimitives={hidePlateContactPrimitives}
                   supportColorsByModelId={supportColorsByModelId}
@@ -8134,9 +8210,9 @@ export function SceneCanvas({
                   via the GPU picking system. Supplied by the host (page.tsx). */}
               {organicCutKeyGizmo}
 
-              {selectedMarker && (
+              {visibleSelectedMarker && !stressOverlayActive && (
                 <IslandOverlay
-                  markers={[selectedMarker]}
+                  markers={[visibleSelectedMarker]}
                   brushRadiusMm={overlayBrushRadius ?? 2}
                   color={overlayColor ?? '#FF0000'}
                   opacity={overlayOpacity ?? 0.5}
@@ -8149,9 +8225,9 @@ export function SceneCanvas({
                   (the frame the detectors emit), so this must stay OUTSIDE the
                   model group — mounting it inside would apply the model
                   transform twice. */}
-              {islandInstances && islandInstances.count > 0 && (mode === 'support' || mode === 'analysis') && (
+              {visibleIslandInstances && visibleIslandInstances.count > 0 && (mode === 'support' || mode === 'analysis') && !stressOverlayActive && (
                 <IslandInstancesOverlay
-                  instances={islandInstances}
+                  instances={visibleIslandInstances}
                   selectedIslandId={overlaySelectedIslandId}
                   opacity={overlayOpacity ?? 0.9}
                 />
@@ -8160,7 +8236,7 @@ export function SceneCanvas({
               <IslandVoxelVisualization
                 scanResults={scanResults ?? null}
                 layerHeightMm={layerHeightMm ?? 0.05}
-                enabled={voxelEnabled ?? false}
+                enabled={!interiorView && (voxelEnabled ?? false) && !stressOverlayActive}
                 opacity={voxelOpacity}
                 colorScheme={voxelColorScheme}
                 selectedIslandId={voxelSelectedIslandId}
@@ -8175,7 +8251,7 @@ export function SceneCanvas({
                   islands={scanResults.islands}
                   scanResults={scanResults}
                   layerHeightMm={layerHeightMm ?? 0.05}
-                  enabled={showIslandIdLabels ?? false}
+                  enabled={!interiorView && (showIslandIdLabels ?? false) && !stressOverlayActive}
                   bboxMinZ={scanBBox?.min.z ?? 0}
                 />
               )}
@@ -8394,6 +8470,12 @@ export function SceneCanvas({
         <CameraFocusController selectedIslandId={overlaySelectedIslandId ?? null} islandMarkers={islandMarkers ?? []} onClearSelection={onClearSelection} />
         {mode === 'support' && supportPathfindingDebugState.enabled && (
           <SupportPathfindingDebugOverlay snapshot={supportPathfindingDebugState.snapshot} />
+        )}
+        {mode === 'support' && (
+          <SupportStressOverlay activeModelId={activeModelId ?? null} />
+        )}
+        {mode === 'support' && (
+          <CenterOfMassOverlay activeModelId={activeModelId ?? null} meshRefs={actualMeshRefs} />
         )}
         {children}
         </React.Profiler>

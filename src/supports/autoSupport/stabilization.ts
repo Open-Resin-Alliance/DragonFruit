@@ -66,7 +66,7 @@ export interface StabilizationAnchor {
  */
 export function computeStabilizationAnchors(
     mesh: THREE.Mesh,
-    options: { hasRaft?: boolean } = {},
+    options: { hasRaft?: boolean; toppleCoverageNeeded?: boolean } = {},
 ): StabilizationAnchor[] {
     const geometry = mesh.geometry as THREE.BufferGeometry;
     const posAttr = geometry.getAttribute('position');
@@ -178,6 +178,32 @@ export function computeStabilizationAnchors(
     const hull = convexHull2d(bearing);
     const bearingAreaMm2 = hull.length >= 3 ? hullArea(hull) : 0;
     const depthMm = centroidDepth(comX, comY, hull);
+    let stanceX = comX;
+    let stanceY = comY;
+    if (hull.length >= 3 && bearingAreaMm2 > 1e-9) {
+        let area2 = 0;
+        let sx = 0;
+        let sy = 0;
+        for (let i = 0; i < hull.length; i++) {
+            const p = hull[i];
+            const q = hull[(i + 1) % hull.length];
+            const cross = p.x * q.y - q.x * p.y;
+            area2 += cross;
+            sx += (p.x + q.x) * cross;
+            sy += (p.y + q.y) * cross;
+        }
+        stanceX = sx / (3 * area2);
+        stanceY = sy / (3 * area2);
+    } else if (hull.length > 0) {
+        let sx = 0;
+        let sy = 0;
+        for (const p of hull) {
+            sx += p.x;
+            sy += p.y;
+        }
+        stanceX = sx / hull.length;
+        stanceY = sy / hull.length;
+    }
 
     // Stable = enough bearing area AND the centroid over (or within a margin
     // of) that area. Either failing means the part can tip — and so does the
@@ -200,7 +226,8 @@ export function computeStabilizationAnchors(
         options.hasRaft === true,
     );
     const standsOnBase = hull.length >= 3 && bearingAreaMm2 >= MIN_BEARING_AREA_MM2 && depthMm >= -MARGIN_MM;
-    if (standsOnBase && !needsToppleCoverage(poseStability)) {
+    const needsTopple = options.toppleCoverageNeeded ?? needsToppleCoverage(poseStability);
+    if (standsOnBase && !needsTopple) {
         logVerdict('stable', 0, bearingAreaMm2, depthMm);
         return [];
     }
@@ -263,12 +290,12 @@ export function computeStabilizationAnchors(
         if (!existing || betterThan(tooth, existing)) best.set(key, tooth);
     };
     // The drag pushes the part over the edge on `pushDirDeg`; the material that
-    // lifts is on the far side. Azimuth 0 = +X, 90 = +Y.
+    // lifts is on the far side of the bearing stance. Azimuth 0 = +X, 90 = +Y.
     const tensionRad = ((poseStability.pushDirDeg + 180) * Math.PI) / 180;
     const tensionX = Math.cos(tensionRad);
     const tensionY = Math.sin(tensionRad);
     const tensionSide = (id: number): boolean =>
-        (vx[id] - comX) * tensionX + (vy[id] - comY) * tensionY > 0;
+        (vx[id] - stanceX) * tensionX + (vy[id] - stanceY) * tensionY > 1e-3;
     const emitEdge = (a: number, b: number, cap: number, spacing: number, tier: number): void => {
         const lo = vz[a] <= vz[b] ? a : b;
         const hi = lo === a ? b : a;

@@ -5,7 +5,8 @@ import { getOrCreateSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool'
 import type { CandidatePoint } from './types';
 import { CONTACT_WIDTH_PROBE_MM } from './constants';
 import { getSettings } from '../Settings/state';
-import { AUTO_SUPPORT_CONSTRAINTS } from './settings';
+import { AUTO_SUPPORT_CONSTRAINTS, MIN_CONTACT_TIP_DIAMETER_MM } from './settings';
+import type { AutoSupportSettings } from './settings';
 import { activeSizingBand, smallIslandTipDiameterMm } from './parameterSizing';
 
 /**
@@ -48,6 +49,9 @@ const _normal = new THREE.Vector3();
 const _reference = new THREE.Vector3();
 const _tangent1 = new THREE.Vector3();
 const _tangent2 = new THREE.Vector3();
+const TANGENT_AZIMUTH_STEPS = 8;
+const TANGENT_AZIMUTH_COS = Array.from({ length: TANGENT_AZIMUTH_STEPS }, (_, i) => Math.cos((i * Math.PI) / TANGENT_AZIMUTH_STEPS));
+const TANGENT_AZIMUTH_SIN = Array.from({ length: TANGENT_AZIMUTH_STEPS }, (_, i) => Math.sin((i * Math.PI) / TANGENT_AZIMUTH_STEPS));
 
 /** Local free width (mm) at a contact, from the shared distance field. */
 export function localFreeWidthMm(
@@ -72,10 +76,15 @@ export function localFreeWidthMm(
 
     const reach = CONTACT_WIDTH_PROBE_MM;
     let minSpanMm = 2 * reach;
-    for (let axis = 0; axis < 2; axis++) {
-        const tx = axis === 0 ? _tangent1.x : _tangent2.x;
-        const ty = axis === 0 ? _tangent1.y : _tangent2.y;
-        const tz = axis === 0 ? _tangent1.z : _tangent2.z;
+    // Sample 8 azimuths across [0, π) so ribs oriented diagonally to the
+    // arbitrary (_tangent1, _tangent2) basis still measure their true narrowest
+    // cross-section rather than a 45° diagonal chord.
+    for (let axis = 0; axis < TANGENT_AZIMUTH_COS.length; axis++) {
+        const ca = TANGENT_AZIMUTH_COS[axis];
+        const sa = TANGENT_AZIMUTH_SIN[axis];
+        const tx = _tangent1.x * ca + _tangent2.x * sa;
+        const ty = _tangent1.y * ca + _tangent2.y * sa;
+        const tz = _tangent1.z * ca + _tangent2.z * sa;
         let spanMm = 0;
         for (let sign = 1; sign >= -1; sign -= 2) {
             const d = sdf.exactSignedDistanceAt(x + tx * reach * sign, y + ty * reach * sign, z + tz * reach * sign);
@@ -107,8 +116,13 @@ export function localFreeWidthMm(
  * rather than narrow, and capping on it floors the band tip on evidence the
  * probe does not have. Only a measured, non-zero width caps.
  */
-export function applyContactTipCap(candidate: CandidatePoint, sdf: SDFCache): void {
-    const ceilingMm = candidate.tipDiameterMm ?? activeSizingBand().tipContactDiameterMm;
+export function applyContactTipCap(
+    candidate: CandidatePoint,
+    sdf: SDFCache,
+    tipContactMarginScaleOverride?: number,
+    autoSettings?: Partial<AutoSupportSettings>,
+): void {
+    const ceilingMm = candidate.tipDiameterMm ?? activeSizingBand(autoSettings).tipContactDiameterMm;
     if (ceilingMm <= smallIslandTipDiameterMm()) return;
     const freeWidthMm = localFreeWidthMm(
         sdf,
@@ -118,11 +132,15 @@ export function applyContactTipCap(candidate: CandidatePoint, sdf: SDFCache): vo
         candidate.tipNormal,
     );
     if (freeWidthMm <= 0) return;
-    const marginScale = getSettings().autoSupport?.tipContactMarginScale
-        ?? AUTO_SUPPORT_CONSTRAINTS.tipContactMarginScale.defaultValue;
-    const targetMm = Math.max(Math.min(ceilingMm, freeWidthMm * marginScale), smallIslandTipDiameterMm());
+    const marginScale = tipContactMarginScaleOverride !== undefined
+        ? tipContactMarginScaleOverride
+        : (autoSettings?.tipContactMarginScale
+            ?? getSettings().autoSupport?.tipContactMarginScale
+            ?? AUTO_SUPPORT_CONSTRAINTS.tipContactMarginScale.defaultValue);
+    const floorMm = Math.max(MIN_CONTACT_TIP_DIAMETER_MM, smallIslandTipDiameterMm());
+    const targetMm = round(Math.max(Math.min(ceilingMm, freeWidthMm * marginScale), floorMm), 3);
     if (targetMm >= ceilingMm) return;
-    candidate.tipDiameterMm = round(targetMm, 3);
+    candidate.tipDiameterMm = targetMm;
 }
 
 /**
@@ -132,10 +150,17 @@ export function applyContactTipCap(candidate: CandidatePoint, sdf: SDFCache): vo
  * caller without one (unit fixtures, a bare geometry) keeps band sizing rather
  * than failing the run.
  */
-export function applyContactTipCaps(candidates: CandidatePoint[], mesh?: THREE.Mesh): void {
+export function applyContactTipCaps(
+    candidates: CandidatePoint[],
+    mesh?: THREE.Mesh,
+    tipContactMarginScaleOverride?: number,
+    autoSettings?: Partial<AutoSupportSettings>,
+): void {
     const geometry = mesh?.geometry as (THREE.BufferGeometry & { boundsTree?: unknown }) | undefined;
     if (!mesh || !geometry?.boundsTree || candidates.length === 0) return;
     const sdf = getOrCreateSDFCache(mesh);
     sdf.refreshMatrix();
-    for (const candidate of candidates) applyContactTipCap(candidate, sdf);
+    for (const candidate of candidates) {
+        applyContactTipCap(candidate, sdf, tipContactMarginScaleOverride, autoSettings);
+    }
 }

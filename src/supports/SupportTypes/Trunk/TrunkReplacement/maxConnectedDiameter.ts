@@ -3,6 +3,8 @@ import { getJointDiameter } from '../../../constants';
 import { splitSupportShaft } from '../../../SupportPrimitives/Joint/jointUtils';
 import { resolveSegmentEndpoints } from '../../../SupportPrimitives/Knot/segmentEndpoints';
 import { getSettings } from '../../../Settings/state';
+import { decodeSupportSettingsHex, encodeSupportSettingsHex } from '../../../Settings/supportSettingsCodec';
+import { applySizingOverridesToSettings } from '../../../autoSupport/parameterSizing';
 import { coneKnotHostType, getSupportTypeDescriptor, knotHostId, SUPPORT_TYPES, type SupportTypeDescriptor, type SupportTypeId } from '../../../supportTypeRegistry';
 
 function maxNum(a: number, b: number) {
@@ -275,6 +277,7 @@ export type TrunkKnotUpdate = { before: Knot; after: Knot };
 export interface DiameterProfileContext {
     branchesByParentKnotId: Map<string, Branch[]>;
     leavesByParentKnotId: Map<string, Leaf[]>;
+    knotsByParentShaftId?: Map<string, Knot[]>;
 }
 
 function collectBranchesByParentKnotId(snapshot: SupportState): Map<string, Branch[]> {
@@ -299,6 +302,17 @@ function collectLeavesByParentKnotId(snapshot: SupportState): Map<string, Leaf[]
     return byKnot;
 }
 
+function collectKnotsByParentShaftId(snapshot: SupportState): Map<string, Knot[]> {
+    const byShaft = new Map<string, Knot[]>();
+    for (const k of Object.values(snapshot.knots)) {
+        if (!k?.parentShaftId) continue;
+        const list = byShaft.get(k.parentShaftId);
+        if (list) list.push(k);
+        else byShaft.set(k.parentShaftId, [k]);
+    }
+    return byShaft;
+}
+
 /**
  * Re-solve a host's stepwise shaft diameter from the branches it carries, for a
  * type declaring `recomputesDiameterFromAttachments`. Segment boundaries split
@@ -317,21 +331,34 @@ export function computeAndApplySupportDiameterProfile(
     if (!root) return null;
 
     let nextTrunk: Trunk = trunk;
+    const trunkSegmentIds = new Set(trunk.segments.map((s) => s.id));
     // Knots are immutable below: every change is `{ ...knot, ... }` recorded
-    // through `recordUpdate`, and nothing writes to a knot in place. So the
-    // map holds the snapshot's own objects and only the knots that actually
-    // change are copied. Cloning every knot per trunk was O(trunks × knots)
-    // deep clones and most of the resize pass's cost.
+    // through `recordUpdate`, and nothing writes to a knot in place. Seed with
+    // only the knots sitting on THIS trunk's segments (O(deg(trunk)) via
+    // `knotsByParentShaftId` rather than scanning every knot in the forest).
     const nextKnotById = new Map<string, Knot>();
-    for (const k of Object.values(snapshot.knots)) {
-        nextKnotById.set(k.id, k);
+    if (context?.knotsByParentShaftId) {
+        for (const s of trunk.segments) {
+            for (const k of context.knotsByParentShaftId.get(s.id) ?? []) {
+                nextKnotById.set(k.id, k);
+            }
+        }
+    } else {
+        for (const k of Object.values(snapshot.knots)) {
+            if (trunkSegmentIds.has(k.parentShaftId)) {
+                nextKnotById.set(k.id, k);
+            }
+        }
     }
 
     const beforeByKnotId = new Map<string, Knot>();
     const recordUpdate = (after: Knot) => {
         const before = snapshot.knots[after.id];
         if (!before) return;
-        if (!beforeByKnotId.has(after.id)) beforeByKnotId.set(after.id, structuredClone(before));
+        // Snapshot knots are immutable: every change is a new object, and the
+        // revert payload only reads `before`. Cloning each one showed up in the
+        // resize profile for no correctness gain.
+        if (!beforeByKnotId.has(after.id)) beforeByKnotId.set(after.id, before);
         nextKnotById.set(after.id, after);
     };
 
@@ -342,9 +369,7 @@ export function computeAndApplySupportDiameterProfile(
     const isNearlyZero = (t: number) => t <= epsT;
     const isNearlyOne = (t: number) => t >= 1 - epsT;
 
-    const trunkSegmentIds = new Set(trunk.segments.map((s) => s.id));
-    const trunkKnotsWithBranches = Object.values(snapshot.knots)
-        .filter((k) => trunkSegmentIds.has(k.parentShaftId))
+    const trunkKnotsWithBranches = [...nextKnotById.values()]
         .filter((k) => (branchesByParentKnotId.get(k.id)?.length ?? 0) > 0)
         .sort((a, b) => b.pos.z - a.pos.z);
 
@@ -528,9 +553,22 @@ export function computeAndApplySupportDiameterProfile(
         if (after) knotUpdates.push({ before, after });
     }
 
+    const segmentsChanged = nextSegments.length !== trunk.segments.length
+        || nextSegments.some((seg, idx) => Math.abs(seg.diameter - (trunk.segments[idx]?.diameter ?? 0)) > 1e-6);
+    let nextSettingsCodeHex = nextTrunk.settingsCodeHex;
+    if (segmentsChanged && typeof nextSettingsCodeHex === 'string' && nextSettingsCodeHex.length > 0) {
+        const baseSettings = getSettings();
+        const decoded = decodeSupportSettingsHex(nextSettingsCodeHex, baseSettings) ?? baseSettings;
+        nextSettingsCodeHex = encodeSupportSettingsHex(applySizingOverridesToSettings(decoded, {
+            shaftDiameterMm: nextSegments[0]?.diameter,
+            tipBodyDiameterMm: nextSegments[nextSegments.length - 1]?.diameter,
+        }));
+    }
+
     return {
         trunk: {
             ...nextTrunk,
+            ...(nextSettingsCodeHex !== nextTrunk.settingsCodeHex ? { settingsCodeHex: nextSettingsCodeHex } : {}),
             segments: nextSegments,
         },
         knotUpdates,
@@ -549,25 +587,71 @@ export function computeAndApplySupportDiameterProfile(
  * per-trunk profile only touches that trunk's own segments/knots, so order
  * does not change the result.
  */
-export function computeForestDiameterProfile(snapshot: SupportState): SupportState {
-    let working = snapshot;
+export function computeForestDiameterProfile(snapshot: SupportState, modelId?: string): SupportState {
+    const knotsByParentShaftId = collectKnotsByParentShaftId(snapshot);
     const context: DiameterProfileContext = {
         branchesByParentKnotId: collectBranchesByParentKnotId(snapshot),
         leavesByParentKnotId: collectLeavesByParentKnotId(snapshot),
+        knotsByParentShaftId,
     };
+    let nextTrunks: SupportState['trunks'] | null = null;
+    let nextKnots: SupportState['knots'] | null = null;
+    let working: SupportState = snapshot;
+
     for (const trunkId of Object.keys(snapshot.trunks)) {
+        const trunk = snapshot.trunks[trunkId];
+        if (modelId !== undefined && trunk?.modelId !== modelId) continue;
+
+        // A bare pillar carries no attachment load, so there is no stepwise
+        // profile to write: re-deriving it from its own contact demand only
+        // rewrites the placed diameter (normalizing a deliberately tapered
+        // pillar back to its base) and re-encodes its settings. Leave it as
+        // placed; the stress loop owns a bare pillar's slenderness.
+        const carriesMembers = trunk.segments.some((seg) =>
+            (knotsByParentShaftId.get(seg.id) ?? []).some((k) =>
+                (context.branchesByParentKnotId.get(k.id)?.length ?? 0)
+                + (context.leavesByParentKnotId.get(k.id)?.length ?? 0) > 0));
+        if (!carriesMembers) continue;
+
         const applied = computeAndApplySupportDiameterProfile(working, trunkId, undefined, context);
         if (!applied) continue;
 
-        let nextKnots = working.knots;
-        for (const u of applied.knotUpdates) {
-            nextKnots = { ...nextKnots, [u.after.id]: u.after };
+        // A lone trunk whose profile is already the contact demand needs no
+        // snapshot replacement; that keeps the forest-resize clearance/orphan
+        // passes off forests where nothing actually thickened.
+        const trunkChanged = applied.knotUpdates.length > 0
+            || applied.trunk.settingsCodeHex !== trunk.settingsCodeHex
+            || applied.trunk.segments.length !== trunk.segments.length
+            || applied.trunk.segments.some((seg, i) => Math.abs(seg.diameter - (trunk.segments[i]?.diameter ?? 0)) > 1e-6
+                || Math.abs((seg.topJoint?.diameter ?? 0) - (trunk.segments[i]?.topJoint?.diameter ?? 0)) > 1e-6
+                || Math.abs((seg.bottomJoint?.diameter ?? 0) - (trunk.segments[i]?.bottomJoint?.diameter ?? 0)) > 1e-6);
+        if (!trunkChanged) continue;
+
+        if (!nextTrunks || !nextKnots) {
+            nextTrunks = { ...snapshot.trunks };
+            nextKnots = { ...snapshot.knots };
+            working = { ...snapshot, trunks: nextTrunks, knots: nextKnots };
         }
-        working = {
-            ...working,
-            trunks: { ...working.trunks, [applied.trunk.id]: applied.trunk },
-            knots: nextKnots,
-        };
+        nextTrunks[applied.trunk.id] = applied.trunk;
+        for (const u of applied.knotUpdates) {
+            nextKnots[u.after.id] = u.after;
+            if (u.before.parentShaftId !== u.after.parentShaftId) {
+                const prevList = knotsByParentShaftId.get(u.before.parentShaftId);
+                if (prevList) {
+                    const idx = prevList.findIndex((k) => k.id === u.after.id);
+                    if (idx !== -1) prevList.splice(idx, 1);
+                }
+                const nextList = knotsByParentShaftId.get(u.after.parentShaftId);
+                if (nextList) nextList.push(u.after);
+                else knotsByParentShaftId.set(u.after.parentShaftId, [u.after]);
+            } else {
+                const list = knotsByParentShaftId.get(u.after.parentShaftId);
+                if (list) {
+                    const idx = list.findIndex((k) => k.id === u.after.id);
+                    if (idx !== -1) list[idx] = u.after;
+                }
+            }
+        }
     }
     return working;
 }

@@ -126,11 +126,14 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         diameter: jointDiameterB,
     };
 
+    const swap = aPos.z > bPos.z
+        || (aPos.z === bPos.z && (aPos.y > bPos.y || (aPos.y === bPos.y && aPos.x > bPos.x)));
+
     const segment: Segment = {
         id: uuidv4(),
         diameter: shaftDiameter,
-        bottomJoint: socketJointA,
-        topJoint: socketJointB,
+        bottomJoint: swap ? socketJointB : socketJointA,
+        topJoint: swap ? socketJointA : socketJointB,
     };
 
     const contactDiskA: ContactDisk = {
@@ -153,13 +156,13 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         coneAxis: { x: _axisB.x, y: _axisB.y, z: _axisB.z },
     };
 
-        const twigId = uuidv4();
+    const twigId = uuidv4();
     const twig: Twig = {
         id: twigId,
         modelId,
         segments: [segment],
-        contactDiskA,
-        contactDiskB,
+        contactDiskA: swap ? contactDiskB : contactDiskA,
+        contactDiskB: swap ? contactDiskA : contactDiskB,
     };
 
     let error: LimitationCode | undefined = undefined;
@@ -178,7 +181,7 @@ export function buildTwig(input: TwigBuildInput): TwigBuildResult {
         // disks alike. Sticks and trunks keep the SDF: they are long, and
         // their clearance question is genuinely three-dimensional.
         const twigRadius = Math.max(shaftDiameter, diskAContactDiameter) / 2;
-        if (checkShortBridgeCollision(socketJointA.pos, socketJointB.pos, twigRadius, mesh).hit) {
+        if (checkShortBridgeCollision(segment.bottomJoint!.pos, segment.topJoint!.pos, twigRadius, mesh).hit) {
             error = 'COLLISION_WITH_MODEL';
         }
     }

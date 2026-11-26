@@ -5,6 +5,7 @@ import * as THREE from 'three';
 
 import { initializeBVH, accelerateGeometry } from '../../utils/bvh';
 import { SDFCache } from '../PlacementLogic/Pathfinding/SDFCache';
+import { clearSDFCacheForMesh, getOrCreateSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
 import { ColumnClearanceMap } from '../PlacementLogic/Pathfinding/ColumnClearanceMap';
 
 function makeSphereMesh(): THREE.Mesh {
@@ -225,4 +226,41 @@ test('tryUseColumnMap never builds one, enableColumnMap still does', () => {
 
     // Once built, the same clearance is activated rather than rebuilt.
     assert.equal(sdf.tryUseColumnMap(1.2, 0.2), true);
+});
+
+test('new SDFCache lazily builds boundsTree when geometry lacks one', () => {
+    const geometry = new THREE.SphereGeometry(2, 16, 16);
+    assert.equal((geometry as THREE.BufferGeometry & { boundsTree?: unknown }).boundsTree, undefined);
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
+    mesh.position.set(0, 0, 5);
+    mesh.updateMatrixWorld(true);
+
+    const sdf = new SDFCache(mesh, { cellSize: 0.5 });
+    assert.ok((geometry as THREE.BufferGeometry & { boundsTree?: unknown }).boundsTree, 'boundsTree must be lazily constructed');
+    const d = sdf.exactSignedDistanceAt(0, 0, 8.13);
+    assert.ok(Math.abs(d - 1.13) < 0.05, `expected ~1.13 above sphere, got ${d}`);
+});
+
+test('getOrCreateSDFCache rebuilds when mesh.geometry is swapped on the same THREE.Mesh', () => {
+    initializeBVH();
+    const geomA = new THREE.SphereGeometry(2, 16, 16);
+    accelerateGeometry(geomA);
+    const geomB = new THREE.BoxGeometry(10, 10, 10);
+    accelerateGeometry(geomB);
+
+    const mesh: THREE.Mesh = new THREE.Mesh(geomA as THREE.BufferGeometry, new THREE.MeshBasicMaterial());
+    mesh.updateMatrixWorld(true);
+
+    try {
+        const sdfA = getOrCreateSDFCache(mesh);
+        assert.ok(sdfA.exactSignedDistanceAt(4.9, 0, 0) > 2.5, 'point is outside initial radius-2 sphere');
+
+        mesh.geometry = geomB;
+        const sdfB = getOrCreateSDFCache(mesh);
+        assert.notEqual(sdfB, sdfA, 'pool must rebuild SDFCache when mesh.geometry changes');
+        assert.equal((sdfB as { geometry?: THREE.BufferGeometry }).geometry, geomB);
+        assert.ok(sdfB.exactSignedDistanceAt(4.9, 0, 0) < 0, 'point must now be inside 10x10x10 box');
+    } finally {
+        clearSDFCacheForMesh(mesh.uuid);
+    }
 });

@@ -1861,7 +1861,7 @@ struct IslandScanParams {
 }
 
 fn default_connectivity() -> u8 {
-    4
+    8
 }
 fn default_min_island_area() -> f64 {
     0.01
@@ -1980,10 +1980,10 @@ async fn run_island_scan_native(
 
         // Phase B: Island scan pipeline (sequential tracking using streaming)
         let t_scan = std::time::Instant::now();
-        let connectivity = if params.connectivity == 8 {
-            dragonfruit_islands::model::Connectivity::Eight
-        } else {
+        let connectivity = if params.connectivity == 4 {
             dragonfruit_islands::model::Connectivity::Four
+        } else {
+            dragonfruit_islands::model::Connectivity::Eight
         };
 
         let job = dragonfruit_islands::model::IslandScanJob {

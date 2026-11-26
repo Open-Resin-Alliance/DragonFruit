@@ -27,7 +27,8 @@ export const SDF_DEFAULT_CELL_SIZE_MM = 0.5;
 /** The cached distance field for a mesh, built on first use. */
 export function getOrCreateSDFCache(mesh: THREE.Mesh): SDFCache {
     const existing = sdfCachePool.get(mesh.uuid);
-    if (existing) return existing;
+    if (existing && existing.geometry === mesh.geometry) return existing;
+    if (existing) existing.clear();
 
     const cache = new SDFCache(mesh, { cellSize: SDF_DEFAULT_CELL_SIZE_MM });
     sdfCachePool.set(mesh.uuid, cache);

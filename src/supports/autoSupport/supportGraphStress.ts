@@ -1,0 +1,2500 @@
+import type * as THREE from 'three';
+import { contactEndpointsFor, type SupportTypeId } from '../supportTypeRegistry';
+import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
+import { resolveSegmentEndpoints } from '../SupportPrimitives/Knot/segmentEndpoints';
+import type { Knot, Roots, Segment, SupportState, Vec3 } from '../types';
+import { referenceStefanMeanPressureMm2, type RepresentativeLayer, type RepresentativeLayerProfile, type StefanPressureField } from './tractionOptimization';
+import { GREEN_RESIN_MODULUS_MPA, NOMINAL_PEEL_PRESSURE_MPA } from './treeSynthesis';
+import { DEFAULT_SUPPORT_BREAK_STRENGTH_MPA } from './greenMaterialCalibration';
+/** Poisson's ratio for green-state cured UV photopolymer resin. */
+const GREEN_RESIN_POISSON = 0.35;
+/** Above this free-node threshold, report rigid-body tip overload only to keep
+ *  solve time bounded. A dense miniature forest is ~1700 members; at 1200 the
+ *  solve silently degraded to rigid-body exactly where member bending decides
+ *  whether to brace or thicken. 4500 keeps the full frame solve on those runs;
+ *  beyond it the rigid-body fallback (and its `solverMode` report) still hold. */
+const MAX_FRAME_SOLVE_FREE_NODES = 4500;
+/** Extra stages the per-component pass may add beyond the global critical layers. */
+const MAX_COMPONENT_STAGE_LAYERS = 8;
+/** Lateral peel drag fraction during release from flexible FEP film. */
+const LATERAL_PEEL_DRAG_RATIO = 0.08;
+/** Minimum spatial merge tolerance (mm) when connecting shared endpoints & knots. */
+const NODE_MERGE_TOL_MM = 0.15;
+/** Knots weld into any node within this distance. A "member" shorter than this
+ *  with a shaft diameter of 1-2 mm is a joint, not a beam: splitting there
+ *  produces a stub whose length/curvature ratio is numerical noise (a 0.2 mm
+ *  stub at the 2.2 mm diameter cap measured 231 %). */
+const KNOT_MERGE_TOL_MM = 0.5;
+
+export interface SupportGraphNode {
+    id: string;
+    pos: Vec3;
+    kind: 'root' | 'joint' | 'knot' | 'tip' | 'model';
+    fixed: boolean;
+    entityId?: string;
+    entityKind?: SupportTypeId;
+    tipContactDiameterMm?: number;
+}
+
+export interface SupportGraphMember {
+    id: string;
+    entityId: string;
+    entityKind: SupportTypeId;
+    nodeA: number;
+    nodeB: number;
+    lengthMm: number;
+    diameterMm: number;
+    angleFromVerticalDeg: number;
+    /** A contact cone is one stiffness member (effective diameter) whose
+     *  stress is recovered along its real taper. It cannot be thickened like a
+     *  shaft. */
+    role?: 'shaft' | 'cone';
+    taperBodyDiameterMm?: number;
+    taperTipDiameterMm?: number;
+}
+
+export interface SupportGraph {
+    nodes: SupportGraphNode[];
+    members: SupportGraphMember[];
+    rootCount: number;
+    tipCount: number;
+    braceCount: number;
+}
+
+export interface FrameStressHotspot {
+    entityId: string;
+    entityKind: SupportTypeId;
+    kind: 'tip' | 'member';
+    /** The member is a contact-cone subdivision, not a shaft segment. */
+    role?: 'shaft' | 'cone';
+    utilizationPct: number;
+    /** Tip hotspots: biaxial contact equivalent stress (√(σ_n² + 3τ²)); member
+     *  hotspots: combined axial + bending stress. */
+    peakStressMpa?: number;
+    /** Tip hotspots: vertical peel share (N); the lateral drag share is not
+     *  reported separately. */
+    tipLoadN?: number;
+    deflectionMm?: number;
+    layerZMm: number;
+    pos: Vec3;
+}
+
+export interface LayerPeelPoint {
+    zMm: number;
+    areaMm2: number;
+    peelForceN: number;
+    maxTipUtilPct: number;
+    maxMemberUtilPct: number;
+    critical: boolean;
+}
+
+export interface StressSegment {
+    entityId: string;
+    entityKind: SupportTypeId;
+    a: Vec3;
+    b: Vec3;
+    diameterMm: number;
+    utilizationPct: number;
+    role?: 'shaft' | 'cone';
+}
+
+export interface StressTipPoint {
+    entityId: string;
+    entityKind: SupportTypeId;
+    pos: Vec3;
+    utilizationPct: number;
+    loadN: number;
+}
+
+export interface SupportFrameStressReport {
+    nodeCount: number;
+    rootCount: number;
+    tipCount: number;
+    memberCount: number;
+    braceCount: number;
+    layersEvaluated: number;
+    peakLayerZMm: number;
+    peakLayerPeelForceN: number;
+    maxTipUtilizationPct: number;
+    overloadedTips: number;
+    maxMemberUtilizationPct: number;
+    overloadedMembers: number;
+    maxTipDeflectionMm: number;
+    /** Fitted rigid-body rotation range along the layer's drag direction,
+     *  across all evaluated layers (mm). This is the part's rocking / layer
+     *  shift; `maxTipDeflectionMm` is a single tip's elastic sag. */
+    maxTipRockingMm: number;
+    solverMode: 'frame3d' | 'rigidBodyOnly';
+    /** At the worst-rocking layer, the two tips at the extremes of the fitted
+     *  rigid-body rotation (the rotation lever arms). The pair a cross-brace
+     *  should tie. */
+    rockingPair?: {
+        aEntityId: string;
+        bEntityId: string;
+        aPos: Vec3;
+        bPos: Vec3;
+        layerZMm: number;
+        differentialMm: number;
+    };
+    /** Free-tip displacement vectors at that same worst-rocking layer (mm). */
+    tipDisplacements?: Array<{
+        entityId?: string;
+        pos: Vec3;
+        dx: number;
+        dy: number;
+        dz: number;
+    }>;
+    hotspots: FrameStressHotspot[];
+    layerProfile: LayerPeelPoint[];
+    memberSegments: StressSegment[];
+    tipPoints: StressTipPoint[];
+    reinforcedCount?: number;
+}
+
+function compareVec3(a: Vec3, b: Vec3): number {
+    return a.z - b.z || a.x - b.x || a.y - b.y;
+}
+
+/** Stations used to recover the stress along a tapered contact cone. */
+const CONE_TAPER_STRESS_STATIONS = 8;
+
+function clampDiameterMm(d: number | undefined, fallback = 1.0): number {
+    return typeof d === 'number' && Number.isFinite(d) && d > 0 ? Math.max(0.1, d) : fallback;
+}
+
+/**
+ * Assemble a deterministic structural graph (nodes + beam members) from `snapshot`,
+ * splitting hosted segments at branch/brace/kickstand knots so bracing forms true
+ * multi-bay triangulated frames.
+ *
+ * Plate-rooted columns (`trunk`, `stump`, `kickstand`), branches, leaves, and braces
+ * participate; model-to-model `twig`/`stick` bridges do not load build-plate trunks
+ * and are omitted.
+ */
+export function buildSupportGraph(snapshot: SupportState, modelId?: string): SupportGraph {
+    const nodes: SupportGraphNode[] = [];
+    const members: SupportGraphMember[] = [];
+    let rootCount = 0;
+    let tipCount = 0;
+    let braceCount = 0;
+
+    // Spatial hash + exact tolerance check to merge coincident joints/knots cleanly.
+    const cellSize = 0.5;
+    const tolSq = NODE_MERGE_TOL_MM * NODE_MERGE_TOL_MM;
+    const buckets = new Map<string, number[]>();
+
+    const bucketKey = (ix: number, iy: number, iz: number) => `${ix},${iy},${iz}`;
+
+    const internNode = (
+        pos: Vec3,
+        kind: SupportGraphNode['kind'],
+        fixed: boolean,
+        meta?: { entityId?: string; entityKind?: SupportTypeId; tipContactDiameterMm?: number },
+        mergeTolMm: number = NODE_MERGE_TOL_MM,
+    ): number => {
+        const mergeTolSq = mergeTolMm * mergeTolMm;
+        const cx = Math.floor(pos.x / cellSize);
+        const cy = Math.floor(pos.y / cellSize);
+        const cz = Math.floor(pos.z / cellSize);
+
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dz = -1; dz <= 1; dz++) {
+                    const list = buckets.get(bucketKey(cx + dx, cy + dy, cz + dz));
+                    if (!list) continue;
+                    for (const idx of list) {
+                        const existing = nodes[idx];
+                        // Keep contact tips distinct from adjacent joints unless very close,
+                        // and keep fixed plate roots fixed.
+                        if (kind === 'tip' && existing.kind === 'tip') continue;
+                        const d2 = (existing.pos.x - pos.x) ** 2
+                            + (existing.pos.y - pos.y) ** 2
+                            + (existing.pos.z - pos.z) ** 2;
+                        if (d2 <= mergeTolSq) {
+                            if (fixed && !existing.fixed) {
+                                existing.fixed = true;
+                                existing.kind = 'root';
+                                rootCount++;
+                            }
+                            if (meta?.tipContactDiameterMm !== undefined) {
+                                existing.kind = 'tip';
+                                existing.tipContactDiameterMm = meta.tipContactDiameterMm;
+                                existing.entityId = meta.entityId;
+                                existing.entityKind = meta.entityKind;
+                            }
+                            return idx;
+                        }
+                    }
+                }
+            }
+        }
+
+        const idx = nodes.length;
+        nodes.push({
+            id: `n-${idx}`,
+            pos: { x: pos.x, y: pos.y, z: pos.z },
+            kind,
+            fixed,
+            ...(meta?.entityId ? { entityId: meta.entityId } : {}),
+            ...(meta?.entityKind ? { entityKind: meta.entityKind } : {}),
+            ...(meta?.tipContactDiameterMm !== undefined ? { tipContactDiameterMm: meta.tipContactDiameterMm } : {}),
+        });
+        if (fixed) rootCount++;
+        if (kind === 'tip') tipCount++;
+        const k = bucketKey(cx, cy, cz);
+        const arr = buckets.get(k);
+        if (arr) arr.push(idx);
+        else buckets.set(k, [idx]);
+        return idx;
+    };
+
+    const addBeamMember = (
+        entityId: string,
+        entityKind: SupportTypeId,
+        nodeA: number,
+        nodeB: number,
+        diameterMm: number,
+        role?: 'shaft' | 'cone',
+        taper?: { bodyMm: number; tipMm: number },
+    ) => {
+        if (nodeA === nodeB) return;
+        const a = nodes[nodeA].pos;
+        const b = nodes[nodeB].pos;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dz = b.z - a.z;
+        const lengthMm = Math.hypot(dx, dy, dz);
+        if (lengthMm < 1e-4) return;
+        const lateral = Math.hypot(dx, dy);
+        const angleFromVerticalDeg = (Math.atan2(lateral, Math.abs(dz)) * 180) / Math.PI;
+        members.push({
+            id: `m-${members.length}`,
+            entityId,
+            entityKind,
+            nodeA,
+            nodeB,
+            lengthMm,
+            diameterMm: clampDiameterMm(diameterMm),
+            angleFromVerticalDeg,
+            ...(role ? { role } : {}),
+            ...(taper ? { taperBodyDiameterMm: taper.bodyMm, taperTipDiameterMm: taper.tipMm } : {}),
+        });
+    };
+
+    // Index knots by host segment so hosted shafts split cleanly at knots.
+    const knotsBySegment = new Map<string, Knot[]>();
+    for (const knot of Object.values(snapshot.knots ?? {})) {
+        if (!knot?.parentShaftId) continue;
+        const list = knotsBySegment.get(knot.parentShaftId);
+        if (list) list.push(knot);
+        else knotsBySegment.set(knot.parentShaftId, [knot]);
+    }
+    for (const list of knotsBySegment.values()) {
+        list.sort((a, b) => (a.t ?? 0.5) - (b.t ?? 0.5) || compareVec3(a.pos, b.pos));
+    }
+
+    const knotNodeById = new Map<string, number>();
+    const ensureKnotNode = (knot: Knot): number => {
+        const cached = knotNodeById.get(knot.id);
+        if (cached !== undefined) return cached;
+        const idx = internNode(knot.pos, 'knot', false, undefined, KNOT_MERGE_TOL_MM);
+        knotNodeById.set(knot.id, idx);
+        return idx;
+    };
+
+    const matchesModel = (entityModelId: string | undefined, rootId?: string): boolean => {
+        if (!modelId) return true;
+        const resolved = entityModelId ?? (rootId ? snapshot.roots?.[rootId]?.modelId : undefined);
+        return resolved === modelId;
+    };
+
+    // Split a shaft segment at all knots hosted on it and emit linear beam members.
+    const addShaftSegments = (
+        entity: { id: string; typeId?: SupportTypeId; segments: Segment[]; rootId?: string; contactCone?: { pos: Vec3; profile?: { bodyDiameterMm?: number; contactDiameterMm?: number } } },
+        kind: SupportTypeId,
+        root: Roots | undefined,
+        hostKnot: Knot | undefined,
+        anchorIsFixedRoot: boolean,
+    ): { lastNodeIdx: number | null; lastDiameterMm: number } => {
+        let lastNodeIdx: number | null = null;
+        let lastDiameterMm = clampDiameterMm(entity.segments[0]?.diameter, 1.0);
+        const typedEntity = entity.typeId ? entity : { ...entity, typeId: kind };
+
+        for (let i = 0; i < entity.segments.length; i++) {
+            const seg = entity.segments[i];
+            const ep = resolveSegmentEndpoints(typedEntity, seg, i, { root, hostKnot });
+            if (!ep) continue;
+            lastDiameterMm = clampDiameterMm(seg.diameter, lastDiameterMm);
+
+            const isFirstRootSeg = i === 0 && anchorIsFixedRoot;
+            const startIdx = isFirstRootSeg
+                ? internNode(ep.start, 'root', true)
+                : (lastNodeIdx ?? (i === 0 && hostKnot ? ensureKnotNode(hostKnot) : internNode(ep.start, 'joint', false)));
+            const endIdx = internNode(ep.end, 'joint', false);
+
+            const hostedKnots = (knotsBySegment.get(seg.id) ?? []).filter((k) => {
+                const dStart2 = (k.pos.x - ep.start.x) ** 2 + (k.pos.y - ep.start.y) ** 2 + (k.pos.z - ep.start.z) ** 2;
+                const dEnd2 = (k.pos.x - ep.end.x) ** 2 + (k.pos.y - ep.end.y) ** 2 + (k.pos.z - ep.end.z) ** 2;
+                return dStart2 > tolSq && dEnd2 > tolSq;
+            });
+
+            if (hostedKnots.length === 0) {
+                addBeamMember(entity.id, kind, startIdx, endIdx, lastDiameterMm);
+            } else {
+                // Sort strictly along segment direction so t errors in inputs cannot reverse spans.
+                const dirX = ep.end.x - ep.start.x;
+                const dirY = ep.end.y - ep.start.y;
+                const dirZ = ep.end.z - ep.start.z;
+                const lenSq = Math.max(1e-9, dirX * dirX + dirY * dirY + dirZ * dirZ);
+                const ordered = [...hostedKnots].sort((a, b) => {
+                    const ta = ((a.pos.x - ep.start.x) * dirX + (a.pos.y - ep.start.y) * dirY + (a.pos.z - ep.start.z) * dirZ) / lenSq;
+                    const tb = ((b.pos.x - ep.start.x) * dirX + (b.pos.y - ep.start.y) * dirY + (b.pos.z - ep.start.z) * dirZ) / lenSq;
+                    return ta - tb;
+                });
+
+                let prev = startIdx;
+                for (const knot of ordered) {
+                    const kIdx = ensureKnotNode(knot);
+                    addBeamMember(entity.id, kind, prev, kIdx, lastDiameterMm);
+                    prev = kIdx;
+                }
+                addBeamMember(entity.id, kind, prev, endIdx, lastDiameterMm);
+            }
+
+            lastNodeIdx = endIdx;
+        }
+
+        return { lastNodeIdx, lastDiameterMm };
+    };
+
+    // 1. Trunks (plate-rooted primary columns)
+    const trunks = Object.values(snapshot.trunks ?? {})
+        .filter((t) => matchesModel(t.modelId, t.rootId) && t.segments.length > 0)
+        .sort((a, b) => compareVec3(
+            snapshot.roots?.[a.rootId]?.transform.pos ?? a.contactCone?.pos ?? { x: 0, y: 0, z: 0 },
+            snapshot.roots?.[b.rootId]?.transform.pos ?? b.contactCone?.pos ?? { x: 0, y: 0, z: 0 },
+        ));
+    for (const trunk of trunks) {
+        const root = snapshot.roots?.[trunk.rootId];
+        if (!root) continue;
+        const { lastNodeIdx, lastDiameterMm } = addShaftSegments(trunk, 'trunk', root, undefined, true);
+        if (trunk.contactCone?.pos && lastNodeIdx !== null) {
+            const tipDia = clampDiameterMm(trunk.contactCone.profile?.contactDiameterMm, 0.28);
+            const bodyDia = clampDiameterMm(trunk.contactCone.profile?.bodyDiameterMm, lastDiameterMm);
+            const coneDia = Math.max(tipDia, bodyDia * 0.7);
+            const tipIdx = internNode(trunk.contactCone.pos, 'tip', false, {
+                entityId: trunk.id,
+                entityKind: 'trunk',
+                tipContactDiameterMm: tipDia,
+            });
+            addBeamMember(trunk.id, 'trunk', lastNodeIdx, tipIdx, coneDia, 'cone', {
+                bodyMm: bodyDia,
+                tipMm: tipDia,
+            });
+        }
+    }
+
+    // 2. Stumps (near-plate self-rooted columns)
+    const stumps = Object.values(snapshot.stumps ?? {})
+        .filter((s) => matchesModel(s.modelId) && s.segments.length > 0)
+        .sort((a, b) => compareVec3(a.rootPos, b.rootPos));
+    for (const stump of stumps) {
+        const rootIdx = internNode(stump.rootPos, 'root', true);
+        let prev = rootIdx;
+        let dia = clampDiameterMm(stump.segments[0]?.diameter, 1.0);
+        for (const seg of stump.segments) {
+            dia = clampDiameterMm(seg.diameter, dia);
+            const endPos = seg.topJoint?.pos ?? stump.contactCone.pos;
+            const isTip = !seg.topJoint && Boolean(stump.contactCone?.pos);
+            const endIdx = isTip
+                ? internNode(endPos, 'tip', false, {
+                    entityId: stump.id,
+                    entityKind: 'stump',
+                    tipContactDiameterMm: clampDiameterMm(stump.contactCone.profile?.contactDiameterMm, 0.28),
+                })
+                : internNode(endPos, 'joint', false);
+            addBeamMember(stump.id, 'stump', prev, endIdx, dia);
+            prev = endIdx;
+        }
+    }
+
+    // 3. Kickstands (plate-rooted lateral stabilisers attached to a host knot)
+    const kickstands = Object.values(snapshot.kickstands ?? {})
+        .filter((ks) => matchesModel(ks.modelId, ks.rootId) && ks.segments.length > 0)
+        .sort((a, b) => compareVec3(
+            snapshot.roots?.[a.rootId]?.transform.pos ?? { x: 0, y: 0, z: 0 },
+            snapshot.roots?.[b.rootId]?.transform.pos ?? { x: 0, y: 0, z: 0 },
+        ));
+    for (const ks of kickstands) {
+        const root = snapshot.roots?.[ks.rootId];
+        const hostKnot = snapshot.knots?.[ks.hostKnotId];
+        if (!root || !hostKnot) continue;
+        addShaftSegments(ks, 'kickstand', root, hostKnot, true);
+    }
+
+    // 4. Branches (knot-hosted multi-segment arms carrying contacts)
+    const branches = Object.values(snapshot.branches ?? {})
+        .filter((b) => matchesModel(b.modelId) && b.segments.length > 0)
+        .sort((a, b) => compareVec3(
+            a.contactCone?.pos ?? { x: 0, y: 0, z: 0 },
+            b.contactCone?.pos ?? { x: 0, y: 0, z: 0 },
+        ));
+    for (const branch of branches) {
+        const hostKnot = snapshot.knots?.[branch.parentKnotId];
+        if (!hostKnot) continue;
+        const { lastNodeIdx, lastDiameterMm } = addShaftSegments(branch, 'branch', undefined, hostKnot, false);
+        if (branch.contactCone?.pos && lastNodeIdx !== null) {
+            const tipDia = clampDiameterMm(branch.contactCone.profile?.contactDiameterMm, 0.28);
+            const coneDia = Math.max(tipDia, clampDiameterMm(branch.contactCone.profile?.bodyDiameterMm, lastDiameterMm) * 0.7);
+            const tipIdx = internNode(branch.contactCone.pos, 'tip', false, {
+                entityId: branch.id,
+                entityKind: 'branch',
+                tipContactDiameterMm: tipDia,
+            });
+            addBeamMember(branch.id, 'branch', lastNodeIdx, tipIdx, coneDia);
+        }
+    }
+
+    // 5. Leaves (single tapered contact member from knot to tip)
+    const leaves = Object.values(snapshot.leaves ?? {})
+        .filter((l) => matchesModel(l.modelId))
+        .sort((a, b) => compareVec3(a.contactCone.pos, b.contactCone.pos));
+    for (const leaf of leaves) {
+        const hostKnot = snapshot.knots?.[leaf.parentKnotId];
+        if (!hostKnot || !leaf.contactCone?.pos) continue;
+        const hostIdx = ensureKnotNode(hostKnot);
+        const tipDia = clampDiameterMm(leaf.contactCone.profile?.contactDiameterMm, 0.25);
+        const effDia = Math.max(tipDia, clampDiameterMm(leaf.contactCone.profile?.bodyDiameterMm, 0.9) * 0.7);
+        const tipIdx = internNode(leaf.contactCone.pos, 'tip', false, {
+            entityId: leaf.id,
+            entityKind: 'leaf',
+            tipContactDiameterMm: tipDia,
+        });
+        addBeamMember(leaf.id, 'leaf', hostIdx, tipIdx, effDia);
+    }
+
+    // 6. Braces (strut connecting startKnotId <-> endKnotId)
+    const braces = Object.values(snapshot.braces ?? {})
+        .filter((br) => matchesModel(br.modelId))
+        .sort((a, b) => compareVec3(
+            snapshot.knots?.[a.startKnotId]?.pos ?? { x: 0, y: 0, z: 0 },
+            snapshot.knots?.[b.startKnotId]?.pos ?? { x: 0, y: 0, z: 0 },
+        ));
+    for (const brace of braces) {
+        const startKnot = snapshot.knots?.[brace.startKnotId];
+        const endKnot = snapshot.knots?.[brace.endKnotId];
+        if (!startKnot || !endKnot) continue;
+        const nA = ensureKnotNode(startKnot);
+        const nB = ensureKnotNode(endKnot);
+        addBeamMember(brace.id, 'brace', nA, nB, clampDiameterMm(brace.profile?.diameter, 1.0));
+        braceCount++;
+    }
+
+    // 7. Model-coupled twig/stick struts. These are usually model-to-model
+    // bridges and do not touch a support, so the frame keeps ignoring them.
+    // When one end coincides with a support tip/joint, however, the bridge is
+    // a secondary load path: model the member and pin the model end. That is
+    // what lets a capped shaft with no brace host take a twig/strut to the
+    // part instead of staying over its limit.
+    const contactNodeCache = new Map<string, number>();
+    const contactNode = (pos: Vec3): number => {
+        const key = `${pos.x.toFixed(3)}:${pos.y.toFixed(3)}:${pos.z.toFixed(3)}`;
+        const cached = contactNodeCache.get(key);
+        if (cached !== undefined) return cached;
+        const near = nodes.find((node) => !node.fixed
+            && (node.kind === 'tip' || node.kind === 'joint' || node.kind === 'knot')
+            && (node.pos.x - pos.x) ** 2 + (node.pos.y - pos.y) ** 2 + (node.pos.z - pos.z) ** 2 <= NODE_MERGE_TOL_MM ** 2);
+        const index = near ? nodes.indexOf(near) : internNode(pos, 'model', true, undefined, NODE_MERGE_TOL_MM);
+        contactNodeCache.set(key, index);
+        return index;
+    };
+    const bridgeCollections: Array<[SupportTypeId, Record<string, { id: string; modelId?: string; segments?: Segment[] }> | undefined]> = [
+        ['twig', snapshot.twigs as never],
+        ['stick', snapshot.sticks as never],
+    ];
+    for (const [kind, collection] of bridgeCollections) {
+        for (const entity of Object.values(collection ?? {})) {
+            if (!matchesModel(entity.modelId)) continue;
+            const points: Vec3[] = [];
+            for (const { field } of contactEndpointsFor(kind)) {
+                const pos = (entity as unknown as Record<string, { pos?: Vec3 } | undefined>)[field]?.pos;
+                if (pos) points.push(pos);
+            }
+            if (points.length < 2) continue;
+            const nodeA = contactNode(points[0]);
+            const nodeB = contactNode(points[1]);
+            if (nodes[nodeA].fixed && nodes[nodeB].fixed) continue;
+            const diameter = clampDiameterMm(entity.segments?.[0]?.diameter, 0.8);
+            addBeamMember(entity.id, kind, nodeA, nodeB, diameter);
+        }
+    }
+
+    return { nodes, members, rootCount, tipCount, braceCount };
+}
+
+/**
+ * Distribute a layer's net vertical peel force `totalForceN` applied at Center of
+ * Pressure `(copX, copY)` across a rigid body supported by tensile tips `(x, y, contactDiameterMm)`.
+ *
+ * Solves 3-DOF rigid-body vertical/tilt equilibrium `w(x, y) = w0 + α·dx + β·dy` weighted by
+ * tip axial stiffness `k_i = d_i²`, with an active-set loop dropping any tip that goes into
+ * compression (`f_i < 0`) so only pulling tips carry tensile peel load.
+ */
+export function distributeRigidBodyPeelLoads(
+    tips: ReadonlyArray<{ x: number; y: number; contactDiameterMm: number }>,
+    totalForceN: number,
+    copX: number,
+    copY: number,
+): Float64Array {
+    const n = tips.length;
+    const loads = new Float64Array(n);
+    if (n === 0 || totalForceN <= 0) return loads;
+
+    const stiffness = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+        stiffness[i] = Math.max(0.04, tips[i].contactDiameterMm ** 2);
+    }
+
+    if (n === 1) {
+        loads[0] = totalForceN;
+        return loads;
+    }
+
+    const active = new Uint8Array(n);
+    active.fill(1);
+
+    for (let pass = 0; pass < 4; pass++) {
+        let sK = 0, sKx = 0, sKy = 0, sKxx = 0, sKxy = 0, sKyy = 0;
+        let activeCount = 0;
+        for (let i = 0; i < n; i++) {
+            if (!active[i]) continue;
+            activeCount++;
+            const k = stiffness[i];
+            const dx = tips[i].x - copX;
+            const dy = tips[i].y - copY;
+            sK += k;
+            sKx += k * dx;
+            sKy += k * dy;
+            sKxx += k * dx * dx;
+            sKxy += k * dx * dy;
+            sKyy += k * dy * dy;
+        }
+        if (activeCount === 0 || sK <= 0) break;
+
+        // Small Tikhonov regularization handles single-point or collinear tip groups safely.
+        const reg = 1e-4 * Math.max(1e-6, (sK + sKxx + sKyy) / 3);
+        const a00 = sK, a01 = sKx, a02 = sKy;
+        const a11 = sKxx + reg, a12 = sKxy;
+        const a22 = sKyy + reg;
+
+        // Solve 3x3 symmetric system [A]{w0, alpha, beta} = [totalForceN, 0, 0] via Gaussian elimination.
+        const M = [
+            [a00, a01, a02, totalForceN],
+            [a01, a11, a12, 0],
+            [a02, a12, a22, 0],
+        ];
+        for (let col = 0; col < 3; col++) {
+            let piv = col;
+            for (let row = col + 1; row < 3; row++) {
+                if (Math.abs(M[row][col]) > Math.abs(M[piv][col])) piv = row;
+            }
+            if (piv !== col) {
+                const tmp = M[col];
+                M[col] = M[piv];
+                M[piv] = tmp;
+            }
+            const diag = Math.abs(M[col][col]) > 1e-12 ? M[col][col] : 1e-12;
+            for (let row = col + 1; row < 3; row++) {
+                const f = M[row][col] / diag;
+                for (let c = col; c < 4; c++) M[row][c] -= f * M[col][c];
+            }
+        }
+        const beta = M[2][3] / (Math.abs(M[2][2]) > 1e-12 ? M[2][2] : 1e-12);
+        const alpha = (M[1][3] - M[1][2] * beta) / (Math.abs(M[1][1]) > 1e-12 ? M[1][1] : 1e-12);
+        const w0 = (M[0][3] - M[0][1] * alpha - M[0][2] * beta) / (Math.abs(M[0][0]) > 1e-12 ? M[0][0] : 1e-12);
+
+        let anyNegative = false;
+        let remainingActive = 0;
+        for (let i = 0; i < n; i++) {
+            if (!active[i]) {
+                loads[i] = 0;
+                continue;
+            }
+            const dx = tips[i].x - copX;
+            const dy = tips[i].y - copY;
+            const fi = stiffness[i] * (w0 + alpha * dx + beta * dy);
+            if (fi < 0) {
+                active[i] = 0;
+                loads[i] = 0;
+                anyNegative = true;
+            } else {
+                loads[i] = fi;
+                remainingActive++;
+            }
+        }
+        if (!anyNegative || remainingActive === 0) break;
+    }
+
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+        if (loads[i] > 0) sum += loads[i];
+        else loads[i] = 0;
+    }
+    if (sum > 1e-12) {
+        const scale = totalForceN / sum;
+        for (let i = 0; i < n; i++) loads[i] *= scale;
+    } else {
+        // Fallback: stiffness-proportional split if degenerate geometry forced all inactive.
+        let sK = 0;
+        for (let i = 0; i < n; i++) sK += stiffness[i];
+        for (let i = 0; i < n; i++) loads[i] = totalForceN * (stiffness[i] / sK);
+    }
+
+    return loads;
+}
+
+export interface DragTip {
+    x: number;
+    y: number;
+    contactDiameterMm: number;
+}
+
+/**
+ * Connected solid components of a representative layer's Stefan mask, labelled
+ * by plan cell (4-neighbour BFS). A tip takes the label of its own cell, or of
+ * the nearest solid cell within four cells; `-1` means it is outside the
+ * cross-section and stands alone.
+ */
+function maskComponentLabels(
+    field: StefanPressureField,
+    tips: ReadonlyArray<DragTip>,
+): Int32Array {
+    const nx = field.nx;
+    const ny = field.ny;
+    const cellLabel = new Int32Array(nx * ny).fill(-1);
+    let nextLabel = 0;
+    const stack: number[] = [];
+    for (let start = 0; start < cellLabel.length; start++) {
+        if (field.pressure[start] <= 0 || cellLabel[start] !== -1) continue;
+        const label = nextLabel++;
+        cellLabel[start] = label;
+        stack.push(start);
+        while (stack.length > 0) {
+            const current = stack.pop()!;
+            const cx = current % nx;
+            const cy = (current / nx) | 0;
+            for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+                const nxCell = cx + dx;
+                const nyCell = cy + dy;
+                if (nxCell < 0 || nxCell >= nx || nyCell < 0 || nyCell >= ny) continue;
+                const neighbour = nyCell * nx + nxCell;
+                if (field.pressure[neighbour] <= 0 || cellLabel[neighbour] !== -1) continue;
+                cellLabel[neighbour] = label;
+                stack.push(neighbour);
+            }
+        }
+    }
+
+    const labels = new Int32Array(tips.length).fill(-1);
+    const searchRing = 4;
+    for (let index = 0; index < tips.length; index++) {
+        const column = Math.floor((tips[index].x - field.minX) / field.cellMm);
+        const row = Math.floor((tips[index].y - field.minY) / field.cellMm);
+        let found = -1;
+        for (let ring = 0; ring <= searchRing && found < 0; ring++) {
+            for (let dy = -ring; dy <= ring && found < 0; dy++) {
+                for (let dx = -ring; dx <= ring; dx++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+                    const cellX = column + dx;
+                    const cellY = row + dy;
+                    if (cellX < 0 || cellX >= nx || cellY < 0 || cellY >= ny) continue;
+                    const cell = cellY * nx + cellX;
+                    if (field.pressure[cell] > 0) {
+                        found = cellLabel[cell];
+                        break;
+                    }
+                }
+            }
+        }
+        labels[index] = found;
+    }
+    return labels;
+}
+
+/**
+ * Rigid-diaphragm lateral drag: the cured layer above the tips is one body, so
+ * the peel's lateral component is distributed by the same 3-DOF rigid-body
+ * equilibrium the vertical load uses (two in-plane translations plus rotation,
+ * tip stiffness `d²`) instead of proportionally to each tip's own vertical
+ * share. That is what moves lateral demand from a thin leaf tip into a stiffer
+ * trunk tip under the same cross-section.
+ *
+ * Tips are grouped by the cross-section component that carries them: a tip in
+ * another disconnected island of the same layer cannot transfer shear through
+ * material that is not there, so each component carries its own vertical share
+ * of the drag. `componentLabels` may be null for a single group; `-1` isolates
+ * one tip.
+ */
+export function distributeRigidBodyDragLoads(
+    tips: ReadonlyArray<DragTip>,
+    verticalLoadsN: ArrayLike<number>,
+    componentLabels: ArrayLike<number> | null,
+    dragRatio: number,
+    dirX: number,
+    dirY: number,
+): { fx: Float64Array; fy: Float64Array } {
+    const n = tips.length;
+    const fx = new Float64Array(n);
+    const fy = new Float64Array(n);
+    if (n === 0 || dragRatio <= 0) return { fx, fy };
+
+    const groups = new Map<number, number[]>();
+    for (let index = 0; index < n; index++) {
+        const rawLabel = componentLabels ? componentLabels[index] : 0;
+        const key = rawLabel >= 0 ? rawLabel : -2 - index;
+        const group = groups.get(key);
+        if (group) group.push(index);
+        else groups.set(key, [index]);
+    }
+
+    for (const group of groups.values()) {
+        let totalVerticalN = 0;
+        let sumX = 0;
+        let sumY = 0;
+        for (const index of group) {
+            const fz = Math.max(0, verticalLoadsN[index]);
+            totalVerticalN += fz;
+            sumX += fz * tips[index].x;
+            sumY += fz * tips[index].y;
+        }
+        if (totalVerticalN <= 1e-12) continue;
+        const totalDragN = totalVerticalN * dragRatio;
+        const copX = sumX / totalVerticalN;
+        const copY = sumY / totalVerticalN;
+
+        let stiffnessSum = 0;
+        let kx = 0;
+        let ky = 0;
+        let kRadiusSq = 0;
+        for (const index of group) {
+            const tip = tips[index];
+            const stiffness = Math.max(0.04, tip.contactDiameterMm ** 2);
+            stiffnessSum += stiffness;
+            kx += stiffness * tip.x;
+            ky += stiffness * tip.y;
+            kRadiusSq += stiffness * (tip.x * tip.x + tip.y * tip.y);
+        }
+        if (stiffnessSum <= 1e-12) continue;
+
+        const regularization = 1e-4 * Math.max(1e-6, (stiffnessSum + kRadiusSq) / 3);
+        const matrix = [
+            [stiffnessSum, 0, -ky, totalDragN * dirX],
+            [0, stiffnessSum, kx, totalDragN * dirY],
+            [-ky, kx, kRadiusSq + regularization, totalDragN * (copX * dirY - copY * dirX)],
+        ];
+        for (let column = 0; column < 3; column++) {
+            let pivot = column;
+            for (let row = column + 1; row < 3; row++) {
+                if (Math.abs(matrix[row][column]) > Math.abs(matrix[pivot][column])) pivot = row;
+            }
+            if (pivot !== column) {
+                const swap = matrix[column];
+                matrix[column] = matrix[pivot];
+                matrix[pivot] = swap;
+            }
+            const diagonal = Math.abs(matrix[column][column]) > 1e-12 ? matrix[column][column] : 1e-12;
+            for (let row = column + 1; row < 3; row++) {
+                const factor = matrix[row][column] / diagonal;
+                for (let entry = 0; entry < 4; entry++) matrix[row][entry] -= factor * matrix[column][entry];
+            }
+        }
+        const omega = matrix[2][3] / (Math.abs(matrix[2][2]) > 1e-12 ? matrix[2][2] : 1e-12);
+        const translateY = (matrix[1][3] - matrix[1][2] * omega)
+            / (Math.abs(matrix[1][1]) > 1e-12 ? matrix[1][1] : 1e-12);
+        const translateX = (matrix[0][3] - matrix[0][1] * translateY - matrix[0][2] * omega)
+            / (Math.abs(matrix[0][0]) > 1e-12 ? matrix[0][0] : 1e-12);
+
+        for (const index of group) {
+            const tip = tips[index];
+            const stiffness = Math.max(0.04, tip.contactDiameterMm ** 2);
+            fx[index] = stiffness * (translateX - omega * tip.y);
+            fy[index] = stiffness * (translateY + omega * tip.x);
+        }
+    }
+    return { fx, fy };
+}
+
+/**
+ * Biaxial contact check for a green support tip: the peel pulls the contact
+ * normal to its face while the layer's lateral drag shears it, and a thin green
+ * section fails on the combination. Uses the conservative von Mises form
+ * `σ_eq = √(σ_n² + 3τ²)` against the same support break strength the vertical
+ * check alone used; pure peel reproduces the old utilization exactly, pure
+ * shear counts √3×. The FEP interface's tensile/shear asymmetry is not measured
+ * yet, so this is deliberately isotropic and conservative.
+ */
+export function biaxialContactStressMpa(
+    normalLoadN: number,
+    lateralLoadN: number,
+    contactDiameterMm: number,
+): number {
+    const diameterMm = Math.max(0.1, contactDiameterMm);
+    const areaMm2 = Math.PI * 0.25 * diameterMm * diameterMm;
+    const normalStressMpa = Math.max(0, normalLoadN) / Math.max(1e-4, areaMm2);
+    const shearStressMpa = Math.abs(lateralLoadN) / Math.max(1e-4, areaMm2);
+    return Math.hypot(normalStressMpa, Math.sqrt(3) * shearStressMpa);
+}
+
+/** Invert a 6x6 matrix (returns zero matrix fallback if nearly singular). */
+function invert6x6(block: Float64Array, offset: number, out: Float64Array, outOffset: number): void {
+    const aug = new Float64Array(6 * 12);
+    for (let r = 0; r < 6; r++) {
+        for (let c = 0; c < 6; c++) {
+            aug[r * 12 + c] = block[offset + r * 6 + c];
+        }
+        aug[r * 12 + 6 + r] = 1.0;
+    }
+    for (let col = 0; col < 6; col++) {
+        let piv = col;
+        let maxVal = Math.abs(aug[col * 12 + col]);
+        for (let row = col + 1; row < 6; row++) {
+            const v = Math.abs(aug[row * 12 + col]);
+            if (v > maxVal) {
+                maxVal = v;
+                piv = row;
+            }
+        }
+        if (piv !== col) {
+            for (let c = 0; c < 12; c++) {
+                const tmp = aug[col * 12 + c];
+                aug[col * 12 + c] = aug[piv * 12 + c];
+                aug[piv * 12 + c] = tmp;
+            }
+        }
+        const diag = aug[col * 12 + col];
+        if (Math.abs(diag) < 1e-12) {
+            for (let r = 0; r < 6; r++) out[outOffset + r * 6 + r] = 1.0;
+            return;
+        }
+        const invD = 1.0 / diag;
+        for (let c = 0; c < 12; c++) aug[col * 12 + c] *= invD;
+        for (let row = 0; row < 6; row++) {
+            if (row === col) continue;
+            const factor = aug[row * 12 + col];
+            if (factor === 0) continue;
+            for (let c = 0; c < 12; c++) aug[row * 12 + c] -= factor * aug[col * 12 + c];
+        }
+    }
+    for (let r = 0; r < 6; r++) {
+        for (let c = 0; c < 6; c++) {
+            out[outOffset + r * 6 + c] = aug[r * 12 + 6 + c];
+        }
+    }
+}
+
+interface ElementBasisAndLocalK {
+    memberIdx: number;
+    nodeA: number;
+    nodeB: number;
+    /** 3x3 orthogonal rotation whose rows are local e1 (axial), e2, e3. */
+    r00: number; r01: number; r02: number;
+    r10: number; r11: number; r12: number;
+    r20: number; r21: number; r22: number;
+    kLoc: Float64Array; // 12x12 local stiffness
+    areaMm2: number;
+    radiusMm: number;
+    inertiaMm4: number;
+    bucklingCritN: number;
+}
+
+function buildElementStiffness(graph: SupportGraph, memberIdx: number): ElementBasisAndLocalK {
+    const m = graph.members[memberIdx];
+    const a = graph.nodes[m.nodeA].pos;
+    const b = graph.nodes[m.nodeB].pos;
+    const L = Math.max(1e-3, m.lengthMm);
+    const e1x = (b.x - a.x) / L;
+    const e1y = (b.y - a.y) / L;
+    const e1z = (b.z - a.z) / L;
+
+    // Right-handed local basis (e1, e2, e3).
+    const refX = Math.abs(e1z) < 0.9 ? 0 : 1;
+    const refY = 0;
+    const refZ = Math.abs(e1z) < 0.9 ? 1 : 0;
+    // e2 = normalize(ref x e1)
+    let e2x = refY * e1z - refZ * e1y;
+    let e2y = refZ * e1x - refX * e1z;
+    let e2z = refX * e1y - refY * e1x;
+    const e2Len = Math.max(1e-12, Math.hypot(e2x, e2y, e2z));
+    e2x /= e2Len; e2y /= e2Len; e2z /= e2Len;
+    // e3 = e1 x e2
+    const e3x = e1y * e2z - e1z * e2y;
+    const e3y = e1z * e2x - e1x * e2z;
+    const e3z = e1x * e2y - e1y * e2x;
+
+    const d = m.diameterMm;
+    const radiusMm = 0.5 * d;
+    const areaMm2 = Math.PI * radiusMm * radiusMm;
+    const inertiaMm4 = (Math.PI * (d ** 4)) / 64;
+    const polarJ = 2 * inertiaMm4;
+    const E = GREEN_RESIN_MODULUS_MPA;
+    const G = E / (2 * (1 + GREEN_RESIN_POISSON));
+
+    const kAx = (E * areaMm2) / L;
+    const kTor = (G * polarJ) / L;
+    const L2 = L * L;
+    const L3 = L2 * L;
+    const EI_12 = (12 * E * inertiaMm4) / L3;
+    const EI_6 = (6 * E * inertiaMm4) / L2;
+    const EI_4 = (4 * E * inertiaMm4) / L;
+    const EI_2 = (2 * E * inertiaMm4) / L;
+
+    // 12x12 local Euler-Bernoulli frame stiffness: [ux, uy, uz, rx, ry, rz] x 2.
+    // Note signs for (uz, ry) plane via diag(1, -1, 1, -1) since ry = -dw/dx.
+    const kLoc = new Float64Array(144);
+    const setSym = (i: number, j: number, v: number) => {
+        kLoc[i * 12 + j] = v;
+        kLoc[j * 12 + i] = v;
+    };
+    // Axial (ux: 0, 6)
+    setSym(0, 0, kAx); setSym(0, 6, -kAx); setSym(6, 6, kAx);
+    // Torsion (rx: 3, 9)
+    setSym(3, 3, kTor); setSym(3, 9, -kTor); setSym(9, 9, kTor);
+    // Bending in (e1, e2) plane (uy: 1, rz: 5, uyB: 7, rzB: 11)
+    setSym(1, 1, EI_12); setSym(1, 5, EI_6); setSym(1, 7, -EI_12); setSym(1, 11, EI_6);
+    setSym(5, 5, EI_4); setSym(5, 7, -EI_6); setSym(5, 11, EI_2);
+    setSym(7, 7, EI_12); setSym(7, 11, -EI_6);
+    setSym(11, 11, EI_4);
+    // Bending in (e1, e3) plane (uz: 2, ry: 4, uzB: 8, ryB: 10)
+    setSym(2, 2, EI_12); setSym(2, 4, -EI_6); setSym(2, 8, -EI_12); setSym(2, 10, -EI_6);
+    setSym(4, 4, EI_4); setSym(4, 8, EI_6); setSym(4, 10, EI_2);
+    setSym(8, 8, EI_12); setSym(8, 10, EI_6);
+    setSym(10, 10, EI_4);
+
+    // A support is a strut fixed into the root disk and cured into the part at
+    // its contact, so Euler's effective length is 0.5L (fixed-fixed). The former
+    // 1.1L assumed pinned-pinned plus an imperfection: on a hand-supported print
+    // that prints, it reported 301 % buckling on a 1.1 mm × 20 mm trunk carrying
+    // a load the column actually holds. Bending/axial stress is still checked
+    // separately; this constant only sets the column-stability ratio.
+    const bucklingEffectiveLengthMm = 0.5 * L;
+    const bucklingCritN = (Math.PI * Math.PI * E * inertiaMm4) / (bucklingEffectiveLengthMm ** 2);
+
+    return {
+        memberIdx,
+        nodeA: m.nodeA,
+        nodeB: m.nodeB,
+        r00: e1x, r01: e1y, r02: e1z,
+        r10: e2x, r11: e2y, r12: e2z,
+        r20: e3x, r21: e3y, r22: e3z,
+        kLoc,
+        areaMm2,
+        radiusMm,
+        inertiaMm4,
+        bucklingCritN,
+    };
+}
+
+/** Rotate 3-vector or 12-vector in-place via element's orthogonal basis R. */
+function globalToLocal12(el: ElementBasisAndLocalK, uGlob: Float64Array, outLoc: Float64Array): void {
+    for (let block = 0; block < 4; block++) {
+        const o = block * 3;
+        const gx = uGlob[o], gy = uGlob[o + 1], gz = uGlob[o + 2];
+        outLoc[o] = el.r00 * gx + el.r01 * gy + el.r02 * gz;
+        outLoc[o + 1] = el.r10 * gx + el.r11 * gy + el.r12 * gz;
+        outLoc[o + 2] = el.r20 * gx + el.r21 * gy + el.r22 * gz;
+    }
+}
+
+/**
+ * Layer-scale Stefan traction factor, the same compression placement uses
+ * (`stefanTractionFactorAt`): `0.50 + 0.50·(p̄/p̄_ref)^0.22`, clamped to
+ * [0.65, 1.55], plus the area-jump surcharge.
+ *
+ * Without this the frame solver multiplied the nominal peel pressure by the raw
+ * saturation ratio. A 600 mm² cross-section's mean p̃ is ~25–38× the 10 mm²
+ * reference disc's, so a broad layer read 226 N instead of ~14 N — 40 MPa leaf
+ * stress from a support the placement model itself calls 1.5× loaded. A 10 mm²
+ * reference disc is untouched (ratio 1 → factor 1 → 0.29 N).
+ */
+function stefanLayerForceFactor(
+    field: { integratedForceMm4: number; maskAreaMm2: number },
+    fallbackAreaMm2: number,
+    areaJumpRatio: number,
+): number {
+    const pRef = Math.max(1e-4, referenceStefanMeanPressureMm2(10.0));
+    const areaMm2 = Math.max(0.05, field.maskAreaMm2 > 0 ? field.maskAreaMm2 : fallbackAreaMm2);
+    const meanRatio = (field.integratedForceMm4 / pRef) / areaMm2;
+    let factor = 0.50 + 0.50 * Math.pow(Math.max(0, meanRatio), 0.22);
+    if (areaJumpRatio > 1.35) factor += Math.min(0.15, (areaJumpRatio - 1.35) * 0.20);
+    return Math.max(0.65, Math.min(1.55, factor));
+}
+
+export function computeLayerPeelForceAndCop(
+    layer: RepresentativeLayer,
+    fallbackAreaMm2: number,
+): { forceN: number; copX: number; copY: number } {
+    const field = layer.stefanField;
+    if (!field || field.maskAreaMm2 <= 0) {
+        return {
+            forceN: Math.max(0.01, layer.areaMm2 || fallbackAreaMm2) * NOMINAL_PEEL_PRESSURE_MPA,
+            copX: 0,
+            copY: 0,
+        };
+    }
+
+    const cellArea = field.cellMm * field.cellMm;
+    let totalW = 0;
+    let sumX = 0;
+    let sumY = 0;
+    let solidCount = 0;
+    let sumXS = 0;
+    let sumYS = 0;
+
+    for (let j = 0; j < field.ny; j++) {
+        const y = field.minY + (j + 0.5) * field.cellMm;
+        const row = j * field.nx;
+        for (let i = 0; i < field.nx; i++) {
+            const p = field.pressure[row + i];
+            if (p <= 0) continue;
+            const x = field.minX + (i + 0.5) * field.cellMm;
+            solidCount++;
+            sumXS += x;
+            sumYS += y;
+            totalW += p * cellArea;
+            sumX += x * p * cellArea;
+            sumY += y * p * cellArea;
+        }
+    }
+
+    const factor = stefanLayerForceFactor(field, layer.areaMm2, layer.areaJumpRatio);
+    const forceN = Math.max(
+        0.01,
+        Math.max(0.05, field.maskAreaMm2 > 0 ? field.maskAreaMm2 : layer.areaMm2) * factor * NOMINAL_PEEL_PRESSURE_MPA,
+    );
+    if (totalW > 1e-9) {
+        return { forceN, copX: sumX / totalW, copY: sumY / totalW };
+    }
+    if (solidCount > 0) {
+        return { forceN, copX: sumXS / solidCount, copY: sumYS / solidCount };
+    }
+    return { forceN, copX: 0, copY: 0 };
+}
+
+export interface PeelLayerSample {
+    zMm: number;
+    areaMm2: number;
+    forceN: number;
+    copX: number;
+    copY: number;
+}
+
+/**
+ * Peel force at every sampled layer, not only the ones with a solved field.
+ *
+ * The field-derived traction factor (`stefanLayerForceFactor`, the same
+ * compressed 0.65–1.55 curve placement uses) is anchored at the representative
+ * layers and interpolated across the layers between them, then multiplied by
+ * each layer's own area. The alternative — field force at representative
+ * layers, nominal pressure elsewhere — makes every cluster peak a spike on the
+ * peel graph, because a broad cross-section's saturated suction compresses to a
+ * different factor than its neighbours' nominal 1.0.
+ *
+ * At a representative layer the result equals `computeLayerPeelForceAndCop`
+ * exactly (the ratio is computed from that same integral), so the critical-layer
+ * solve is unaffected; only the layers in between move onto the same scale.
+ */
+export function computePeelLayerSamples(
+    samples: ReadonlyArray<{ zMm: number; areaMm2: number }>,
+    layers: readonly RepresentativeLayer[],
+    fallbackAreaMm2: number,
+): PeelLayerSample[] {
+    const anchors = layers
+        .filter((layer) => layer.areaMm2 > 0)
+        .map((layer) => ({
+            zMm: layer.zMm,
+            ratio: layer.stefanField && layer.stefanField.integratedForceMm4 > 0
+                ? stefanLayerForceFactor(layer.stefanField, layer.areaMm2, layer.areaJumpRatio)
+                : 1,
+        }))
+        .sort((a, b) => a.zMm - b.zMm);
+    const representativeByZ = new Map<number, RepresentativeLayer>();
+    for (const layer of layers) representativeByZ.set(Math.round(layer.zMm * 1000), layer);
+
+    const out: PeelLayerSample[] = [];
+    let anchorIndex = 0;
+    for (const sample of samples) {
+        while (anchorIndex + 1 < anchors.length && anchors[anchorIndex + 1].zMm <= sample.zMm) anchorIndex++;
+        let ratio = 1;
+        if (anchors.length > 0) {
+            const before = anchors[anchorIndex];
+            const after = anchors[Math.min(anchors.length - 1, anchorIndex + 1)];
+            if (sample.zMm <= before.zMm || anchors.length === 1 || after.zMm <= before.zMm) {
+                ratio = before.ratio;
+            } else if (sample.zMm >= after.zMm) {
+                ratio = after.ratio;
+            } else {
+                const t = (sample.zMm - before.zMm) / (after.zMm - before.zMm);
+                ratio = before.ratio + (after.ratio - before.ratio) * t;
+            }
+        }
+        const representative = representativeByZ.get(Math.round(sample.zMm * 1000));
+        const cop = representative
+            ? computeLayerPeelForceAndCop(representative, fallbackAreaMm2)
+            : { copX: 0, copY: 0 };
+        out.push({
+            zMm: sample.zMm,
+            areaMm2: sample.areaMm2,
+            forceN: Math.max(0.01, sample.areaMm2 * ratio) * NOMINAL_PEEL_PRESSURE_MPA,
+            copX: cop.copX,
+            copY: cop.copY,
+        });
+    }
+    return out;
+}
+
+/**
+ * Connected support sub-assemblies, each with at least one tip and grounded
+ * through its own plate roots. Braces merge assemblies, so a limb braced to the
+ * main tower is one component; the split this looks for is a part standing on
+ * its own support tree.
+ */
+function tipComponents(graph: SupportGraph): number[][] {
+    const adjacency: number[][] = Array.from({ length: graph.nodes.length }, () => []);
+    for (const member of graph.members) {
+        adjacency[member.nodeA].push(member.nodeB);
+        adjacency[member.nodeB].push(member.nodeA);
+    }
+    const seen = new Uint8Array(graph.nodes.length);
+    const components: number[][] = [];
+    for (let start = 0; start < graph.nodes.length; start++) {
+        if (seen[start]) continue;
+        const stack = [start];
+        seen[start] = 1;
+        const tips: number[] = [];
+        let grounded = false;
+        while (stack.length > 0) {
+            const ni = stack.pop()!;
+            const node = graph.nodes[ni];
+            if (node.fixed) grounded = true;
+            if (node.kind === 'tip') tips.push(ni);
+            for (const next of adjacency[ni]) {
+                if (!seen[next]) {
+                    seen[next] = 1;
+                    stack.push(next);
+                }
+            }
+        }
+        if (grounded && tips.length > 0) components.push(tips);
+    }
+    return components;
+}
+
+/**
+ * One stage per disconnected sub-assembly at its own peak peel and expansion
+ * layer, for assemblies no global stage reaches. Global selection samples the
+ * model's three worst layers; a short limb hanging on its own support tree can
+ * sit entirely below them, and its tips would then never see a load at all.
+ *
+ * A component already exercised by a chosen global stage is skipped: the global
+ * stage activates its tips, and the extra solve would only re-sample the same
+ * cross-section.
+ */
+function selectComponentStages(
+    graph: SupportGraph,
+    profile: RepresentativeLayerProfile,
+    eligibleIndices: readonly number[],
+    chosenPositions: ReadonlySet<number>,
+): number[] {
+    const stages = new Set<number>();
+    for (const tips of tipComponents(graph)) {
+        let lowestZ = Infinity;
+        let highestZ = -Infinity;
+        for (const ni of tips) {
+            const z = graph.nodes[ni].pos.z;
+            if (z < lowestZ) lowestZ = z;
+            if (z > highestZ) highestZ = z;
+        }
+        let covered = false;
+        for (const pos of chosenPositions) {
+            const zMm = profile.layers[eligibleIndices[pos]].zMm;
+            if (zMm >= lowestZ - 0.5 && zMm <= highestZ + 1.0) {
+                covered = true;
+                break;
+            }
+        }
+        if (covered) continue;
+
+        let bestForcePos = -1;
+        let bestForceScore = -1;
+        let bestJumpPos = -1;
+        let bestJumpScore = -1;
+        for (let pos = 0; pos < eligibleIndices.length; pos++) {
+            const layer = profile.layers[eligibleIndices[pos]];
+            if (layer.zMm < lowestZ - 0.5 || layer.zMm > highestZ + 1.0) continue;
+            const score = layer.stefanField?.integratedForceMm4 ?? layer.areaMm2;
+            if (score > bestForceScore) {
+                bestForceScore = score;
+                bestForcePos = pos;
+            }
+            const jump = layer.areaJumpRatio * layer.areaMm2;
+            if (jump > bestJumpScore) {
+                bestJumpScore = jump;
+                bestJumpPos = pos;
+            }
+        }
+        if (bestForcePos >= 0) stages.add(bestForcePos);
+        if (bestJumpPos >= 0) stages.add(bestJumpPos);
+        if (stages.size >= MAX_COMPONENT_STAGE_LAYERS) break;
+    }
+    return [...stages];
+}
+
+function selectCriticalLayers(
+    graph: SupportGraph,
+    profile: RepresentativeLayerProfile | undefined,
+    areaPerSupportMm2: number,
+    maxCriticalLayers: number,
+): Array<{ zMm: number; areaMm2: number; peelForceN: number; copX: number; copY: number; repIndex: number }> {
+    let minTipZ = Infinity;
+    let maxTipZ = -Infinity;
+    let sumX = 0;
+    let sumY = 0;
+    let tipCnt = 0;
+    for (const node of graph.nodes) {
+        if (node.kind !== 'tip') continue;
+        tipCnt++;
+        if (node.pos.z < minTipZ) minTipZ = node.pos.z;
+        if (node.pos.z > maxTipZ) maxTipZ = node.pos.z;
+        sumX += node.pos.x;
+        sumY += node.pos.y;
+    }
+    if (tipCnt === 0) return [];
+
+    if (!profile || profile.layers.length === 0) {
+        const areaMm2 = tipCnt * areaPerSupportMm2;
+        return [{
+            zMm: maxTipZ,
+            areaMm2,
+            peelForceN: areaMm2 * NOMINAL_PEEL_PRESSURE_MPA,
+            copX: sumX / tipCnt,
+            copY: sumY / tipCnt,
+            repIndex: -1,
+        }];
+    }
+
+    const eligibleIndices: number[] = [];
+    for (let i = 0; i < profile.layers.length; i++) {
+        const l = profile.layers[i];
+        if (l.zMm >= minTipZ - 0.5 && l.areaMm2 > 0.05) eligibleIndices.push(i);
+    }
+    if (eligibleIndices.length === 0) {
+        const lastIdx = profile.layers.length - 1;
+        const last = profile.layers[lastIdx];
+        const peel = computeLayerPeelForceAndCop(last, tipCnt * areaPerSupportMm2);
+        return [{
+            zMm: Math.max(last.zMm, maxTipZ),
+            areaMm2: last.areaMm2,
+            peelForceN: peel.forceN,
+            copX: peel.copX,
+            copY: peel.copY,
+            repIndex: lastIdx,
+        }];
+    }
+
+    const chosenIndices = new Set<number>();
+    // 1. Peak integrated Stefan force (or cross-section area)
+    let bestForcePos = 0;
+    let bestForceScore = -1;
+    for (let pos = 0; pos < eligibleIndices.length; pos++) {
+        const layer = profile.layers[eligibleIndices[pos]];
+        const score = layer.stefanField?.integratedForceMm4 ?? layer.areaMm2;
+        if (score > bestForceScore) {
+            bestForceScore = score;
+            bestForcePos = pos;
+        }
+    }
+    chosenIndices.add(bestForcePos);
+
+    // 2. Peak area-jump expansion shock layer
+    if (chosenIndices.size < maxCriticalLayers) {
+        let bestJumpPos = -1;
+        let bestJumpScore = -1;
+        for (let pos = 0; pos < eligibleIndices.length; pos++) {
+            const layer = profile.layers[eligibleIndices[pos]];
+            const score = layer.areaJumpRatio * layer.areaMm2;
+            if (!chosenIndices.has(pos) && score > bestJumpScore) {
+                bestJumpScore = score;
+                bestJumpPos = pos;
+            }
+        }
+        if (bestJumpPos >= 0) chosenIndices.add(bestJumpPos);
+    }
+
+    // 3. Highest layer below/near the top of supports
+    const lastPos = eligibleIndices.length - 1;
+    if (chosenIndices.size < maxCriticalLayers && !chosenIndices.has(lastPos)) {
+        chosenIndices.add(lastPos);
+    }
+
+    // 4. Disconnected sub-assemblies no global stage reaches get their own peak
+    // peel / expansion layers, bounded so a many-tower forest cannot multiply
+    // the solve count.
+    for (const pos of selectComponentStages(graph, profile, eligibleIndices, chosenIndices)) {
+        if (chosenIndices.size >= maxCriticalLayers + MAX_COMPONENT_STAGE_LAYERS) break;
+        chosenIndices.add(pos);
+    }
+
+    return [...chosenIndices]
+        .sort((a, b) => a - b)
+        .map((pos) => {
+            const repIndex = eligibleIndices[pos];
+            const layer = profile.layers[repIndex];
+            const peel = computeLayerPeelForceAndCop(layer, tipCnt * areaPerSupportMm2);
+            return { zMm: layer.zMm, areaMm2: layer.areaMm2, peelForceN: peel.forceN, copX: peel.copX, copY: peel.copY, repIndex };
+        });
+}
+
+/**
+ * Evaluate rigid-body peel load distribution across support tips AND solve the
+ * full 3D Euler-Bernoulli support+brace frame on critical high-traction layers.
+ *
+ * Uses Block-Jacobi Preconditioned Conjugate Gradient on the assembled 6-DOF
+ * per-node stiffness matrix (fast, zero allocations in the inner loop).
+ */
+/**
+ * The part's rocking along the layer drag axis: the range of the best-fitting
+ * planar rigid-body rotation `p = a + θ·(-nx·y + ny·x)` across the tips.
+ * A leaf bending under its own peel share moves its contact locally, but the
+ * cured part is one rigid layer; only the rigid rotation is the layer shift.
+ * The raw max−min of tip displacements reported ~3 mm on prints that work.
+ */
+export function rigidBodyRockingMm(
+    points: ReadonlyArray<{ pos: { x: number; y: number }; dx: number; dy: number }>,
+): number {
+    if (points.length < 2) return 0;
+    const nx = Math.SQRT1_2;
+    const ny = Math.SQRT1_2;
+    let count = 0;
+    let sumS = 0;
+    let sumP = 0;
+    let sumSS = 0;
+    let sumSP = 0;
+    let minS = Infinity;
+    let maxS = -Infinity;
+    for (const point of points) {
+        const s = -nx * point.pos.y + ny * point.pos.x;
+        const p = point.dx * nx + point.dy * ny;
+        count++;
+        sumS += s;
+        sumP += p;
+        sumSS += s * s;
+        sumSP += s * p;
+        if (s < minS) minS = s;
+        if (s > maxS) maxS = s;
+    }
+    const denom = sumSS - (sumS * sumS) / count;
+    if (denom <= 1e-12) return 0;
+    const theta = (sumSP - (sumS * sumP) / count) / denom;
+    return Math.abs(theta) * (maxS - minS);
+}
+
+export function solveSupportFrameStress(
+    graph: SupportGraph,
+    profile: RepresentativeLayerProfile | undefined,
+    options?: {
+        maxCriticalLayers?: number;
+        areaPerSupportMm2?: number;
+        /** Optional explicit nodal force override `(fx, fy, fz, mx, my, mz)` per node index for analytical benchmarks. */
+        explicitNodalLoads?: Map<number, readonly [number, number, number, number, number, number]>;
+        /** Support break strength (MPa) for the tip contact, not the resin's
+         *  datasheet tensile: use `supportBreakStrengthMpa` on a profile value.
+         *  Defaults to the measured standard-resin contact break strength. */
+        supportStrengthMpa?: number;
+        /** Bulk green strength (MPa) for member bending/axial stress. A member's
+         *  section is not the 0.5 × 0.5 mm contact coupon the support break
+         *  strength is measured on: a 2.2 mm trunk at the same 4.8 MPa would be
+         *  called broken while its datasheet tensile is 24 MPa. Defaults to
+         *  `supportStrengthMpa` for callers that have only one strength. */
+        memberStrengthMpa?: number;
+        /** Model-on-plate adhesion contacts: the bearing hull points and the
+         *  area each represents. They share the rigid-body peel equilibrium
+         *  with the support tips; their loads stay with the plate, not the
+         *  frame. Stefan adhesion is the same film model, so the contact area is
+         *  the adhesion area. */
+        plateContacts?: ReadonlyArray<{ x: number; y: number; areaMm2: number }>;
+        /** Report contact-cone stress along the real taper. The action loop
+         *  keeps the effective cone member; no support action can change the
+         *  printed cone section, so the tapered value is diagnostic. */
+        taperedConeStress?: boolean;
+    },
+): SupportFrameStressReport {
+    const maxCriticalLayers = Math.max(1, options?.maxCriticalLayers ?? 3);
+    const areaPerSupportMm2 = Math.max(1.0, options?.areaPerSupportMm2 ?? 10.0);
+    const supportStrengthMpa = Math.max(0.01, options?.supportStrengthMpa ?? DEFAULT_SUPPORT_BREAK_STRENGTH_MPA);
+    const memberStrengthMpa = Math.max(0.01, options?.memberStrengthMpa ?? supportStrengthMpa);
+    const taperedConeStress = options?.taperedConeStress === true;
+    const plateContacts = (options?.plateContacts ?? []).filter((contact) => contact.areaMm2 > 0);
+    const plateAreaMm2 = plateContacts.reduce((sum, contact) => sum + contact.areaMm2, 0);
+
+    // Reachability BFS from all fixed root nodes so the frame stiffness matrix is strictly SPD.
+    const nodeAdj: number[][] = Array.from({ length: graph.nodes.length }, () => []);
+    for (let mi = 0; mi < graph.members.length; mi++) {
+        const m = graph.members[mi];
+        nodeAdj[m.nodeA].push(m.nodeB);
+        nodeAdj[m.nodeB].push(m.nodeA);
+    }
+    const grounded = new Uint8Array(graph.nodes.length);
+    const bfsQueue: number[] = [];
+    for (let ni = 0; ni < graph.nodes.length; ni++) {
+        if (graph.nodes[ni].fixed) {
+            grounded[ni] = 1;
+            bfsQueue.push(ni);
+        }
+    }
+    for (let head = 0; head < bfsQueue.length; head++) {
+        const cur = bfsQueue[head];
+        for (const nxt of nodeAdj[cur]) {
+            if (!grounded[nxt]) {
+                grounded[nxt] = 1;
+                bfsQueue.push(nxt);
+            }
+        }
+    }
+
+    const freeMap = new Int32Array(graph.nodes.length).fill(-1);
+    let freeNodeCount = 0;
+    for (let ni = 0; ni < graph.nodes.length; ni++) {
+        if (grounded[ni] && !graph.nodes[ni].fixed) {
+            freeMap[ni] = freeNodeCount++;
+        }
+    }
+
+    const solverMode: 'frame3d' | 'rigidBodyOnly' =
+        freeNodeCount > 0 && freeNodeCount <= MAX_FRAME_SOLVE_FREE_NODES
+            ? 'frame3d'
+            : 'rigidBodyOnly';
+
+    // Precompute element stiffness + global-diagonal 6x6 block preconditioner once across all layers.
+    let elements: ElementBasisAndLocalK[] = [];
+    let invDiagBlocks = new Float64Array(0);
+    if (solverMode === 'frame3d') {
+        elements = [];
+        for (let mi = 0; mi < graph.members.length; mi++) {
+            const m = graph.members[mi];
+            if (!grounded[m.nodeA] || !grounded[m.nodeB]) continue;
+            elements.push(buildElementStiffness(graph, mi));
+        }
+
+        const diagBlocks = new Float64Array(freeNodeCount * 36);
+        const uGlob12 = new Float64Array(12);
+        const uLoc12 = new Float64Array(12);
+        const fLoc12 = new Float64Array(12);
+        const fGlob12 = new Float64Array(12);
+
+        // Build exact 6x6 diagonal block for each free node directly from element transforms: R^T k_AA R.
+        for (const el of elements) {
+            const fA = freeMap[el.nodeA];
+            const fB = freeMap[el.nodeB];
+            for (const [isNodeA, fIdx] of [[true, fA], [false, fB]] as const) {
+                if (fIdx < 0) continue;
+                const dOff = fIdx * 36;
+                const localOff = isNodeA ? 0 : 6;
+                for (let col = 0; col < 6; col++) {
+                    uGlob12.fill(0);
+                    uGlob12[localOff + col] = 1.0;
+                    globalToLocal12(el, uGlob12, uLoc12);
+                    for (let r = 0; r < 6; r++) {
+                        let s = 0;
+                        const rowBase = (localOff + r) * 12;
+                        for (let k = 0; k < 12; k++) s += el.kLoc[rowBase + k] * uLoc12[k];
+                        fLoc12[localOff + r] = s;
+                    }
+                    // R^T * fLoc slice (orthogonal transpose for translational + rotational triplets)
+                    for (let blk = 0; blk < 2; blk++) {
+                        const o = localOff + blk * 3;
+                        const lx = fLoc12[o], ly = fLoc12[o + 1], lz = fLoc12[o + 2];
+                        fGlob12[o] = el.r00 * lx + el.r10 * ly + el.r20 * lz;
+                        fGlob12[o + 1] = el.r01 * lx + el.r11 * ly + el.r21 * lz;
+                        fGlob12[o + 2] = el.r02 * lx + el.r12 * ly + el.r22 * lz;
+                    }
+                    for (let r = 0; r < 6; r++) {
+                        diagBlocks[dOff + r * 6 + col] += fGlob12[localOff + r];
+                    }
+                }
+            }
+        }
+        invDiagBlocks = new Float64Array(freeNodeCount * 36);
+        for (let fIdx = 0; fIdx < freeNodeCount; fIdx++) {
+            invert6x6(diagBlocks, fIdx * 36, invDiagBlocks, fIdx * 36);
+        }
+    }
+
+    const dofCount = freeNodeCount * 6;
+    const rhs = new Float64Array(dofCount);
+    const u = new Float64Array(dofCount);
+    const r = new Float64Array(dofCount);
+    const zVec = new Float64Array(dofCount);
+    const pVec = new Float64Array(dofCount);
+    const apVec = new Float64Array(dofCount);
+    const uElemGlob = new Float64Array(12);
+    const uElemLoc = new Float64Array(12);
+    const fElemLoc = new Float64Array(12);
+    const fElemGlob = new Float64Array(12);
+
+    const applyK = (vec: Float64Array, out: Float64Array) => {
+        out.fill(0);
+        for (const el of elements) {
+            const fA = freeMap[el.nodeA];
+            const fB = freeMap[el.nodeB];
+            if (fA >= 0) {
+                const base = fA * 6;
+                for (let k = 0; k < 6; k++) uElemGlob[k] = vec[base + k];
+            } else {
+                for (let k = 0; k < 6; k++) uElemGlob[k] = 0;
+            }
+            if (fB >= 0) {
+                const base = fB * 6;
+                for (let k = 0; k < 6; k++) uElemGlob[6 + k] = vec[base + k];
+            } else {
+                for (let k = 0; k < 6; k++) uElemGlob[6 + k] = 0;
+            }
+
+            globalToLocal12(el, uElemGlob, uElemLoc);
+            for (let row = 0; row < 12; row++) {
+                let s = 0;
+                const rowBase = row * 12;
+                for (let k = 0; k < 12; k++) s += el.kLoc[rowBase + k] * uElemLoc[k];
+                fElemLoc[row] = s;
+            }
+            for (let blk = 0; blk < 4; blk++) {
+                const o = blk * 3;
+                const lx = fElemLoc[o], ly = fElemLoc[o + 1], lz = fElemLoc[o + 2];
+                fElemGlob[o] = el.r00 * lx + el.r10 * ly + el.r20 * lz;
+                fElemGlob[o + 1] = el.r01 * lx + el.r11 * ly + el.r21 * lz;
+                fElemGlob[o + 2] = el.r02 * lx + el.r12 * ly + el.r22 * lz;
+            }
+            if (fA >= 0) {
+                const base = fA * 6;
+                for (let k = 0; k < 6; k++) out[base + k] += fElemGlob[k];
+            }
+            if (fB >= 0) {
+                const base = fB * 6;
+                for (let k = 0; k < 6; k++) out[base + k] += fElemGlob[6 + k];
+            }
+        }
+    };
+
+    const applyPrecond = (src: Float64Array, dst: Float64Array) => {
+        for (let fIdx = 0; fIdx < freeNodeCount; fIdx++) {
+            const mOff = fIdx * 36;
+            const vOff = fIdx * 6;
+            for (let row = 0; row < 6; row++) {
+                let s = 0;
+                const rOff = mOff + row * 6;
+                for (let col = 0; col < 6; col++) s += invDiagBlocks[rOff + col] * src[vOff + col];
+                dst[vOff + row] = s;
+            }
+        }
+    };
+
+    const solveCG = () => {
+        u.fill(0);
+        r.set(rhs);
+        let rhsNormSq = 0;
+        for (let i = 0; i < dofCount; i++) rhsNormSq += rhs[i] * rhs[i];
+        if (rhsNormSq <= 1e-20) return;
+
+        applyPrecond(r, zVec);
+        pVec.set(zVec);
+        let rzOld = 0;
+        for (let i = 0; i < dofCount; i++) rzOld += r[i] * zVec[i];
+
+        // 350 iterations is plenty at the old 1200-node ceiling; a 4500-node
+        // frame needs a deeper Krylov space to reach the same residual.
+        const iterCap = freeNodeCount > 1200 ? 500 : 350;
+        const maxIter = Math.min(iterCap, Math.max(80, freeNodeCount * 4));
+        const tolSq = 1e-10 * rhsNormSq;
+
+        for (let iter = 0; iter < maxIter; iter++) {
+            applyK(pVec, apVec);
+            let pAp = 0;
+            for (let i = 0; i < dofCount; i++) pAp += pVec[i] * apVec[i];
+            if (pAp <= 1e-24) break;
+            const alpha = rzOld / pAp;
+            let rNormSq = 0;
+            for (let i = 0; i < dofCount; i++) {
+                u[i] += alpha * pVec[i];
+                r[i] -= alpha * apVec[i];
+                rNormSq += r[i] * r[i];
+            }
+            if (rNormSq <= tolSq) break;
+
+            applyPrecond(r, zVec);
+            let rzNew = 0;
+            for (let i = 0; i < dofCount; i++) rzNew += r[i] * zVec[i];
+            const beta = rzNew / Math.max(1e-24, rzOld);
+            for (let i = 0; i < dofCount; i++) pVec[i] = zVec[i] + beta * pVec[i];
+            rzOld = rzNew;
+        }
+    };
+
+    const tipNodes: number[] = [];
+    for (let ni = 0; ni < graph.nodes.length; ni++) {
+        if (graph.nodes[ni].kind === 'tip') tipNodes.push(ni);
+    }
+
+    const explicitLoads = options?.explicitNodalLoads;
+    const criticalLayers = explicitLoads
+        ? [{ zMm: 0, areaMm2: 0, peelForceN: 0, copX: 0, copY: 0, repIndex: -1 }]
+        : selectCriticalLayers(graph, profile, areaPerSupportMm2, maxCriticalLayers);
+
+    let peakLayerZMm = 0;
+    let peakLayerPeelForceN = 0;
+    let maxTipUtilizationPct = 0;
+    let maxMemberUtilizationPct = 0;
+    let maxTipDeflectionMm = 0;
+    // Rocking: the range of the fitted rigid-body rotation along the layer's
+    // coherent drag direction. `maxTipDeflectionMm` is an elastic sag (one thin
+    // leaf bending under its own peel share); the part's layer shift is only
+    // the rotation the whole contact set shares, not that local sag.
+    let maxTipRockingMm = 0;
+    let worstRockingPair: SupportFrameStressReport['rockingPair'] | undefined;
+    let worstTipDisplacements: SupportFrameStressReport['tipDisplacements'] | undefined;
+    const overloadedTipIds = new Set<string>();
+    const overloadedMemberIds = new Set<string>();
+    const candidateHotspots: FrameStressHotspot[] = [];
+    const memberMaxUtil = new Float64Array(graph.members.length);
+    const coneCriticalDia = new Map<number, number>();
+    const tipPeakUtil = new Map<number, { utilPct: number; loadN: number }>();
+    const criticalStatsByRepIndex = new Map<number, { maxTipUtilPct: number; maxMemberUtilPct: number }>();
+    const syntheticLayerPoints: LayerPeelPoint[] = [];
+
+    for (const layer of criticalLayers) {
+        if (layer.peelForceN > peakLayerPeelForceN) {
+            peakLayerPeelForceN = layer.peelForceN;
+            peakLayerZMm = layer.zMm;
+        }
+        rhs.fill(0);
+        let layerMaxTipUtilPct = 0;
+        let layerMaxMemberUtilPct = 0;
+
+        if (explicitLoads) {
+            for (const [nodeIdx, f6] of explicitLoads.entries()) {
+                const fIdx = freeMap[nodeIdx];
+                if (fIdx < 0) continue;
+                const base = fIdx * 6;
+                for (let k = 0; k < 6; k++) rhs[base + k] = f6[k];
+            }
+        } else {
+            const activeTips = tipNodes.filter((ni) => graph.nodes[ni].pos.z <= layer.zMm + 0.5);
+            if (activeTips.length === 0) continue;
+
+            const rigidInput = activeTips.map((ni) => ({
+                x: graph.nodes[ni].pos.x,
+                y: graph.nodes[ni].pos.y,
+                contactDiameterMm: graph.nodes[ni].tipContactDiameterMm ?? 0.28,
+            }));
+            // The model sitting on the plate is another contact in the same
+            // rigid-body peel equilibrium. Its area is the Stefan adhesion
+            // area; distributing by contact stiffness keeps the plate's share
+            // out of the support frame. This is not a free rigid anchor: the
+            // same stiffness solve decides how much each contact takes.
+            const plateInput = plateContacts.map((contact) => ({
+                x: contact.x,
+                y: contact.y,
+                contactDiameterMm: 2 * Math.sqrt(contact.areaMm2 / Math.PI),
+            }));
+            const allContacts = [...rigidInput, ...plateInput];
+            const allForces = distributeRigidBodyPeelLoads(allContacts, layer.peelForceN, layer.copX, layer.copY);
+            const tipForces = allForces.slice(0, rigidInput.length);
+            // Plate adhesion is the same Stefan film: its capacity is the mean
+            // layer pressure over the plate footprint. If the stiffness solve
+            // gives the plate more than that, the excess is a real support
+            // load, not a free anchor.
+            if (plateAreaMm2 > 0) {
+                const plateLoadN = allForces.reduce((sum, force, index) => sum + (index >= rigidInput.length ? Math.max(0, force) : 0), 0);
+                const meanPressureNPerMm2 = layer.areaMm2 > 0 ? layer.peelForceN / layer.areaMm2 : 0;
+                const plateCapacityN = plateAreaMm2 * meanPressureNPerMm2;
+                if (plateLoadN > plateCapacityN + 1e-9) {
+                    const excessN = plateLoadN - plateCapacityN;
+                    const supportTotalN = tipForces.reduce((sum, force) => sum + Math.max(0, force), 0);
+                    if (supportTotalN > 1e-12) {
+                        for (let ti = 0; ti < tipForces.length; ti++) {
+                            if (tipForces[ti] > 0) tipForces[ti] += excessN * (tipForces[ti] / supportTotalN);
+                        }
+                    } else if (tipForces.length > 0) {
+                        const share = excessN / tipForces.length;
+                        for (let ti = 0; ti < tipForces.length; ti++) tipForces[ti] += share;
+                    }
+                }
+            }
+            const layerField = layer.repIndex >= 0 ? profile?.layers[layer.repIndex]?.stefanField : undefined;
+            // Plate adhesion is the same Stefan film, so its contacts join the
+            // same rigid body for lateral drag. A model on the plate is one
+            // connected body; the field's component split only makes sense
+            // without that plate anchor.
+            const dragTips = plateInput.length > 0 ? allContacts : rigidInput;
+            const dragVertical = plateInput.length > 0 ? allForces : tipForces;
+            const componentLabels = layerField && plateInput.length === 0 ? maskComponentLabels(layerField, rigidInput) : null;
+            const dragLoads = distributeRigidBodyDragLoads(
+                dragTips,
+                dragVertical,
+                componentLabels,
+                LATERAL_PEEL_DRAG_RATIO,
+                Math.SQRT1_2,
+                Math.SQRT1_2,
+            );
+
+            for (let ti = 0; ti < activeTips.length; ti++) {
+                const ni = activeTips[ti];
+                const node = graph.nodes[ni];
+                const fz = tipForces[ti];
+                const tipDia = node.tipContactDiameterMm ?? 0.28;
+                const lateralN = Math.hypot(dragLoads.fx[ti], dragLoads.fy[ti]);
+                const tipStressMpa = biaxialContactStressMpa(fz, lateralN, tipDia);
+                const tipUtilPct = (100 * tipStressMpa) / supportStrengthMpa;
+
+                if (tipUtilPct > layerMaxTipUtilPct) layerMaxTipUtilPct = tipUtilPct;
+                if (tipUtilPct > maxTipUtilizationPct) maxTipUtilizationPct = tipUtilPct;
+                if (tipUtilPct > 100 && node.entityId) overloadedTipIds.add(node.entityId);
+                const prevTip = tipPeakUtil.get(ni);
+                if (!prevTip || tipUtilPct > prevTip.utilPct) {
+                    tipPeakUtil.set(ni, { utilPct: tipUtilPct, loadN: fz });
+                }
+                if (node.entityId && node.entityKind) {
+                    candidateHotspots.push({
+                        entityId: node.entityId,
+                        entityKind: node.entityKind,
+                        kind: 'tip',
+                        utilizationPct: tipUtilPct,
+                        peakStressMpa: tipStressMpa,
+                        tipLoadN: fz,
+                        layerZMm: layer.zMm,
+                        pos: node.pos,
+                    });
+                }
+
+                const fIdx = freeMap[ni];
+                if (fIdx >= 0 && solverMode === 'frame3d') {
+                    // Rigid-diaphragm lateral drag: the layer's lateral total is
+                    // shared by stiffness within each connected cross-section
+                    // component, so a thin leaf does not absorb the share of the
+                    // stiff trunk beside it (see `distributeRigidBodyDragLoads`).
+                    const base = fIdx * 6;
+                    rhs[base] = dragLoads.fx[ti];
+                    rhs[base + 1] = dragLoads.fy[ti];
+                    rhs[base + 2] = fz;
+                }
+            }
+        }
+
+        if (solverMode === 'frame3d') {
+            solveCG();
+
+            const layerTipDisplacements: NonNullable<SupportFrameStressReport['tipDisplacements']> = [];
+            for (const ni of tipNodes) {
+                const fIdx = freeMap[ni];
+                if (fIdx < 0) continue;
+                const base = fIdx * 6;
+                const dx = u[base];
+                const dy = u[base + 1];
+                const dz = u[base + 2];
+                const defl = Math.hypot(dx, dy, dz);
+                if (defl > maxTipDeflectionMm) maxTipDeflectionMm = defl;
+                const node = graph.nodes[ni];
+                layerTipDisplacements.push({
+                    entityId: node.entityId,
+                    pos: node.pos,
+                    dx,
+                    dy,
+                    dz,
+                });
+            }
+
+            // The part is one cured rigid layer; a support leaf bending under
+            // its own load is compliance, not the part rocking. Fit a planar
+            // rigid-body rotation to the drag-direction projection and take the
+            // fitted range; the raw max−min included each leaf's 1–3 mm sag.
+            const rocking = rigidBodyRockingMm(layerTipDisplacements);
+            if (rocking > maxTipRockingMm) {
+                const nx = Math.SQRT1_2;
+                const ny = Math.SQRT1_2;
+                let minS = Infinity;
+                let maxS = -Infinity;
+                let minD: (typeof layerTipDisplacements)[number] | undefined;
+                let maxD: (typeof layerTipDisplacements)[number] | undefined;
+                for (const d of layerTipDisplacements) {
+                    const s = -nx * d.pos.y + ny * d.pos.x;
+                    if (s < minS) {
+                        minS = s;
+                        minD = d;
+                    }
+                    if (s > maxS) {
+                        maxS = s;
+                        maxD = d;
+                    }
+                }
+                if (minD && maxD) {
+                    maxTipRockingMm = rocking;
+                    worstRockingPair = {
+                        aEntityId: minD.entityId ?? 'tip',
+                        bEntityId: maxD.entityId ?? 'tip',
+                        aPos: minD.pos,
+                        bPos: maxD.pos,
+                        layerZMm: layer.zMm,
+                        differentialMm: rocking,
+                    };
+                    worstTipDisplacements = layerTipDisplacements;
+                }
+            }
+
+            // Recover element internal axial force + peak bending stress + Euler buckling ratio.
+            for (const el of elements) {
+                const fA = freeMap[el.nodeA];
+                const fB = freeMap[el.nodeB];
+                if (fA >= 0) {
+                    const base = fA * 6;
+                    for (let k = 0; k < 6; k++) uElemGlob[k] = u[base + k];
+                } else {
+                    for (let k = 0; k < 6; k++) uElemGlob[k] = 0;
+                }
+                if (fB >= 0) {
+                    const base = fB * 6;
+                    for (let k = 0; k < 6; k++) uElemGlob[6 + k] = u[base + k];
+                } else {
+                    for (let k = 0; k < 6; k++) uElemGlob[6 + k] = 0;
+                }
+
+                globalToLocal12(el, uElemGlob, uElemLoc);
+                for (let row = 0; row < 12; row++) {
+                    let s = 0;
+                    const rowBase = row * 12;
+                    for (let k = 0; k < 12; k++) s += el.kLoc[rowBase + k] * uElemLoc[k];
+                    fElemLoc[row] = s;
+                }
+
+                // Axial: positive fElemLoc[0] pushing nodeA along +e1 toward nodeB is compression.
+                const axialMagN = Math.max(Math.abs(fElemLoc[0]), Math.abs(fElemLoc[6]));
+                const axialCompN = Math.max(0, 0.5 * (fElemLoc[0] - fElemLoc[6]));
+                const mA = Math.hypot(fElemLoc[4], fElemLoc[5]);
+                const mB = Math.hypot(fElemLoc[10], fElemLoc[11]);
+                const maxMomentNmm = Math.max(mA, mB);
+
+                const m = graph.members[el.memberIdx];
+                let peakStressMpa: number;
+                let stressUtilPct: number;
+                if (taperedConeStress && m.role === 'cone' && m.taperBodyDiameterMm !== undefined && m.taperTipDiameterMm !== undefined) {
+                    // The stiffness member uses an effective diameter; the
+                    // real cone tapers from body to contact. Recover the taper
+                    // stress from the element end forces: the internal bending
+                    // moment is linear along a beam with no distributed load,
+                    // and the section modulus follows the taper. The maximum
+                    // can sit well inside the cone, not at either end.
+                    const bodyD = m.taperBodyDiameterMm;
+                    const tipD = m.taperTipDiameterMm;
+                    let maxStress = 0;
+                    let govDia = bodyD;
+                    for (let st = 0; st <= CONE_TAPER_STRESS_STATIONS; st++) {
+                        const t = st / CONE_TAPER_STRESS_STATIONS;
+                        const d = bodyD + (tipD - bodyD) * t;
+                        const area = Math.PI * d * d / 4;
+                        const inertia = Math.PI * d * d * d * d / 64;
+                        // Internal moment at the station from the two end
+                        // moments; the B end enters with the opposite sign.
+                        const my = fElemLoc[4] * (1 - t) - fElemLoc[10] * t;
+                        const mz = fElemLoc[5] * (1 - t) - fElemLoc[11] * t;
+                        const moment = Math.hypot(my, mz);
+                        const stress = axialMagN / Math.max(1e-9, area)
+                            + (moment * (d / 2)) / Math.max(1e-9, inertia);
+                        if (stress > maxStress) {
+                            maxStress = stress;
+                            govDia = d;
+                        }
+                    }
+                    peakStressMpa = maxStress;
+                    stressUtilPct = (100 * peakStressMpa) / memberStrengthMpa;
+                    coneCriticalDia.set(el.memberIdx, govDia);
+                } else {
+                    const axialStressMpa = axialMagN / el.areaMm2;
+                    const bendingStressMpa = (maxMomentNmm * el.radiusMm) / el.inertiaMm4;
+                    peakStressMpa = axialStressMpa + bendingStressMpa;
+                    stressUtilPct = (100 * peakStressMpa) / memberStrengthMpa;
+                }
+                const buckleUtilPct = (100 * axialCompN) / Math.max(1e-6, el.bucklingCritN);
+                const utilPct = Math.max(stressUtilPct, buckleUtilPct);
+
+                if (utilPct > layerMaxMemberUtilPct) layerMaxMemberUtilPct = utilPct;
+                if (utilPct > memberMaxUtil[el.memberIdx]) memberMaxUtil[el.memberIdx] = utilPct;
+                if (utilPct > maxMemberUtilizationPct) maxMemberUtilizationPct = utilPct;
+                if (utilPct > 100) overloadedMemberIds.add(m.entityId);
+
+                const pa = graph.nodes[el.nodeA].pos;
+                const pb = graph.nodes[el.nodeB].pos;
+                candidateHotspots.push({
+                    entityId: m.entityId,
+                    entityKind: m.entityKind,
+                    kind: 'member',
+                    ...(m.role ? { role: m.role } : {}),
+                    utilizationPct: utilPct,
+                    peakStressMpa,
+                    deflectionMm: fB >= 0 ? Math.hypot(u[fB * 6], u[fB * 6 + 1], u[fB * 6 + 2]) : 0,
+                    layerZMm: layer.zMm,
+                    pos: {
+                        x: 0.5 * (pa.x + pb.x),
+                        y: 0.5 * (pa.y + pb.y),
+                        z: 0.5 * (pa.z + pb.z),
+                    },
+                });
+            }
+        }
+
+        if (layer.repIndex >= 0) {
+            criticalStatsByRepIndex.set(layer.repIndex, {
+                maxTipUtilPct: layerMaxTipUtilPct,
+                maxMemberUtilPct: layerMaxMemberUtilPct,
+            });
+        } else {
+            syntheticLayerPoints.push({
+                zMm: Math.round(layer.zMm * 1000) / 1000,
+                areaMm2: Math.round(layer.areaMm2 * 100) / 100,
+                peelForceN: Math.round(layer.peelForceN * 1000) / 1000,
+                maxTipUtilPct: Math.round(layerMaxTipUtilPct * 100) / 100,
+                maxMemberUtilPct: Math.round(layerMaxMemberUtilPct * 100) / 100,
+                critical: true,
+            });
+        }
+    }
+
+    // Build the force & stress curve for UI visualization at the sampled-layer
+    // resolution (`profile.samples`, one point per printed layer) and fall back
+    // to the cluster peaks for hand-built profiles.
+    const layerProfile: LayerPeelPoint[] = [];
+    if (!explicitLoads && profile && profile.layers.length > 0) {
+        const fallbackArea = Math.max(1, tipNodes.length) * areaPerSupportMm2;
+        const representativeByZ = new Map<number, { layer: RepresentativeLayer; index: number }>();
+        profile.layers.forEach((layer, index) => {
+            representativeByZ.set(Math.round(layer.zMm * 1000), { layer, index });
+        });
+        const samples = profile.samples ?? profile.layers.map((layer) => ({ zMm: layer.zMm, areaMm2: layer.areaMm2 }));
+        const sampled = computePeelLayerSamples(samples, profile.layers, fallbackArea);
+        for (const sample of sampled) {
+            const representative = representativeByZ.get(Math.round(sample.zMm * 1000));
+            const crit = representative ? criticalStatsByRepIndex.get(representative.index) : undefined;
+            let maxTipUtil = crit?.maxTipUtilPct ?? 0;
+            if (!crit && sample.areaMm2 > 0.05) {
+                const activeTips = tipNodes.filter((ni) => graph.nodes[ni].pos.z <= sample.zMm + 0.5);
+                if (activeTips.length > 0) {
+                    const rigidInput = activeTips.map((ni) => ({
+                        x: graph.nodes[ni].pos.x,
+                        y: graph.nodes[ni].pos.y,
+                        contactDiameterMm: graph.nodes[ni].tipContactDiameterMm ?? 0.28,
+                    }));
+                    const tipForces = distributeRigidBodyPeelLoads(rigidInput, sample.forceN, sample.copX, sample.copY);
+                    const dragLoads = distributeRigidBodyDragLoads(
+                        rigidInput,
+                        tipForces,
+                        null,
+                        LATERAL_PEEL_DRAG_RATIO,
+                        Math.SQRT1_2,
+                        Math.SQRT1_2,
+                    );
+                    for (let ti = 0; ti < activeTips.length; ti++) {
+                        const tipDia = graph.nodes[activeTips[ti]].tipContactDiameterMm ?? 0.28;
+                        const lateralN = Math.hypot(dragLoads.fx[ti], dragLoads.fy[ti]);
+                        const util = (100 * biaxialContactStressMpa(tipForces[ti], lateralN, tipDia)) / supportStrengthMpa;
+                        if (util > maxTipUtil) maxTipUtil = util;
+                    }
+                }
+            }
+            layerProfile.push({
+                zMm: Math.round(sample.zMm * 1000) / 1000,
+                areaMm2: Math.round(sample.areaMm2 * 100) / 100,
+                peelForceN: Math.round(sample.forceN * 1000) / 1000,
+                maxTipUtilPct: Math.round(maxTipUtil * 100) / 100,
+                maxMemberUtilPct: Math.round((crit?.maxMemberUtilPct ?? 0) * 100) / 100,
+                critical: Boolean(crit),
+            });
+        }
+        layerProfile.sort((a, b) => a.zMm - b.zMm);
+    } else {
+        layerProfile.push(...syntheticLayerPoints.sort((a, b) => a.zMm - b.zMm));
+    }
+
+    const memberSegments: StressSegment[] = graph.members
+        .map((m, mi) => ({
+            entityId: m.entityId,
+            entityKind: m.entityKind,
+            a: graph.nodes[m.nodeA].pos,
+            b: graph.nodes[m.nodeB].pos,
+            diameterMm: coneCriticalDia.get(mi) ?? m.diameterMm,
+            utilizationPct: memberMaxUtil[mi],
+            ...(m.role ? { role: m.role } : {}),
+        }))
+        .sort((x, y) => compareVec3(x.a, y.a) || compareVec3(x.b, y.b));
+
+    const tipPoints: StressTipPoint[] = tipNodes
+        .map((ni) => {
+            const node = graph.nodes[ni];
+            const peak = tipPeakUtil.get(ni);
+            return {
+                entityId: node.entityId ?? node.id,
+                entityKind: node.entityKind ?? 'trunk',
+                pos: node.pos,
+                utilizationPct: peak?.utilPct ?? 0,
+                loadN: peak?.loadN ?? 0,
+            };
+        })
+        .sort((x, y) => compareVec3(x.pos, y.pos));
+
+    // Deduplicate to peak utilization per (kind, entityId) with deterministic coordinate ordering.
+    const bestHotspotByKey = new Map<string, FrameStressHotspot>();
+    for (const h of candidateHotspots) {
+        const key = `${h.kind}:${h.entityId}`;
+        const prev = bestHotspotByKey.get(key);
+        if (!prev || h.utilizationPct > prev.utilizationPct + 1e-6) {
+            bestHotspotByKey.set(key, h);
+        }
+    }
+    const hotspots = [...bestHotspotByKey.values()]
+        .sort((a, b) => (
+            b.utilizationPct - a.utilizationPct
+            || a.layerZMm - b.layerZMm
+            || compareVec3(a.pos, b.pos)
+        ))
+        .slice(0, 5);
+
+    return {
+        nodeCount: graph.nodes.length,
+        rootCount: graph.rootCount,
+        tipCount: graph.tipCount,
+        memberCount: graph.members.length,
+        braceCount: graph.braceCount,
+        layersEvaluated: criticalLayers.length,
+        peakLayerZMm,
+        peakLayerPeelForceN,
+        maxTipUtilizationPct,
+        overloadedTips: overloadedTipIds.size,
+        maxMemberUtilizationPct,
+        overloadedMembers: overloadedMemberIds.size,
+        maxTipDeflectionMm,
+        maxTipRockingMm,
+        solverMode,
+        ...(worstRockingPair ? { rockingPair: worstRockingPair } : {}),
+        ...(worstTipDisplacements ? { tipDisplacements: worstTipDisplacements } : {}),
+        hotspots,
+        layerProfile,
+        memberSegments,
+        tipPoints,
+    };
+}
+
+/** Max strengthened diameter (mm) applied by automatic weak-spot reinforcement.
+ *  A trunk stops at the structure band + headroom (1.4 mm): past that the
+ *  answer is a shorter span (brace), a kickstand or a split, not a fatter
+ *  pole — which is also what makes the print removable in one piece per tree.
+ *  Branches/leaves stay under the trunk so a member never reads fatter than
+ *  the host carrying it; braces are ties, not columns. */
+const MAX_REINFORCED_TRUNK_DIA_MM = 1.4;
+/** Largest per-step scale. The cube-root law gives ~1.5x at a 300 % member;
+ *  capping the step at 1.35 needed a second pass just to reach the same
+ *  diameter. The 1.4 mm absolute cap still bounds the result. */
+const MAX_REINFORCE_STEP_SCALE = 1.6;
+const MAX_REINFORCED_BRANCH_DIA_MM = 1.4;
+const MAX_REINFORCED_LEAF_BODY_DIA_MM = 1.3;
+const MAX_REINFORCED_BRACE_DIA_MM = 1.4;
+const REINFORCE_JOINT_OFFSET_MM = 0.125;
+
+/** The reinforcement ceiling for a shaft kind; 0 when the kind has no shaft. */
+export function reinforcementDiameterCapMm(kind: SupportTypeId): number {
+    switch (kind) {
+        case 'trunk': return MAX_REINFORCED_TRUNK_DIA_MM;
+        case 'branch': return MAX_REINFORCED_BRANCH_DIA_MM;
+        case 'leaf': return MAX_REINFORCED_LEAF_BODY_DIA_MM;
+        case 'brace': return MAX_REINFORCED_BRACE_DIA_MM;
+        default: return 0;
+    }
+}
+
+function insetSegmentEnd(start: Vec3, end: Vec3, maxInsetMm = 1.5): Vec3 {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const dz = end.z - start.z;
+    const len = Math.hypot(dx, dy, dz);
+    if (len <= 1e-4) return end;
+    const inset = Math.min(maxInsetMm, len * 0.35);
+    const keep = (len - inset) / len;
+    return {
+        x: start.x + dx * keep,
+        y: start.y + dy * keep,
+        z: start.z + dz * keep,
+    };
+}
+
+function tryClearedScale(idealScale: number, testScale: (scale: number) => boolean): number | null {
+    const candidates = [
+        idealScale,
+        Math.max(1.08, 1 + (idealScale - 1) * 0.5),
+        1.08,
+    ];
+    for (let i = 0; i < candidates.length; i++) {
+        const s = candidates[i];
+        if (i > 0 && Math.abs(s - candidates[i - 1]) < 1e-4) continue;
+        if (testScale(s)) return s;
+    }
+    return null;
+}
+
+export interface ReinforceFrameMembersResult {
+    snapshot: SupportState;
+    reinforcedTrunks: number;
+    reinforcedBranches: number;
+    reinforcedLeaves: number;
+    reinforcedBraces: number;
+    totalReinforced: number;
+    skippedCount: number;
+    changed: boolean;
+}
+
+/**
+ * Thicken overloaded `trunk`, `branch`, `leaf`, and `brace` members identified
+ * by `solveSupportFrameStress` (`utilizationPct > 100%`), scaling diameters by
+ * `clamp((util / 90)^(1/3), 1.10, 1.35)` with stepped clearance fallbacks
+ * (`isShaftBlocked`) so thickening never introduces mesh intersections and
+ * host knots track upgraded child diameters for consistent 3D rendering.
+ */
+export function reinforceOverloadedFrameMembers(
+    snapshot: SupportState,
+    report: SupportFrameStressReport,
+    mesh?: THREE.Mesh,
+    modelId?: string,
+    /** Members already given a structural action (brace, promotion, kickstand)
+     *  in the same batch; they are left for the verification solve instead of
+     *  being thickened as well. */
+    skipEntityIds?: ReadonlySet<string>,
+    /** Bounded per-entity cap lift for a capped member with no brace/strut
+     *  available. Absent = the normal 1.4/1.3/1.4 caps. */
+    capOverrides?: ReadonlyMap<string, number>,
+): ReinforceFrameMembersResult {
+    const peakUtilByTrunkId = new Map<string, number>();
+    const peakUtilByBranchId = new Map<string, number>();
+    const peakUtilByLeafId = new Map<string, number>();
+    const peakUtilByBraceId = new Map<string, number>();
+
+    for (const seg of report.memberSegments) {
+        if (seg.utilizationPct <= 100) continue;
+        if (seg.entityKind === 'trunk') {
+            const prev = peakUtilByTrunkId.get(seg.entityId) ?? 0;
+            if (seg.utilizationPct > prev) peakUtilByTrunkId.set(seg.entityId, seg.utilizationPct);
+        } else if (seg.entityKind === 'branch') {
+            const prev = peakUtilByBranchId.get(seg.entityId) ?? 0;
+            if (seg.utilizationPct > prev) peakUtilByBranchId.set(seg.entityId, seg.utilizationPct);
+        } else if (seg.entityKind === 'leaf') {
+            const prev = peakUtilByLeafId.get(seg.entityId) ?? 0;
+            if (seg.utilizationPct > prev) peakUtilByLeafId.set(seg.entityId, seg.utilizationPct);
+        } else if (seg.entityKind === 'brace') {
+            const prev = peakUtilByBraceId.get(seg.entityId) ?? 0;
+            if (seg.utilizationPct > prev) peakUtilByBraceId.set(seg.entityId, seg.utilizationPct);
+        }
+    }
+
+    if (
+        peakUtilByTrunkId.size === 0
+        && peakUtilByBranchId.size === 0
+        && peakUtilByLeafId.size === 0
+        && peakUtilByBraceId.size === 0
+    ) {
+        return {
+            snapshot,
+            reinforcedTrunks: 0,
+            reinforcedBranches: 0,
+            reinforcedLeaves: 0,
+            reinforcedBraces: 0,
+            totalReinforced: 0,
+            skippedCount: 0,
+            changed: false,
+        };
+    }
+
+    let nextTrunks: SupportState['trunks'] | null = null;
+    let nextBranches: SupportState['branches'] | null = null;
+    let nextLeaves: SupportState['leaves'] | null = null;
+    let nextBraces: SupportState['braces'] | null = null;
+    let nextKnots: SupportState['knots'] | null = null;
+    const upgradedSegmentDia = new Map<string, number>();
+    const minKnotDia = new Map<string, number>();
+    let reinforcedTrunks = 0;
+    let reinforcedBranches = 0;
+    let reinforcedLeaves = 0;
+    let reinforcedBraces = 0;
+    let skippedCount = 0;
+
+    const bumpKnotMinDia = (knotId: string | undefined, targetDia: number) => {
+        if (!knotId) return;
+        const prev = minKnotDia.get(knotId) ?? 0;
+        if (targetDia > prev) minKnotDia.set(knotId, targetDia);
+    };
+
+    for (const [trunkId, utilPct] of peakUtilByTrunkId.entries()) {
+        if (skipEntityIds?.has(trunkId)) continue;
+        const trunk = snapshot.trunks?.[trunkId];
+        if (!trunk || trunk.segments.length === 0) continue;
+        if (modelId && trunk.modelId !== modelId) continue;
+
+        const root = snapshot.roots?.[trunk.rootId];
+        const idealScale = Math.min(MAX_REINFORCE_STEP_SCALE, Math.max(1.10, Math.cbrt(utilPct / 90)));
+        const typedTrunk = trunk.typeId ? trunk : { ...trunk, typeId: 'trunk' as const };
+
+        const trunkCap = capOverrides?.get(trunkId) ?? MAX_REINFORCED_TRUNK_DIA_MM;
+        const computeTargetDias = (scale: number) => trunk.segments.map((seg) =>
+            Math.min(trunkCap, Math.max(seg.diameter, Number((seg.diameter * scale).toFixed(2)))));
+
+        const acceptedScale = tryClearedScale(idealScale, (scale) => {
+            const targetDias = computeTargetDias(scale);
+            if (targetDias.every((d, i) => d <= trunk.segments[i].diameter + 1e-4)) return false;
+            if (!mesh || !root) return true;
+            for (let i = 0; i < trunk.segments.length; i++) {
+                const seg = trunk.segments[i];
+                const ep = resolveSegmentEndpoints(typedTrunk, seg, i, { root });
+                if (!ep) continue;
+                const endsAtTip = !seg.topJoint && Boolean(trunk.contactCone?.pos);
+                const checkEnd = endsAtTip ? insetSegmentEnd(ep.start, ep.end) : ep.end;
+                if (isShaftBlocked(ep.start, checkEnd, Math.max(0.2, targetDias[i] * 0.5), mesh)) {
+                    return false;
+                }
+            }
+            return true;
+        });
+
+        if (acceptedScale === null) {
+            skippedCount++;
+            continue;
+        }
+
+        const targetDias = computeTargetDias(acceptedScale);
+        if (!nextTrunks) nextTrunks = { ...snapshot.trunks };
+        const updatedSegments = trunk.segments.map((seg, i) => {
+            const newDia = targetDias[i];
+            upgradedSegmentDia.set(seg.id, newDia);
+            return {
+                ...seg,
+                diameter: newDia,
+                ...(seg.bottomJoint ? { bottomJoint: { ...seg.bottomJoint, diameter: Math.max(seg.bottomJoint.diameter, newDia + REINFORCE_JOINT_OFFSET_MM) } } : {}),
+                ...(seg.topJoint ? { topJoint: { ...seg.topJoint, diameter: Math.max(seg.topJoint.diameter, newDia + REINFORCE_JOINT_OFFSET_MM) } } : {}),
+            };
+        });
+        const topSegDia = updatedSegments[updatedSegments.length - 1]?.diameter;
+        const nextCone = trunk.contactCone && topSegDia !== undefined && trunk.contactCone.profile
+            ? {
+                ...trunk.contactCone,
+                profile: {
+                    ...trunk.contactCone.profile,
+                    // A cap exception may fatten the top shaft, but the cone
+                    // body staying at the normal cap keeps it from poking
+                    // above the contact tip (the above-contact check).
+                    bodyDiameterMm: Math.min(
+                        Math.max(trunk.contactCone.profile.bodyDiameterMm, topSegDia),
+                        MAX_REINFORCED_TRUNK_DIA_MM,
+                    ),
+                },
+            }
+            : trunk.contactCone;
+        nextTrunks[trunkId] = {
+            ...trunk,
+            segments: updatedSegments,
+            ...(nextCone ? { contactCone: nextCone } : {}),
+        };
+        reinforcedTrunks++;
+    }
+
+    for (const [branchId, utilPct] of peakUtilByBranchId.entries()) {
+        if (skipEntityIds?.has(branchId)) continue;
+        const branch = snapshot.branches?.[branchId];
+        if (!branch || branch.segments.length === 0) continue;
+        if (modelId && branch.modelId !== modelId) continue;
+
+        const hostKnot = snapshot.knots?.[branch.parentKnotId];
+        const idealScale = Math.min(MAX_REINFORCE_STEP_SCALE, Math.max(1.10, Math.cbrt(utilPct / 90)));
+        const typedBranch = branch.typeId ? branch : { ...branch, typeId: 'branch' as const };
+
+        const branchCap = capOverrides?.get(branchId) ?? MAX_REINFORCED_BRANCH_DIA_MM;
+        const computeTargetDias = (scale: number) => branch.segments.map((seg) =>
+            Math.min(branchCap, Math.max(seg.diameter, Number((seg.diameter * scale).toFixed(2)))));
+
+        const acceptedScale = tryClearedScale(idealScale, (scale) => {
+            const targetDias = computeTargetDias(scale);
+            if (targetDias.every((d, i) => d <= branch.segments[i].diameter + 1e-4)) return false;
+            if (!mesh || !hostKnot) return true;
+            for (let i = 0; i < branch.segments.length; i++) {
+                const seg = branch.segments[i];
+                const ep = resolveSegmentEndpoints(typedBranch, seg, i, { hostKnot });
+                if (!ep) continue;
+                const endsAtTip = !seg.topJoint && Boolean(branch.contactCone?.pos);
+                const checkEnd = endsAtTip ? insetSegmentEnd(ep.start, ep.end) : ep.end;
+                if (isShaftBlocked(ep.start, checkEnd, Math.max(0.2, targetDias[i] * 0.5), mesh)) {
+                    return false;
+                }
+            }
+            return true;
+        });
+
+        if (acceptedScale === null) {
+            skippedCount++;
+            continue;
+        }
+
+        const targetDias = computeTargetDias(acceptedScale);
+        if (!nextBranches) nextBranches = { ...snapshot.branches };
+        const updatedSegments = branch.segments.map((seg, i) => {
+            const newDia = targetDias[i];
+            upgradedSegmentDia.set(seg.id, newDia);
+            return {
+                ...seg,
+                diameter: newDia,
+                ...(seg.bottomJoint ? { bottomJoint: { ...seg.bottomJoint, diameter: Math.max(seg.bottomJoint.diameter, newDia + REINFORCE_JOINT_OFFSET_MM) } } : {}),
+                ...(seg.topJoint ? { topJoint: { ...seg.topJoint, diameter: Math.max(seg.topJoint.diameter, newDia + REINFORCE_JOINT_OFFSET_MM) } } : {}),
+            };
+        });
+        const firstSegDia = updatedSegments[0]?.diameter;
+        const nextCone = branch.contactCone && firstSegDia !== undefined && branch.contactCone.profile
+            ? {
+                ...branch.contactCone,
+                profile: {
+                    ...branch.contactCone.profile,
+                    bodyDiameterMm: Math.min(
+                        Math.max(branch.contactCone.profile.bodyDiameterMm, firstSegDia),
+                        MAX_REINFORCED_BRANCH_DIA_MM,
+                    ),
+                },
+            }
+            : branch.contactCone;
+        nextBranches[branchId] = {
+            ...branch,
+            segments: updatedSegments,
+            ...(nextCone ? { contactCone: nextCone } : {}),
+        };
+        if (firstSegDia !== undefined) {
+            bumpKnotMinDia(branch.parentKnotId, firstSegDia + REINFORCE_JOINT_OFFSET_MM);
+        }
+        reinforcedBranches++;
+    }
+
+    for (const [leafId, utilPct] of peakUtilByLeafId.entries()) {
+        if (skipEntityIds?.has(leafId)) continue;
+        const leaf = snapshot.leaves?.[leafId];
+        if (!leaf?.contactCone?.profile) continue;
+        if (modelId && leaf.modelId !== modelId) continue;
+
+        const hostKnot = snapshot.knots?.[leaf.parentKnotId];
+        const curBodyDia = leaf.contactCone.profile.bodyDiameterMm ?? 0.9;
+        const idealScale = Math.min(MAX_REINFORCE_STEP_SCALE, Math.max(1.10, Math.cbrt(utilPct / 90)));
+
+        const computeTargetBodyDia = (scale: number) =>
+            Math.min(capOverrides?.get(leafId) ?? MAX_REINFORCED_LEAF_BODY_DIA_MM, Math.max(curBodyDia, Number((curBodyDia * scale).toFixed(2))));
+
+        const acceptedScale = tryClearedScale(idealScale, (scale) => {
+            const newBodyDia = computeTargetBodyDia(scale);
+            if (newBodyDia <= curBodyDia + 1e-4) return false;
+            if (!mesh || !hostKnot) return true;
+            const checkEnd = insetSegmentEnd(hostKnot.pos, leaf.contactCone.pos);
+            return !isShaftBlocked(hostKnot.pos, checkEnd, Math.max(0.2, newBodyDia * 0.35), mesh);
+        });
+
+        if (acceptedScale === null) {
+            skippedCount++;
+            continue;
+        }
+
+        const newBodyDia = computeTargetBodyDia(acceptedScale);
+        if (!nextLeaves) nextLeaves = { ...snapshot.leaves };
+        nextLeaves[leafId] = {
+            ...leaf,
+            contactCone: {
+                ...leaf.contactCone,
+                profile: {
+                    ...leaf.contactCone.profile,
+                    bodyDiameterMm: newBodyDia,
+                },
+            },
+        };
+        bumpKnotMinDia(leaf.parentKnotId, newBodyDia + REINFORCE_JOINT_OFFSET_MM);
+        reinforcedLeaves++;
+    }
+
+    for (const [braceId, utilPct] of peakUtilByBraceId.entries()) {
+        if (skipEntityIds?.has(braceId)) continue;
+        const brace = snapshot.braces?.[braceId];
+        if (!brace) continue;
+        if (modelId && brace.modelId !== modelId) continue;
+
+        const idealScale = Math.min(MAX_REINFORCE_STEP_SCALE, Math.max(1.10, Math.cbrt(utilPct / 90)));
+        const curDia = brace.profile?.diameter ?? 1.0;
+        const startPos = snapshot.knots?.[brace.startKnotId]?.pos;
+        const endPos = snapshot.knots?.[brace.endKnotId]?.pos;
+
+        const computeTargetDia = (scale: number) =>
+            Math.min(capOverrides?.get(braceId) ?? MAX_REINFORCED_BRACE_DIA_MM, Math.max(curDia, Number((curDia * scale).toFixed(2))));
+
+        const acceptedScale = tryClearedScale(idealScale, (scale) => {
+            const newDia = computeTargetDia(scale);
+            if (newDia <= curDia + 1e-4) return false;
+            if (!mesh || !startPos || !endPos) return true;
+            return !isShaftBlocked(startPos, endPos, Math.max(0.2, newDia * 0.5), mesh);
+        });
+
+        if (acceptedScale === null) {
+            skippedCount++;
+            continue;
+        }
+
+        const newDia = computeTargetDia(acceptedScale);
+        if (!nextBraces) nextBraces = { ...snapshot.braces };
+        nextBraces[braceId] = { ...brace, profile: { ...brace.profile, diameter: newDia } };
+        bumpKnotMinDia(brace.startKnotId, newDia + REINFORCE_JOINT_OFFSET_MM);
+        bumpKnotMinDia(brace.endKnotId, newDia + REINFORCE_JOINT_OFFSET_MM);
+        reinforcedBraces++;
+    }
+
+    if (upgradedSegmentDia.size > 0 || minKnotDia.size > 0) {
+        for (const [knotId, knot] of Object.entries(snapshot.knots ?? {})) {
+            const hostDia = upgradedSegmentDia.get(knot.parentShaftId);
+            const hostedTarget = hostDia !== undefined ? hostDia + REINFORCE_JOINT_OFFSET_MM : 0;
+            const childTarget = minKnotDia.get(knotId) ?? 0;
+            const targetKnotDia = Math.max(hostedTarget, childTarget);
+            if (targetKnotDia <= 0 || (knot.diameter ?? 0) >= targetKnotDia - 1e-4) continue;
+            if (!nextKnots) nextKnots = { ...snapshot.knots };
+            nextKnots[knotId] = { ...knot, diameter: targetKnotDia };
+        }
+    }
+
+    const totalReinforced = reinforcedTrunks + reinforcedBranches + reinforcedLeaves + reinforcedBraces;
+    if (totalReinforced === 0) {
+        return {
+            snapshot,
+            reinforcedTrunks: 0,
+            reinforcedBranches: 0,
+            reinforcedLeaves: 0,
+            reinforcedBraces: 0,
+            totalReinforced: 0,
+            skippedCount,
+            changed: false,
+        };
+    }
+
+    return {
+        snapshot: {
+            ...snapshot,
+            ...(nextTrunks ? { trunks: nextTrunks } : {}),
+            ...(nextBranches ? { branches: nextBranches } : {}),
+            ...(nextLeaves ? { leaves: nextLeaves } : {}),
+            ...(nextBraces ? { braces: nextBraces } : {}),
+            ...(nextKnots ? { knots: nextKnots } : {}),
+        },
+        reinforcedTrunks,
+        reinforcedBranches,
+        reinforcedLeaves,
+        reinforcedBraces,
+        totalReinforced,
+        skippedCount,
+        changed: true,
+    };
+}

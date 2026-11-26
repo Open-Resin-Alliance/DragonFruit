@@ -29,6 +29,8 @@ const UNIT_MESSAGES = {
   ml: msg({ message: '{value} ml', comment: 'Resin volume in millilitres. {value} is an already formatted number.' }),
   mmPerPx: msg({ message: '{value} mm/px', comment: 'Millimetres per screen/layer pixel. {value} is an already formatted number.' }),
   g: msg({ message: '{value} g', comment: 'Weight in grams. {value} is an already formatted number.' }),
+  N: msg({ message: '{value} N', comment: 'Force in newtons. {value} is an already formatted number.' }),
+  MPa: msg({ message: '{value} MPa', comment: 'Stress in megapascals. {value} is an already formatted number.' }),
   B: msg({ message: '{value} B', comment: 'File or memory size in bytes. {value} is an already formatted number.' }),
   KB: msg({ message: '{value} KB', comment: 'File or memory size in kilobytes (1024 bytes). {value} is an already formatted number.' }),
   MB: msg({ message: '{value} MB', comment: 'File or memory size in megabytes. {value} is an already formatted number.' }),

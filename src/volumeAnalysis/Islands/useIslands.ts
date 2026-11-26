@@ -1,40 +1,155 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
-import { CONSERVATIVE_P_SIGMA } from '@/supports/autoSupport/poseStability';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
+import { remapOverhangTriangleIds } from './remapOverhangTriangles';
 import { detectVoxelIslands, type VoxelDetectParams } from './detect';
 import { contactEndpointsFor, SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
 import {
-  annotateFilterFlags,
   applyFilter,
-  DEFAULT_FILTER_TOGGLES,
-  type IslandFilterToggles,
+  DEFAULT_FILTER_TOGGLES, isIslandEffectivelySupported,
+  type IslandFilterOptions, type IslandFilterToggles,
 } from './filtering';
+import { annotateAndCountSupports, buildIslandContactGrid, scanNeedsCoverage } from './contactGrid';
 import { clusterWalkOrder } from './ordering';
 import { buildIslandPucks, markerIdFor } from './islandPuckMarkers';
 import { buildIslandInstances, VOXEL_DISC_RADIUS_FACTOR, type IslandVisual } from './islandInstances';
 import type { IslandMarker } from '@/volumeAnalysis/IslandScan/islandOverlayLogic';
 import { scanMeshMinima } from './meshMinima';
 import { type DetectedIsland, type TipInfo, type OverhangRegion, type OverhangScan, type PoseStabilityWire, type Vec3Loop, SUPPORTED_RADIUS_MM } from './types';
-import { classifyIntersection } from './intersection';
+import { classifyIntersection, type ClassifiedIslands, type IntersectionStats } from './intersection';
 import { getSnapshot } from '@/supports/state';
 import { getSettings } from '@/supports/Settings/state';
-import { SpatialHashGrid2D, cellKey } from './spatialHashGrid2D';
+import { cellKey } from './spatialHashGrid2D';
 import {
   type VoxelFootprint,
   VoxelFootprintBuilder,
-  concatFootprints,
   footprintX,
   footprintY,
+  footprintZ,
   isEmptyFootprint,
 } from './voxelFootprint';
+
+export { scanNeedsCoverage };
 
 /** Self-support angle for mesh-normal overhang detection (surfaces flatter
  *  than this from horizontal get supports). Tunable per resin later. */
 const OVERHANG_SELF_SUPPORT_ANGLE_DEG = 45;
 /** Resolution of the projected-footprint masks emitted by the classifier. */
 const OVERHANG_FOOTPRINT_PX_MM = 0.25;
+
+export interface OverhangMergeOptions {
+  voxelPxMm?: number;
+  layerHeightMm?: number;
+  overhangPxMm?: number;
+}
+
+function gridBucketKey(bx: number, by: number): number | string {
+  if (Math.abs(bx) <= 30000 && Math.abs(by) <= 30000) {
+    return cellKey(bx, by);
+  }
+  return `${bx},${by}`;
+}
+
+interface RegionCoverIndex {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
+  bucketSize: number;
+  head: Map<number | string, number> | null;
+  next: Int32Array | null;
+}
+
+function createRegionCoverIndex(region: DetectedIsland, bucketSize: number): RegionCoverIndex | null {
+  const vox = region.contactVoxels;
+  if (!vox || isEmptyFootprint(vox)) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  for (let i = 0; i < vox.count; i++) {
+    const px = footprintX(vox, i);
+    const py = footprintY(vox, i);
+    const pz = footprintZ(vox, i) ?? region.baseZ;
+    if (px < minX) minX = px;
+    if (py < minY) minY = py;
+    if (pz < minZ) minZ = pz;
+    if (px > maxX) maxX = px;
+    if (py > maxY) maxY = py;
+    if (pz > maxZ) maxZ = pz;
+  }
+  return {
+    minX,
+    maxX,
+    minY,
+    maxY,
+    minZ,
+    maxZ,
+    bucketSize: bucketSize > 1e-9 ? bucketSize : 1e-9,
+    head: null,
+    next: null,
+  };
+}
+
+function ensureRegionSpatialHash(region: DetectedIsland, idx: RegionCoverIndex): void {
+  if (idx.head !== null) return;
+  const vox = region.contactVoxels!;
+  const head = new Map<number | string, number>();
+  const next = new Int32Array(vox.count);
+  next.fill(-1);
+  const bs = idx.bucketSize;
+  for (let i = 0; i < vox.count; i++) {
+    const rx = footprintX(vox, i);
+    const ry = footprintY(vox, i);
+    const key = gridBucketKey(Math.floor(rx / bs), Math.floor(ry / bs));
+    const prev = head.get(key);
+    if (prev !== undefined) next[i] = prev;
+    head.set(key, i);
+  }
+  idx.head = head;
+  idx.next = next;
+}
+
+function pointCoveredByRegion(
+  region: DetectedIsland,
+  idx: RegionCoverIndex,
+  qx: number,
+  qy: number,
+  qz: number,
+  xyMargin2: number,
+  zMargin: number,
+): boolean {
+  if (!Number.isFinite(qx) || !Number.isFinite(qy) || !Number.isFinite(qz)) return false;
+  ensureRegionSpatialHash(region, idx);
+  const vox = region.contactVoxels!;
+  const head = idx.head!;
+  const next = idx.next!;
+  const bs = idx.bucketSize;
+  const bx = Math.floor(qx / bs);
+  const by = Math.floor(qy / bs);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      let i = head.get(gridBucketKey(bx + dx, by + dy));
+      while (i !== undefined && i !== -1) {
+        const rx = footprintX(vox, i);
+        const ry = footprintY(vox, i);
+        const ddx = rx - qx;
+        const ddy = ry - qy;
+        if (ddx * ddx + ddy * ddy <= xyMargin2) {
+          const rz = footprintZ(vox, i) ?? region.baseZ;
+          if (Math.abs(qz - rz) <= zMargin) return true;
+        }
+        i = next[i];
+      }
+    }
+  }
+  return false;
+}
 
 /**
  * Merge overhang regions into the classified island set. The slice-growth
@@ -44,34 +159,94 @@ const OVERHANG_FOOTPRINT_PX_MM = 0.25;
  * favor of the surface-accurate region. Overhang regions without a voxel
  * counterpart (e.g. lettering ledges below the growth buffer) are appended.
  */
-/** Does this scan's pose need anti-topple contact? The same rule the placement
- *  asks (`needsToppleCoverage`), reduced to the wire shape the scan returns, so
- *  the overlay can show what will actually be covered rather than everything
- *  that was classified. */
-export function scanNeedsCoverage(stability: PoseStabilityWire | null | undefined): boolean {
-  if (!stability) return true;
-  return stability.adhesionRatio < CONSERVATIVE_P_SIGMA;
-}
-
 export function mergeOverhangRegions(
   classified: DetectedIsland[],
   overhang: DetectedIsland[],
+  opts: OverhangMergeOptions = {},
 ): DetectedIsland[] {
   if (overhang.length === 0) return classified;
-  const covered = new Set<string>();
-  for (const v of classified) {
-    if (v.source !== 'voxel') continue;
-    for (const o of overhang) {
-      if (overhangCoversVoxel(o, v)) {
-        covered.add(v.id);
-        break;
+  const voxelPxMm = opts.voxelPxMm ?? 0.05;
+  const layerHeightMm = opts.layerHeightMm ?? 0.05;
+  const overhangPxMm = opts.overhangPxMm ?? OVERHANG_FOOTPRINT_PX_MM;
+  const normalizedOpts: Required<OverhangMergeOptions> = {
+    voxelPxMm,
+    layerHeightMm,
+    overhangPxMm,
+  };
+  const xyMargin = overhangPxMm + voxelPxMm;
+  const regionIndices = overhang.map((o) => createRegionCoverIndex(o, xyMargin));
+
+  const remaining: DetectedIsland[] = [];
+  for (const item of classified) {
+    let coveringOverhangId: string | undefined;
+    if (item.source === 'voxel' || item.source === 'minima') {
+      for (let oi = 0; oi < overhang.length; oi++) {
+        if (overhangCoversVoxel(overhang[oi], item, normalizedOpts, regionIndices[oi])) {
+          coveringOverhangId = overhang[oi].id;
+          break;
+        }
       }
     }
+
+    // Protect all isDetached voxel islands and all intersection islands;
+    // yield only covered non-detached, non-intersection CantileverFringe voxel islands.
+    if (
+      coveringOverhangId !== undefined &&
+      item.source === 'voxel' &&
+      !item.isDetached &&
+      item.class !== 'intersection'
+    ) {
+      continue;
+    }
+
+    if (coveringOverhangId !== undefined) {
+      remaining.push({ ...item, coveredByOverhangId: coveringOverhangId });
+    } else {
+      remaining.push(item);
+    }
   }
-  const remaining = covered.size === 0
-    ? classified
-    : classified.filter((v) => !covered.has(v.id));
+
   return [...remaining, ...overhang];
+}
+
+export function mergeOverhangResults(
+  classifiedResult: ClassifiedIslands,
+  overhang: DetectedIsland[],
+  opts: OverhangMergeOptions = {},
+): ClassifiedIslands {
+  if (overhang.length === 0) return classifiedResult;
+  const islands = mergeOverhangRegions(classifiedResult.islands, overhang, opts);
+  let voxelTotal = 0;
+  let minimaTotal = 0;
+  let matched = 0;
+  let voxelOnly = 0;
+  let minimaOnly = 0;
+  for (const item of islands) {
+    if (item.source === 'voxel') {
+      voxelTotal++;
+      if (item.class === 'intersection') {
+        matched++;
+      } else if (item.class === 'voxelOnly') {
+        voxelOnly++;
+      }
+    } else if (item.source === 'minima') {
+      minimaTotal++;
+      if (item.class === 'minimaOnly') minimaOnly++;
+    }
+  }
+  const meanMatchOffsetMm =
+    matched === 0 ? 0 : classifiedResult.stats.meanMatchOffsetMm;
+  const stats: IntersectionStats = {
+    voxelTotal,
+    minimaTotal,
+    matched,
+    voxelOnly,
+    minimaOnly,
+    minimaSupersetOfVoxel: voxelTotal > 0 && voxelOnly === 0,
+    voxelSupersetOfMinima: minimaTotal > 0 && minimaOnly === 0,
+    meanMatchOffsetMm,
+  };
+  return { islands, stats };
 }
 
 /**
@@ -127,33 +302,110 @@ export function overhangRegionToIsland(region: OverhangRegion, i: number): Detec
 }
 
 /**
- * True when a voxel island's contact sits inside an overhang region's
- * projected footprint and their areas are comparable — the same physical
- * surface detected by both detectors.
+ * True when a voxel island's contact or >= 50% of its footprint sits inside
+ * an overhang region's projected footprint within XY/Z grid margins and without
+ * exceeding the region area upper bound — the same physical surface detected
+ * by both detectors.
  */
-function overhangCoversVoxel(region: DetectedIsland, voxel: DetectedIsland): boolean {
+function overhangCoversVoxel(
+  region: DetectedIsland,
+  voxel: DetectedIsland,
+  opts: OverhangMergeOptions = {},
+  regionIndex?: RegionCoverIndex | null,
+): boolean {
   const vox = region.contactVoxels;
-  if (isEmptyFootprint(vox) || !vox) return false;
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (let i = 0; i < vox.count; i++) {
-    const px = footprintX(vox, i);
-    const py = footprintY(vox, i);
-    if (px < minX) minX = px;
-    if (py < minY) minY = py;
-    if (px > maxX) maxX = px;
-    if (py > maxY) maxY = py;
-  }
-  const cx = voxel.contact.x;
-  const cy = voxel.contact.y;
-  if (cx < minX || cx > maxX || cy < minY || cy > maxY) return false;
+  if (!vox || isEmptyFootprint(vox)) return false;
+
   const regionArea = region.areaMm2 ?? 0;
   const voxelArea = voxel.areaMm2 ?? 0;
-  if (regionArea <= 0) return false;
-  const ratio = voxelArea / regionArea;
-  return ratio >= 0.5 && ratio <= 2.0;
+  if (regionArea <= 0 || voxelArea > 2.0 * regionArea) return false;
+
+  const voxelPxMm = opts.voxelPxMm ?? 0.05;
+  const layerHeightMm = opts.layerHeightMm ?? 0.05;
+  const ohPxMm = opts.overhangPxMm ?? OVERHANG_FOOTPRINT_PX_MM;
+  const xyMargin = ohPxMm + voxelPxMm;
+  const xyMargin2 = xyMargin * xyMargin;
+  const zMargin = 2 * layerHeightMm + ohPxMm;
+
+  const idx = regionIndex !== undefined ? regionIndex : createRegionCoverIndex(region, xyMargin);
+  if (!idx) return false;
+
+  const { minX, maxX, minY, maxY, minZ, maxZ } = idx;
+  const cx = voxel.contact.x;
+  const cy = voxel.contact.y;
+  const cz = voxel.baseZ;
+  const clampedContactZ = Math.min(maxZ, Math.max(minZ, cz));
+  const contactInExpandedAabb =
+    cx >= minX - xyMargin &&
+    cx <= maxX + xyMargin &&
+    cy >= minY - xyMargin &&
+    cy <= maxY + xyMargin &&
+    Math.abs(cz - clampedContactZ) <= zMargin;
+
+  const voxFootprint = voxel.contactVoxels;
+  if (!voxFootprint || voxFootprint.count === 0) {
+    if (!contactInExpandedAabb) return false;
+    return pointCoveredByRegion(region, idx, cx, cy, cz, xyMargin2, zMargin);
+  }
+
+  if (!contactInExpandedAabb) {
+    if (voxFootprint.z === null && Math.abs(cz - clampedContactZ) > zMargin) {
+      return false;
+    }
+    const vCount = voxFootprint.count;
+    const needed = Math.ceil(vCount / 2);
+    let inAabbCount = 0;
+    for (let k = 0; k < vCount; k++) {
+      const fx = footprintX(voxFootprint, k);
+      const fy = footprintY(voxFootprint, k);
+      const fz = footprintZ(voxFootprint, k) ?? cz;
+      const clampedFz = Math.min(maxZ, Math.max(minZ, fz));
+      if (
+        fx >= minX - xyMargin &&
+        fx <= maxX + xyMargin &&
+        fy >= minY - xyMargin &&
+        fy <= maxY + xyMargin &&
+        Math.abs(fz - clampedFz) <= zMargin
+      ) {
+        inAabbCount++;
+        if (inAabbCount >= needed) break;
+      } else if (inAabbCount + (vCount - k - 1) < needed) {
+        return false;
+      }
+    }
+    if (inAabbCount < needed) return false;
+  }
+
+  if (contactInExpandedAabb && pointCoveredByRegion(region, idx, cx, cy, cz, xyMargin2, zMargin)) {
+    return true;
+  }
+
+  const vCount = voxFootprint.count;
+  const needed = Math.ceil(vCount / 2);
+  let coveredCount = 0;
+  for (let k = 0; k < vCount; k++) {
+    const fx = footprintX(voxFootprint, k);
+    const fy = footprintY(voxFootprint, k);
+    const fz = footprintZ(voxFootprint, k) ?? cz;
+    if (pointCoveredByRegion(region, idx, fx, fy, fz, xyMargin2, zMargin)) {
+      coveredCount++;
+      if (coveredCount >= needed) return true;
+    } else if (coveredCount + (vCount - k - 1) < needed) {
+      return false;
+    }
+  }
+  return coveredCount * 2 >= vCount;
+}
+
+export function resolveVoxelVisualType(
+  island: DetectedIsland | undefined,
+  consolidateVoxel: boolean,
+  contouredIds: ReadonlySet<string>,
+): number {
+  if (island?.source === 'overhang') return 0;
+  return consolidateVoxel && island && ((island.members?.length ?? 0) > 1 || contouredIds.has(island.id))
+    ? 3
+    : 0;
 }
 
 /**
@@ -181,6 +433,8 @@ export interface UseIslandsInput {
   supportTips: THREE.Vector3[];
   /** Build-plate plane Z (world mm). */
   plateZ?: number;
+  /** Unique scene model id so duplicated models with matching sourcePath do not share cache entries. */
+  modelId?: string | null;
   /** File path of the loaded model. */
   sourcePath?: string | null;
   /** True when the print gets a raft under it. The stability report then
@@ -193,6 +447,43 @@ export interface UseIslandsInput {
 }
 
 export type UseIslandsReturn = ReturnType<typeof useIslands>;
+
+type CachedScan = {
+  voxel: DetectedIsland[];
+  minima: DetectedIsland[];
+  overhang: DetectedIsland[];
+  toppleCoverage: boolean;
+  dragTotalMm3: number;
+};
+
+type CombinedNativeScanResult = {
+  voxelIslands: Array<{
+    id: string;
+    contact: { x: number; y: number; z: number };
+    baseZ: number;
+    rawBaseZ?: number;
+    areaMm2?: number;
+    peakAreaMm2?: number;
+    maxAreaMm2?: number;
+    isDetached?: boolean;
+    layerSpan: [number, number];
+    contactVoxels?: number[];
+  }>;
+  minimaIslands: Array<{
+    position: { x: number; y: number; z: number };
+    vertexIndex?: number;
+    seedTriangleId?: number;
+  }>;
+  overhangIslands: OverhangRegion[];
+  stability?: PoseStabilityWire | null;
+};
+
+function hasTauriRuntime(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ != null
+  );
+}
 
 /**
  * Times a derived computation and reports the slow ones to the app log.
@@ -207,6 +498,9 @@ function timed<T>(label: string, compute: () => T): T {
   const result = compute();
   const elapsedMs = performance.now() - startedAt;
   if (elapsedMs >= SLOW_STEP_MS) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[IslandsPerf] step=${label} ms=${elapsedMs.toFixed(1)}`);
+    }
     void reportSlowStep(label, elapsedMs);
   }
   return result;
@@ -218,7 +512,7 @@ const SLOW_STEP_MS = 150;
 async function reportSlowStep(label: string, elapsedMs: number): Promise<void> {
   const message = `[Islands] step=${label} ms=${Math.round(elapsedMs)}`;
   console.log(message);
-  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+  if (!hasTauriRuntime()) return;
   try {
     const { info } = await import('@tauri-apps/plugin-log');
     await info(message);
@@ -227,8 +521,9 @@ async function reportSlowStep(label: string, elapsedMs: number): Promise<void> {
   }
 }
 
-export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ = 0, sourcePath, activeTab, hasRaft = false }: UseIslandsInput) {
+export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ = 0, modelId, sourcePath, activeTab, hasRaft = false }: UseIslandsInput) {
   const [scanning, setScanning] = useState(false);
+  const [hasScanned, setHasScanned] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number; phase?: string; phaseNumber?: number; phaseCount?: number } | null>(null);
   const [voxelIslands, setVoxelIslands] = useState<DetectedIsland[]>([]);
   const [minimaIslands, setMinimaIslands] = useState<DetectedIsland[]>([]);
@@ -266,7 +561,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   // Active settings states used in calculations
   const [pxMm, setPxMm] = useState(0.05);
   const [supportBufMm, setSupportBufMm] = useState(0.25);
-  const [connectivity, setConnectivity] = useState<4 | 8>(4);
+  const [connectivity, setConnectivity] = useState<4 | 8>(8);
   const [consolidateVoxel, setConsolidateVoxel] = useState<boolean>(false);
   const [consolidationDistance, setConsolidationDistance] = useState<number>(0.2);
   const [reduceIntersection, setReduceIntersection] = useState<boolean>(false);
@@ -283,7 +578,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   // Draft settings states bound to UI inputs
   const [draftPxMm, setDraftPxMm] = useState(0.05);
   const [draftSupportBufMm, setDraftSupportBufMm] = useState(0.25);
-  const [draftConnectivity, setDraftConnectivity] = useState<4 | 8>(4);
+  const [draftConnectivity, setDraftConnectivity] = useState<4 | 8>(8);
   const [draftConsolidateVoxel, setDraftConsolidateVoxel] = useState<boolean>(false);
   const [draftConsolidationDistance, setDraftConsolidationDistance] = useState<number>(0.2);
   const [draftReduceIntersection, setDraftReduceIntersection] = useState<boolean>(false);
@@ -334,6 +629,15 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       try {
         soup.computeBoundingBox();
         const positions = (soup.getAttribute('position').array as Float32Array).slice();
+        if (matrix.determinant() < 0) {
+          for (let i = 0; i + 8 < positions.length; i += 9) {
+            for (let k = 0; k < 3; k++) {
+              const tmp = positions[i + 3 + k];
+              positions[i + 3 + k] = positions[i + 6 + k];
+              positions[i + 6 + k] = tmp;
+            }
+          }
+        }
         const bbox = soup.boundingBox!.clone();
         return { positions, bbox };
       } finally {
@@ -346,6 +650,40 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     }
   }, [geom, transform]);
 
+  /**
+   * Build pre-TRS local triangle-soup positions + TRS matrix + local center
+   * so Rust welds at `1e-6` in pose-invariant local space before applying
+   * `translate(-center) -> matrix` + `det3 < 0` winding flip.
+   */
+  const prepareLocalGeom = useCallback((): {
+    positions: Float32Array;
+    matrix: number[];
+    center: [number, number, number];
+  } | null => {
+    if (!geom) return null;
+    const g = geom.geometry;
+    const bb = g.boundingBox ?? new THREE.Box3().setFromBufferAttribute(g.getAttribute('position') as THREE.BufferAttribute);
+    const center = bb.getCenter(new THREE.Vector3());
+    const matrix = new THREE.Matrix4().compose(
+      transform.position.clone(),
+      quaternionFromGlobalEuler(transform.rotation),
+      transform.scale.clone(),
+    );
+    const soup = g.index ? g.toNonIndexed() : g;
+    try {
+      const positions = (soup.getAttribute('position').array as Float32Array).slice();
+      return {
+        positions,
+        matrix: Array.from(matrix.elements),
+        center: [center.x, center.y, center.z],
+      };
+    } finally {
+      if (soup !== g) {
+        soup.dispose();
+      }
+    }
+  }, [geom, transform]);
+
   // World-space transform signature for the scan cache. Island coordinates are
   // world-space, so a cached scan is only valid for the transform it was made
   // under; rotating/repositioning the model must invalidate it.
@@ -354,7 +692,9 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     transform.rotation.x, transform.rotation.y, transform.rotation.z,
     transform.scale.x, transform.scale.y, transform.scale.z,
   ].map((v) => v.toFixed(3)).join(',');
-  const cacheKey = sourcePath ? `${sourcePath}|${transformKey}` : null;
+  const cacheKey = geom
+    ? `${modelId ?? sourcePath ?? ''}|${geom.geometry?.uuid ?? ''}|${transformKey}`
+    : null;
 
 
 
@@ -369,289 +709,274 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     // Clear any progress left by a previous model's scan — the modal must
     // not show the old "layer X of Y" until this scan reports its own.
     setScanProgress(null);
-    const epoch = scanEpochRef.current;
-    // Yield immediately so React can flush the "scanning" state and show
-    // the progress modal before we start expensive synchronous work.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    let usedSideload = false;
-    let mappedOverhangs: DetectedIsland[] = [];
+    const epoch = ++scanEpochRef.current;
+    const perf = { start: performance.now(), prep: 0, stage: 0, scan: 0, commit: 0, path: 'none' };
+    const mark = (key: 'prep' | 'stage' | 'scan' | 'commit', from: number) => {
+      perf[key] += performance.now() - from;
+    };
 
-    // Overhang classification (mesh-normal) — independent of the slice path.
-    // Catches shallow slopes the growth detector can't see (rotated-cube
-    // undersides, 11°–45° surfaces). Non-fatal if the command is unavailable
-    // (plain-browser context).
-    if (sourcePath && geom) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const { listen } = await import('@tauri-apps/api/event');
+    const commitCombinedResult = (combined: CombinedNativeScanResult) => {
+      const commitStart = performance.now();
+      const voxelMapped: DetectedIsland[] = combined.voxelIslands
+        .filter((v) => {
+          const peak = v.peakAreaMm2 ?? v.maxAreaMm2 ?? v.areaMm2 ?? 0;
+          return (v.isDetached && peak > 0) || peak >= minAreaMm2;
+        })
+        .map((v) => ({
+          id: v.id,
+          source: 'voxel',
+          contact: new THREE.Vector3(v.contact.x, v.contact.y, v.contact.z),
+          baseZ: v.baseZ,
+          rawBaseZ: v.rawBaseZ,
+          areaMm2: v.areaMm2,
+          peakAreaMm2: v.peakAreaMm2 ?? v.maxAreaMm2,
+          isDetached: v.isDetached,
+          layerSpan: v.layerSpan,
+          contactVoxels: v.contactVoxels && v.contactVoxels.length >= 2
+            ? { xy: new Float32Array(v.contactVoxels), z: null, count: v.contactVoxels.length / 2 }
+            : undefined,
+        }));
+      const minimaMapped: DetectedIsland[] = combined.minimaIslands.map((m, i) => ({
+        id: `m${i}`,
+        source: 'minima',
+        contact: new THREE.Vector3(m.position.x, m.position.y, m.position.z),
+        baseZ: m.position.z,
+        vertexIndex: m.vertexIndex,
+        seedTriangleId: m.seedTriangleId,
+      }));
+      const overhangMapped = remapOverhangTriangleIds(
+        combined.overhangIslands ?? [],
+        geom?.geometry,
+        transform,
+      ).map(overhangRegionToIsland);
+      const topple = scanNeedsCoverage(combined.stability);
+      const drag = combined.stability?.dragMomentMm3 ?? 0;
 
-        if (!geom.geometry.boundingBox) {
-          geom.geometry.computeBoundingBox();
+      setVoxelIslands(voxelMapped);
+      setMinimaIslands(minimaMapped);
+      setToppleCoverage(topple);
+      setDragTotalMm3(drag);
+      setOverhangIslands(overhangMapped);
+      setHasScanned(true);
+
+      if (cacheKey) {
+        scanCacheRef.current.set(cacheKey, {
+          voxel: voxelMapped,
+          minima: minimaMapped,
+          overhang: overhangMapped,
+          toppleCoverage: topple,
+          dragTotalMm3: drag,
+        });
+      }
+      mark('commit', commitStart);
+    };
+
+    try {
+      // Yield immediately so React can flush the "scanning" state and show
+      // the progress modal before we start expensive synchronous work.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (scanEpochRef.current !== epoch) return;
+
+      const isTauri = hasTauriRuntime();
+      let local: {
+        positions: Float32Array;
+        matrix: number[];
+        center: [number, number, number];
+      } | null = null;
+      if (isTauri) {
+        try {
+          const prepStart = performance.now();
+          local = prepareLocalGeom();
+          mark('prep', prepStart);
+        } catch (err) {
+          console.warn('[Islands] local mesh prep failed', err);
         }
-        const bb = geom.geometry.boundingBox!;
-        const center = bb.getCenter(new THREE.Vector3());
+      }
 
-        const matrix = new THREE.Matrix4().compose(
-          transform.position.clone(),
-          quaternionFromGlobalEuler(transform.rotation),
-          transform.scale.clone(),
-        );
+      let usedNative = false;
+      let mappedOverhangs: DetectedIsland[] = [];
+      const overhangSelfSupportAngleDeg = getSettings().autoSupport?.overhangSelfSupportAngleDeg
+        ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG;
 
-        const matrixElements = Array.from(matrix.elements);
-        const centerCoords = [center.x, center.y, center.z];
+      // Primary Native Path: stage pre-TRS local soup + matrix/center so Rust welds
+      // in pose-invariant local space before transforming.
+      if (isTauri && local !== null) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const { listen } = await import('@tauri-apps/api/event');
+          const unlisten = await listen<{ done: number; total: number }>(
+            'island-scan-progress',
+            (e) => {
+              if (scanEpochRef.current !== epoch) return;
+              setScanProgress({ done: e.payload.done, total: e.payload.total });
+            },
+          );
+          try {
+            if (scanEpochRef.current !== epoch) return;
+            setScanProgress({ done: 0, total: 100 });
 
-        // Overhang is classified on the exact soup the overlay draws, so its
-        // triangle ids index `geom.geometry`. Staging it also keeps the mesh
-        // off the JSON path: the command reads raw f32 bytes.
-        let world: { positions: Float32Array; bbox: THREE.Box3 } | null = null;
+            const { positions } = local;
+            const stageStart = performance.now();
+            await invoke(
+              'stage_mesh_binary_set',
+              new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
+              { headers: { 'Content-Type': 'application/octet-stream' } },
+            );
+            mark('stage', stageStart);
+            if (scanEpochRef.current !== epoch) return;
+
+            const scanStart = performance.now();
+            const combined = await invoke<CombinedNativeScanResult>('scan_islands_staged', {
+              layerHeightMm,
+              pxMm,
+              supportBufferMm: supportBufMm,
+              connectivity,
+              k: minimaK,
+              overhangSelfSupportAngleDeg,
+              overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
+              hasRaft,
+              matrix: local.matrix,
+              center: local.center,
+            });
+            mark('scan', scanStart);
+            if (scanEpochRef.current !== epoch) return;
+
+            perf.path = 'native';
+            commitCombinedResult(combined);
+            usedNative = true;
+          } finally {
+            await unlisten();
+          }
+        } catch (err) {
+          console.warn('[Islands] staged native scan failed; checking fallback', err);
+        }
+      }
+
+      // Sideload Fallback Path: ONLY if local soup prep returned null while sourcePath exists
+      if (!usedNative && isTauri && local === null && sourcePath && geom) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const { listen } = await import('@tauri-apps/api/event');
+
+          if (!geom.geometry.boundingBox) {
+            geom.geometry.computeBoundingBox();
+          }
+          const bb = geom.geometry.boundingBox!;
+          const center = bb.getCenter(new THREE.Vector3());
+
+          const matrix = new THREE.Matrix4().compose(
+            transform.position.clone(),
+            quaternionFromGlobalEuler(transform.rotation),
+            transform.scale.clone(),
+          );
+
+          const matrixElements = Array.from(matrix.elements);
+          const centerCoords = [center.x, center.y, center.z];
+
+          const unlisten = await listen<{ done: number; total: number }>(
+            'island-scan-progress',
+            (e) => {
+              if (scanEpochRef.current !== epoch) return;
+              setScanProgress({ done: e.payload.done, total: e.payload.total });
+            },
+          );
+          try {
+            if (scanEpochRef.current !== epoch) return;
+            setScanProgress({ done: 0, total: 100 });
+
+            console.log(`[Islands] Sideloading combined island scan from path: ${sourcePath}`);
+            const scanStart = performance.now();
+            const combined = await invoke<CombinedNativeScanResult>(
+              'scan_islands_from_path',
+              {
+                filePath: sourcePath,
+                matrix: matrixElements,
+                center: centerCoords,
+                layerHeightMm,
+                pxMm,
+                supportBufferMm: supportBufMm,
+                connectivity,
+                k: minimaK,
+                overhangSelfSupportAngleDeg,
+                overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
+                overhangFromStaged: false,
+                hasRaft,
+              },
+            );
+            mark('scan', scanStart);
+            if (scanEpochRef.current !== epoch) return;
+
+            perf.path = 'sideload';
+            commitCombinedResult(combined);
+            usedNative = true;
+          } finally {
+            await unlisten();
+          }
+        } catch (err) {
+          console.warn('[Islands] Sideloaded Rust scan failed', err);
+        }
+      }
+
+      // Client Fallback Path
+      let world: { positions: Float32Array; bbox: THREE.Box3 } | null = null;
+      if (!usedNative) {
         try {
           world = prepareWorldGeom();
         } catch (err) {
-          console.warn('[Islands] world soup prep failed; overhang will use the file mesh', err);
+          console.warn('[Islands] mesh prep failed', err);
         }
-        if (world) {
-          const { positions } = world;
-          await invoke(
-            'stage_mesh_binary_set',
-            new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
-            { headers: { 'Content-Type': 'application/octet-stream' } },
-          );
-        }
+      }
+      if (!usedNative && world !== null) {
+        perf.path = 'client';
+        const clientStart = performance.now();
+        let topple = true;
+        let drag = 0;
 
-        // The combined Rust scan emits phase progress — wire it into the
-        // progress modal so the bar moves immediately (the overhang pass runs
-        // inside the same command; no TS geometry round trip up front).
-        const unlisten = await listen<{ done: number; total: number }>(
-          'island-scan-progress',
-          (e) => {
+        if (isTauri) {
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const { positions } = world;
+            await invoke(
+              'stage_mesh_binary_set',
+              new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
+              { headers: { 'Content-Type': 'application/octet-stream' } },
+            );
             if (scanEpochRef.current !== epoch) return;
-            setScanProgress({ done: e.payload.done, total: e.payload.total });
-          },
-        );
-
-        if (scanEpochRef.current !== epoch) return;
-        setScanProgress({ done: 0, total: 100 });
-
-        console.log(`[Islands] Sideloading combined island scan from path: ${sourcePath}`);
-        const combined = await invoke<{
-          voxelIslands: Array<{
-            id: string;
-            contact: { x: number; y: number; z: number };
-            baseZ: number;
-            areaMm2?: number;
-            layerSpan: [number, number];
-            contactVoxels?: number[];
-          }>;
-          minimaIslands: Array<{
-            position: { x: number; y: number; z: number };
-            vertexIndex?: number;
-            seedTriangleId?: number;
-          }>;
-          overhangIslands: OverhangRegion[];
-          stability?: PoseStabilityWire | null;
-        }>(
-          'scan_islands_from_path',
-          {
-            filePath: sourcePath,
-            matrix: matrixElements,
-            center: centerCoords,
-            layerHeightMm,
-            pxMm,
-            supportBufferMm: supportBufMm,
-            connectivity,
-            k: minimaK,
-            // Overhang classification runs inside the combined command on the
-            // already-loaded mesh (the self-support angle is a user knob).
-            overhangSelfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
-              ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
-            overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
-            overhangFromStaged: world !== null,
-            hasRaft,
-          },
-        ).finally(() => unlisten());
-
-        // The model may have been deleted/replaced while the command ran —
-        // discard results that belong to a superseded scan.
-        if (scanEpochRef.current !== epoch) return;
-
-        const voxelMapped: DetectedIsland[] = combined.voxelIslands
-          .filter((v) => (v.areaMm2 ?? 0) >= minAreaMm2)
-          .map((v) => ({
-            id: v.id,
-            source: 'voxel',
-            contact: new THREE.Vector3(v.contact.x, v.contact.y, v.contact.z),
-            baseZ: v.baseZ,
-            areaMm2: v.areaMm2,
-            layerSpan: v.layerSpan,
-            contactVoxels: v.contactVoxels && v.contactVoxels.length >= 2
-              ? { xy: new Float32Array(v.contactVoxels), z: null, count: v.contactVoxels.length / 2 }
-              : undefined,
-          }));
-        setVoxelIslands(voxelMapped);
-
-        const minimaMapped: DetectedIsland[] = combined.minimaIslands.map((m, i) => ({
-          id: `m${i}`,
-          source: 'minima',
-          contact: new THREE.Vector3(m.position.x, m.position.y, m.position.z),
-          baseZ: m.position.z,
-          vertexIndex: m.vertexIndex,
-          seedTriangleId: m.seedTriangleId,
-        }));
-        setMinimaIslands(minimaMapped);
-
-        // The command classified overhang on the staged soup, so the ids
-        // index exactly what the overlay draws; the stability report came
-        // back with the same pass. Nothing else to re-run here.
-        setToppleCoverage(scanNeedsCoverage(combined.stability));
-        setDragTotalMm3(combined.stability?.dragMomentMm3 ?? 0);
-        mappedOverhangs = (combined.overhangIslands ?? []).map(overhangRegionToIsland);
-        setOverhangIslands(mappedOverhangs);
-
-        // Cache the scan results for this model + transform
-        if (cacheKey) {
-          scanCacheRef.current.set(cacheKey, { voxel: voxelMapped, minima: minimaMapped, overhang: mappedOverhangs });
-        }
-
-        usedSideload = true;
-      } catch (err) {
-        console.warn('[Islands] Sideloaded Rust scan failed, falling back to client-side...', err);
-      }
-    }
-
-    if (!usedSideload) {
-      // Mesh prep can throw on a stale/disposed geometry (model deleted or
-      // replaced mid-scan). It sits outside the scan's try/finally, so an
-      // uncaught throw would strand `scanning` true and freeze the
-      // auto-support busy chain. Guard it and cancel cleanly.
-      let world: { positions: Float32Array; bbox: THREE.Box3 } | null = null;
-      try {
-        world = prepareWorldGeom();
-      } catch (err) {
-        console.warn('[Islands] mesh prep failed; cancelling scan', err);
-      }
-      if (!world) {
-        setScanning(false);
-        return;
-      }
-
-      // A pathless model (VOXL) has no file for the combined path, but the
-      // staged soup is exactly what that command needs. Run the whole native
-      // scan here first: voxel islands, minima and overhang in one pass, with
-      // no JSON geometry and no second mesh weld.
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const { listen } = await import('@tauri-apps/api/event');
-        const unlisten = await listen<{ done: number; total: number }>(
-          'island-scan-progress',
-          (e) => {
+            const scan = await invoke<OverhangScan>('scan_overhangs_staged', {
+              selfSupportAngleDeg: overhangSelfSupportAngleDeg,
+              pxMm: OVERHANG_FOOTPRINT_PX_MM,
+              label: sourcePath ?? null,
+              hasRaft,
+            });
             if (scanEpochRef.current !== epoch) return;
-            setScanProgress({ done: e.payload.done, total: e.payload.total });
-          },
-        );
-        const { positions } = world;
-        await invoke(
-          'stage_mesh_binary_set',
-          new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
-          { headers: { 'Content-Type': 'application/octet-stream' } },
-        );
-        const combined = await invoke<{
-          voxelIslands: Array<{
-            id: string;
-            contact: { x: number; y: number; z: number };
-            baseZ: number;
-            areaMm2?: number;
-            layerSpan: [number, number];
-            contactVoxels?: number[];
-          }>;
-          minimaIslands: Array<{
-            position: { x: number; y: number; z: number };
-            vertexIndex?: number;
-            seedTriangleId?: number;
-          }>;
-          overhangIslands: OverhangRegion[];
-          stability?: PoseStabilityWire | null;
-        }>('scan_islands_staged', {
-          layerHeightMm,
-          pxMm,
-          supportBufferMm: supportBufMm,
-          connectivity,
-          k: minimaK,
-          overhangSelfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
-            ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
-          overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
-          hasRaft,
-        }).finally(() => unlisten());
-        if (scanEpochRef.current !== epoch) return;
-
-        const voxelMapped: DetectedIsland[] = combined.voxelIslands
-          .filter((v) => (v.areaMm2 ?? 0) >= minAreaMm2)
-          .map((v) => ({
-            id: v.id,
-            source: 'voxel',
-            contact: new THREE.Vector3(v.contact.x, v.contact.y, v.contact.z),
-            baseZ: v.baseZ,
-            areaMm2: v.areaMm2,
-            layerSpan: v.layerSpan,
-            contactVoxels: v.contactVoxels && v.contactVoxels.length >= 2
-              ? { xy: new Float32Array(v.contactVoxels), z: null, count: v.contactVoxels.length / 2 }
-              : undefined,
-          }));
-        const minimaMapped: DetectedIsland[] = combined.minimaIslands.map((m, i) => ({
-          id: `m${i}`,
-          source: 'minima',
-          contact: new THREE.Vector3(m.position.x, m.position.y, m.position.z),
-          baseZ: m.position.z,
-          vertexIndex: m.vertexIndex,
-          seedTriangleId: m.seedTriangleId,
-        }));
-        const overhangs = (combined.overhangIslands ?? []).map(overhangRegionToIsland);
-        setVoxelIslands(voxelMapped);
-        setMinimaIslands(minimaMapped);
-        setToppleCoverage(scanNeedsCoverage(combined.stability));
-        setDragTotalMm3(combined.stability?.dragMomentMm3 ?? 0);
-        setOverhangIslands(overhangs);
-        if (cacheKey) {
-          scanCacheRef.current.set(cacheKey, { voxel: voxelMapped, minima: minimaMapped, overhang: overhangs });
+            topple = scanNeedsCoverage(scan.stability);
+            drag = scan.stability?.dragMomentMm3 ?? 0;
+            mappedOverhangs = remapOverhangTriangleIds(
+              scan.regions,
+              geom?.geometry,
+              transform,
+            ).map(overhangRegionToIsland);
+            setToppleCoverage(topple);
+            setDragTotalMm3(drag);
+            setOverhangIslands(mappedOverhangs);
+          } catch (err) {
+            console.warn('[Islands] overhang scan failed (non-fatal)', err);
+            setToppleCoverage(true);
+            setDragTotalMm3(0);
+            setOverhangIslands([]);
+          }
+        } else {
+          setToppleCoverage(true);
+          setDragTotalMm3(0);
+          setOverhangIslands([]);
         }
-        setScanning(false);
-        return;
-      } catch (err) {
-        console.warn('[Islands] staged native scan failed; using client-side detectors', err);
-      }
 
-      // Last resort: the client-side detectors. Overhang still goes through
-      // the binary staged command below; only voxel/minima are JS here.
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const { positions } = world;
-        await invoke(
-          'stage_mesh_binary_set',
-          new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
-          { headers: { 'Content-Type': 'application/octet-stream' } },
-        );
-        const scan = await invoke<OverhangScan>('scan_overhangs_staged', {
-          selfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
-            ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
-          pxMm: OVERHANG_FOOTPRINT_PX_MM,
-          label: sourcePath ?? null,
-          hasRaft,
+        if (scanEpochRef.current !== epoch) return;
+        setScanProgress({
+          done: 0,
+          total: Math.max(1, Math.ceil((world.bbox.max.z - world.bbox.min.z) / layerHeightMm)),
         });
-        if (scanEpochRef.current !== epoch) return;
-        setToppleCoverage(scanNeedsCoverage(scan.stability));
-        setDragTotalMm3(scan.stability?.dragMomentMm3 ?? 0);
-        mappedOverhangs = scan.regions.map(overhangRegionToIsland);
-        setOverhangIslands(mappedOverhangs);
-      } catch (err) {
-        console.warn('[Islands] overhang scan failed (non-fatal)', err);
-        setOverhangIslands([]);
-      }
 
-      if (scanEpochRef.current !== epoch) return;
-      setScanProgress({
-        done: 0,
-        total: Math.max(1, Math.ceil((world.bbox.max.z - world.bbox.min.z) / layerHeightMm)),
-      });
-      try {
         const params: VoxelDetectParams = {
           pxMm,
           supportBufferMm: supportBufMm,
@@ -670,40 +995,54 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         if (scanEpochRef.current !== epoch) return;
         setVoxelIslands(voxel);
 
+        let minima: DetectedIsland[] = [];
         try {
-          const minima = await scanMeshMinima(world.positions, minimaK);
-          setMinimaIslands(minima);
-          // Cache the scan results for this model + transform
-          if (cacheKey) {
-            scanCacheRef.current.set(cacheKey, { voxel, minima, overhang: mappedOverhangs });
-          }
+          minima = await scanMeshMinima(world.positions, minimaK);
         } catch (err) {
           console.error('[Islands] mesh-minima scan failed', err);
-          setMinimaIslands([]);
-          if (cacheKey) {
-            scanCacheRef.current.set(cacheKey, { voxel, minima: [], overhang: mappedOverhangs });
-          }
+          minima = [];
         }
-      } finally {
-        setScanning(false);
+        if (scanEpochRef.current !== epoch) return;
+        setMinimaIslands(minima);
+        setHasScanned(true);
+        if (cacheKey) {
+          scanCacheRef.current.set(cacheKey, {
+            voxel,
+            minima,
+            overhang: mappedOverhangs,
+            toppleCoverage: topple,
+            dragTotalMm3: drag,
+          });
+        }
+        mark('scan', clientStart);
       }
-    } else {
-      setScanning(false);
+    } finally {
+      if (scanEpochRef.current === epoch) {
+        setScanning(false);
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn(
+            `[IslandsPerf] path=${perf.path} prep=${perf.prep.toFixed(1)}ms stage=${perf.stage.toFixed(1)}ms `
+            + `scan=${perf.scan.toFixed(1)}ms commit=${perf.commit.toFixed(1)}ms total=${(performance.now() - perf.start).toFixed(1)}ms`,
+          );
+        }
+      }
     }
-  }, [geom, transform, sourcePath, prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minAreaMm2, minimaK, hasRaft]);
+  }, [geom, transform, modelId, sourcePath, cacheKey, prepareLocalGeom, prepareWorldGeom, layerHeightMm, pxMm, supportBufMm, connectivity, minAreaMm2, minimaK, hasRaft]);
 
   // Pass 1: Proposed consolidation & classification
   const proposedConsolidated = useMemo(() => timed('proposedConsolidated', () => {
     if (!consolidateVoxel) return voxelIslands;
-    return consolidateVoxelIslands(voxelIslands, consolidationDistance, pxMm);
-  }), [voxelIslands, consolidateVoxel, consolidationDistance, pxMm]);
+    return consolidateVoxelIslands(voxelIslands, consolidationDistance, pxMm, layerHeightMm);
+  }), [voxelIslands, consolidateVoxel, consolidationDistance, pxMm, layerHeightMm]);
+
+  const zBandMm = Math.max(2 * layerHeightMm, 0.10);
 
   const proposedClassified = useMemo(() => {
     return classifyIntersection(proposedConsolidated, minimaIslands, {
       xyToleranceMm: 0.5,
-      zBandMm: layerHeightMm,
+      zBandMm,
     });
-  }, [proposedConsolidated, minimaIslands, layerHeightMm]);
+  }, [proposedConsolidated, minimaIslands, zBandMm]);
 
   // Determine contoured IDs based on proposed list
   const contouredIds = useMemo(() => timed('contouredIds', () => {
@@ -729,9 +1068,9 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   const classifiedResult = useMemo(() => timed('classifiedResult', () => {
     return classifyIntersection(finalVoxelIslands, minimaIslands, {
       xyToleranceMm: 0.5,
-      zBandMm: layerHeightMm,
+      zBandMm,
     });
-  }), [finalVoxelIslands, minimaIslands, layerHeightMm]);
+  }), [finalVoxelIslands, minimaIslands, zBandMm]);
 
   // Merge overhang regions into the classified set (dedupe + inclusion):
   // the mesh-normal classifier and the slice-growth detector flag the same
@@ -739,13 +1078,18 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   // region is dropped in favor of the surface-accurate region. Overhang
   // islands then flow through annotation, filtering, the list, and
   // auto-support candidate generation.
-  const mergedIslands = useMemo(
-    () => mergeOverhangRegions(classifiedResult.islands, overhangIslands),
-    [classifiedResult, overhangIslands],
+  const mergedResult = useMemo(
+    () => mergeOverhangResults(classifiedResult, overhangIslands, {
+      voxelPxMm: pxMm,
+      layerHeightMm,
+      overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
+    }),
+    [classifiedResult, overhangIslands, pxMm, layerHeightMm],
   );
 
-  const allIslands = mergedIslands;
-  const stats = classifiedResult.stats;
+  const displayResult = showOverhangs ? mergedResult : classifiedResult;
+  const allIslands = displayResult.islands;
+  const stats = displayResult.stats;
 
   const mappedSupportTips = useMemo<TipInfo[]>(() => {
     const state = getSnapshot();
@@ -797,19 +1141,35 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     return annotateAndCountSupports(allIslands, islandContactGrid, mappedSupportTips, plateZ, areaPerSupport, layerHeightMm);
   }), [allIslands, islandContactGrid, mappedSupportTips, plateZ, areaPerSupport, layerHeightMm]);
 
+  const overhangContactGrid = useMemo(
+    () => (!showOverhangs && overhangIslands.length > 0 ? buildIslandContactGrid(overhangIslands) : null),
+    [showOverhangs, overhangIslands],
+  );
+
   const tableStats = useMemo(() => {
-    const voxelTotal = annotatedIslands.filter(i => i.class === 'voxelOnly' && i.source === 'voxel').length;
-    const voxelUnsupported = annotatedIslands.filter(i => i.class === 'voxelOnly' && i.source === 'voxel' && !i.supported && !i.grounded).length;
-    
-    const geomTotal = annotatedIslands.filter(i => i.class === 'minimaOnly' && i.source === 'minima').length;
-    const geomUnsupported = annotatedIslands.filter(i => i.class === 'minimaOnly' && i.source === 'minima' && !i.supported && !i.grounded).length;
-    
-    const coincidentTotal = annotatedIslands.filter(i => i.class === 'intersection' && i.source === 'voxel').length;
-    const coincidentUnsupported = annotatedIslands.filter(i => i.class === 'intersection' && i.source === 'voxel' && !i.supported && !i.grounded).length;
-    
+    const voxelItems = annotatedIslands.filter((i) => i.class === 'voxelOnly' && i.source === 'voxel');
+    const voxelTotal = voxelItems.length;
+    const voxelUnsupported = voxelItems.filter((i) => !i.grounded && !isIslandEffectivelySupported(i)).length;
+
+    const geomItems = annotatedIslands.filter((i) => i.class === 'minimaOnly' && i.source === 'minima');
+    const geomTotal = geomItems.length;
+    const geomUnsupported = geomItems.filter((i) => !i.grounded && !isIslandEffectivelySupported(i)).length;
+
+    const coincidentItems = annotatedIslands.filter((i) => i.class === 'intersection' && i.source === 'voxel');
+    const coincidentTotal = coincidentItems.length;
+    const coincidentUnsupported = coincidentItems.filter((i) => !i.grounded && !isIslandEffectivelySupported(i)).length;
+
+    const overhangAnnotated = showOverhangs
+      ? annotatedIslands.filter((i) => i.source === 'overhang')
+      : overhangContactGrid
+        ? annotateAndCountSupports(overhangIslands, overhangContactGrid, mappedSupportTips, plateZ, areaPerSupport, layerHeightMm)
+        : [];
+    const overhangTotal = overhangAnnotated.length;
+    const overhangUnsupported = overhangAnnotated.filter((i) => !i.grounded && !isIslandEffectivelySupported(i)).length;
+
     const allTotal = voxelTotal + geomTotal + coincidentTotal;
     const allUnsupported = voxelUnsupported + geomUnsupported + coincidentUnsupported;
-    
+
     return {
       voxelTotal,
       voxelUnsupported,
@@ -819,15 +1179,23 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       coincidentUnsupported,
       allTotal,
       allUnsupported,
+      overhangTotal,
+      overhangUnsupported,
     };
-  }, [annotatedIslands]);
+  }, [annotatedIslands, showOverhangs, overhangContactGrid, overhangIslands, mappedSupportTips, plateZ, areaPerSupport, layerHeightMm]);
+
+  const filterOptions = useMemo<IslandFilterOptions>(
+    () => ({ contouredIds, consolidateVoxel, removeSupportedAreaClusters }),
+    [contouredIds, consolidateVoxel, removeSupportedAreaClusters],
+  );
 
   const filteredIslands = useMemo(() => {
-    return applyFilter(annotatedIslands.map((i) => ({ ...i })), filterToggles);
-  }, [annotatedIslands, filterToggles]);
+    return applyFilter(annotatedIslands.map((i) => ({ ...i })), filterToggles, filterOptions);
+  }, [annotatedIslands, filterToggles, filterOptions]);
 
   const displayedIslands = useMemo(() => {
     return filteredIslands.filter((island) => {
+      if (island.source === 'overhang') return false;
       if (island.class === 'voxelOnly' && island.source === 'voxel') {
         return showVoxelOnly;
       }
@@ -838,70 +1206,38 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         // Only include the voxel version of the intersection to avoid duplicate navigation items
         return showIntersection && island.source === 'voxel';
       }
-      return true;
+      return false;
     });
   }, [filteredIslands, showVoxelOnly, showMinimaOnly, showIntersection]);
 
-  // Sort by numeric ID for predictable prev/next navigation.
-  const baseOrderedIslands = useMemo(() => {
-    return [...allIslands].sort((a, b) => {
-      const aNum = parseInt(a.id.replace(/^\D+/, ''), 10) || 0;
-      const bNum = parseInt(b.id.replace(/^\D+/, ''), 10) || 0;
-      return aNum - bNum;
-    });
-  }, [allIslands]);
+  // Sort by ascending baseZ (with deterministic tie-breakers) for predictable prev/next navigation.
+  const orderedIslands = useMemo(() => sortIslandsByBaseZ(displayedIslands), [displayedIslands]);
 
-  const orderedIslands = useMemo(() => {
-    const displayedSet = new Set(displayedIslands.map((i) => i.id));
-    return baseOrderedIslands.filter((i) => displayedSet.has(i.id));
-  }, [baseOrderedIslands, displayedIslands]);
-
-  // Per-source pucks for the IslandOverlay layers (blue voxel-only / green minima-only / red intersection).
-  // Retain supported voxel area blobs: keep them in the puck list so they remain visible in 3D,
-  // but still hide grounded ones if filterToggles.showPlateContact is false.
+  // Per-source pucks for the IslandOverlay layers (blue voxel-only / green minima-only / red intersection),
+  // derived strictly from filteredIslands so navigation, byMarkerId, and 3D stay in 1:1 sync.
   const voxelOnlyPucks = useMemo(
     () => buildIslandPucks(
-      showVoxelOnly 
-        ? annotatedIslands.filter((i) => {
-            // Overhang regions render as voxel-style pucks (class stays
-            // undefined; only genuine voxel islands must be voxelOnly).
-            if (i.source === 'overhang') {
-              if (i.grounded && !filterToggles.showPlateContact) return false;
-              return !i.supported;
-            }
-            if (i.source !== 'voxel' || i.class !== 'voxelOnly') return false;
-            if (i.grounded && !filterToggles.showPlateContact) return false;
-            
-            const isContoured = contouredIds.has(i.id);
-            if (isContoured) {
-              return !removeSupportedAreaClusters || !i.fullySupported;
-            } else {
-              return !i.supported;
-            }
-          })
-        : []
+      showVoxelOnly
+        ? filteredIslands.filter((i) => i.source === 'voxel' && i.class === 'voxelOnly')
+        : [],
     ),
-    [annotatedIslands, showVoxelOnly, filterToggles.showPlateContact, contouredIds, removeSupportedAreaClusters],
+    [filteredIslands, showVoxelOnly],
   );
   const minimaOnlyPucks = useMemo(
-    () => buildIslandPucks(showMinimaOnly ? filteredIslands.filter((i) => i.source === 'minima' && i.class === 'minimaOnly') : []),
+    () => buildIslandPucks(
+      showMinimaOnly
+        ? filteredIslands.filter((i) => i.source === 'minima' && i.class === 'minimaOnly')
+        : [],
+    ),
     [filteredIslands, showMinimaOnly],
   );
   const intersectionPucks = useMemo(
     () => buildIslandPucks(
-      annotatedIslands.filter((i) => {
-        if (i.class !== 'intersection' || i.source !== 'voxel') return false;
-        if (i.grounded && !filterToggles.showPlateContact) return false;
-        
-        const isContoured = contouredIds.has(i.id);
-        if (isContoured) {
-          return !removeSupportedAreaClusters || !i.fullySupported;
-        } else {
-          return !i.supported;
-        }
-      })
+      showIntersection
+        ? filteredIslands.filter((i) => i.source === 'voxel' && i.class === 'intersection')
+        : [],
     ),
-    [annotatedIslands, filterToggles.showPlateContact, contouredIds, removeSupportedAreaClusters],
+    [filteredIslands, showIntersection],
   );
 
   const byMarkerId = useMemo(() => {
@@ -912,45 +1248,36 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     for (const [id, island] of minimaOnlyPucks.byMarkerId) {
       merged.set(id, island);
     }
-    if (showIntersection || showVoxelOnly) {
-      for (const [id, island] of intersectionPucks.byMarkerId) {
-        merged.set(id, island);
-      }
+    for (const [id, island] of intersectionPucks.byMarkerId) {
+      merged.set(id, island);
     }
     return merged;
-  }, [voxelOnlyPucks, minimaOnlyPucks, intersectionPucks, showIntersection, showVoxelOnly]);
+  }, [voxelOnlyPucks, minimaOnlyPucks, intersectionPucks]);
 
   // One entry per visible island, shared by the marker list (selection, camera
   // focus) and the instance buffer (rendering) so the two cannot drift apart.
   const islandVisuals = useMemo(() => timed('islandVisuals', () => {
-    const visuals: IslandVisual[] = [];
+    const footprintVisuals: IslandVisual[] = [];
+    const pinVisuals: IslandVisual[] = [];
 
     voxelOnlyPucks.markers.forEach(m => {
       const island = voxelOnlyPucks.byMarkerId.get(m.id);
       const area = island?.areaMm2 ?? 0;
-      const isOverhang = island?.source === 'overhang';
-      // Overhang regions are highlighted as surface meshes (see
-      // IslandOverhangOverlay); here they get a small centroid dot so
-      // selection/fly-to still works without a huge flat disc.
-      const radius = isOverhang
-        ? 0.1
-        : (scaleMarkersWithArea && area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1);
+      const radius = scaleMarkersWithArea && area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1;
 
-      visuals.push({
+      footprintVisuals.push({
         markerId: m.id,
-        type: consolidateVoxel ? 3 : 0,
+        type: resolveVoxelVisualType(island, consolidateVoxel, contouredIds),
         centerX: m.centerX,
         centerY: m.centerY,
         baseZ: m.baseZ,
         radius,
-        // A footprint plate under an overhang would double-render the region
-        // the surface overlay already draws.
-        footprint: isOverhang ? null : island?.contactVoxels ?? null,
+        footprint: island?.contactVoxels ?? null,
       });
     });
 
     minimaOnlyPucks.markers.forEach(m => {
-      visuals.push({
+      pinVisuals.push({
         markerId: m.id,
         type: 1,
         centerX: m.centerX,
@@ -966,11 +1293,11 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       const area = island?.areaMm2 ?? 0;
       const radius = scaleMarkersWithArea && area > 0 ? Math.max(0.1, Math.sqrt(area / Math.PI)) : 0.1;
 
-      // 1. Blue voxel blob (type 3) when voxel-only display is enabled
+      // 1. Voxel footprint (type 0 default, or type 3 when consolidated/contoured)
       if (showVoxelOnly) {
-        visuals.push({
+        footprintVisuals.push({
           markerId: m.id,
-          type: 3,
+          type: resolveVoxelVisualType(island, consolidateVoxel, contouredIds),
           centerX: m.centerX,
           centerY: m.centerY,
           baseZ: m.baseZ,
@@ -979,108 +1306,174 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         });
       }
 
-      // 2. Coincident red dot — only when showIntersection is enabled
-      if (showIntersection && island && (!island.supported || filterToggles.showAlreadySupported)) {
-        visuals.push({
-          markerId: m.id,
-          type: 2,
-          centerX: m.centerX,
-          centerY: m.centerY,
-          baseZ: m.baseZ,
-          radius: 0.1,
-          footprint: null,
-        });
+      // 2. Primary coincident red pin
+      pinVisuals.push({
+        markerId: m.id,
+        type: 2,
+        centerX: m.centerX,
+        centerY: m.centerY,
+        baseZ: m.baseZ,
+        radius: 0.1,
+        footprint: null,
+      });
+
+      // 3. Spaced sub-apex red pins for clustered/large intersection islands
+      if (island?.subApexes?.length && (consolidateVoxel || contouredIds.has(island.id) || area >= 0.06)) {
+        const spacedSubApexes = selectSpacedSubApexes(
+          { x: m.centerX, y: m.centerY, z: m.baseZ },
+          island.subApexes,
+          0.8,
+        );
+        for (const ap of spacedSubApexes) {
+          pinVisuals.push({
+            markerId: m.id,
+            type: 2,
+            centerX: ap.x,
+            centerY: ap.y,
+            baseZ: ap.z,
+            radius: 0.1,
+            footprint: null,
+          });
+        }
       }
     });
 
-    return visuals;
+    return [...footprintVisuals, ...pinVisuals];
   }), [
     voxelOnlyPucks,
     minimaOnlyPucks,
     intersectionPucks,
     consolidateVoxel,
+    contouredIds,
     scaleMarkersWithArea,
-    filterToggles,
     showVoxelOnly,
-    showIntersection,
   ]);
 
-  const islandMarkers = useMemo<IslandMarker[]>(() => timed('islandMarkers', () => (
-    islandVisuals.map(v => ({
-      id: v.markerId,
-      islandId: v.markerId,
-      type: v.type,
-      centerX: v.centerX,
-      centerY: v.centerY,
-      baseZ: v.baseZ,
-      pixelCount: 1,
-      radius: v.radius,
-    }))
-  )), [islandVisuals]);
+  const islandMarkers = useMemo<IslandMarker[]>(() => timed('islandMarkers', () => {
+    const seen = new Set<number>();
+    const markers: IslandMarker[] = [];
+    for (const v of islandVisuals) {
+      if (seen.has(v.markerId)) continue;
+      seen.add(v.markerId);
+      markers.push({
+        id: v.markerId,
+        islandId: v.markerId,
+        type: v.type,
+        centerX: v.centerX,
+        centerY: v.centerY,
+        baseZ: v.baseZ,
+        pixelCount: 1,
+        radius: v.radius,
+      });
+    }
+    return markers;
+  }), [islandVisuals]);
 
   const islandInstances = useMemo(
-    () => timed('islandInstances', () => buildIslandInstances(islandVisuals, pxMm * VOXEL_DISC_RADIUS_FACTOR)),
-    [islandVisuals, pxMm],
+    () => timed('islandInstances', () => buildIslandInstances(islandVisuals, pxMm * VOXEL_DISC_RADIUS_FACTOR, layerHeightMm)),
+    [islandVisuals, pxMm, layerHeightMm],
   );
+
+  // Structural auto-support contract (E.2): decoupled from display/cluster UI
+  // toggles (consolidate, contour, removeSupportedAreaClusters, showOverhangs,
+  // layer visibility, and filterToggles).
+  const structuralMergedIslands = useMemo(() => {
+    if (!consolidateVoxel && showOverhangs) return null;
+    const rawClassified = consolidateVoxel
+      ? classifyIntersection(voxelIslands, minimaIslands, { xyToleranceMm: 0.5, zBandMm })
+      : classifiedResult;
+    return mergeOverhangResults(rawClassified, overhangIslands, {
+      voxelPxMm: pxMm,
+      layerHeightMm,
+      overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
+    }).islands;
+  }, [consolidateVoxel, showOverhangs, voxelIslands, minimaIslands, zBandMm, classifiedResult, overhangIslands, pxMm, layerHeightMm]);
+
+  const structuralContactGrid = useMemo(
+    () => (structuralMergedIslands ? buildIslandContactGrid(structuralMergedIslands) : null),
+    [structuralMergedIslands],
+  );
+
+  const structuralIslands = useMemo(() => {
+    if (!consolidateVoxel && showOverhangs) {
+      return applyFilter(annotatedIslands.map((i) => ({ ...i })), DEFAULT_FILTER_TOGGLES);
+    }
+    const annotated = annotateAndCountSupports(
+      structuralMergedIslands!,
+      structuralContactGrid!,
+      mappedSupportTips,
+      plateZ,
+      areaPerSupport,
+      layerHeightMm,
+    );
+    return applyFilter(annotated, DEFAULT_FILTER_TOGGLES);
+  }, [
+    consolidateVoxel,
+    showOverhangs,
+    annotatedIslands,
+    structuralMergedIslands,
+    structuralContactGrid,
+    mappedSupportTips,
+    plateZ,
+    areaPerSupport,
+    layerHeightMm,
+  ]);
 
   const clear = useCallback(() => {
     setVoxelIslands([]);
     setMinimaIslands([]);
     setOverhangIslands([]);
+    setHasScanned(false);
+    setToppleCoverage(true);
+    setDragTotalMm3(0);
     setSelectedMarkerId(null);
   }, []);
 
-  // Per-model scan cache: (sourcePath + transform signature) → { voxel, minima, overhang }.
-  const scanCacheRef = useRef<Map<string, { voxel: DetectedIsland[]; minima: DetectedIsland[]; overhang: DetectedIsland[] }>>(new Map());
-  const prevSourcePathRef = useRef<string | null | undefined>(undefined);
-  // Bumped on every geom/transform change; an in-flight scan captures the
-  // epoch and discards its results if the model changed while it ran — a
-  // superseded scan must not commit the old model's islands.
+  // Per-model scan cache: (modelId/sourcePath + geometry uuid + transform signature) → CachedScan.
+  const scanCacheRef = useRef<Map<string, CachedScan>>(new Map());
+  const prevCacheKeyRef = useRef<string | null | undefined>(undefined);
+  // Bumped on every cacheKey change; an in-flight scan captures the
+  // epoch and discards its results if the model or transform changed while it ran.
   const scanEpochRef = useRef(0);
 
-  // On sourcePath change: restore from cache instead of clearing
+  // Unified restore/invalidate effect keyed on cacheKey (modelId + geometry.uuid + transform).
   useEffect(() => {
-    const prev = prevSourcePathRef.current;
-    prevSourcePathRef.current = sourcePath;
-    if (!sourcePath || prev === sourcePath) return;
-
-    const cached = cacheKey ? scanCacheRef.current.get(cacheKey) : undefined;
-    if (cached) {
-      setVoxelIslands(cached.voxel);
-      setMinimaIslands(cached.minima);
-      setOverhangIslands(cached.overhang ?? []);
-      setSelectedMarkerId(null);
+    const prev = prevCacheKeyRef.current;
+    if (prev === undefined) {
+      prevCacheKeyRef.current = cacheKey;
+      const cached = cacheKey ? scanCacheRef.current.get(cacheKey) : undefined;
+      if (cached) {
+        setVoxelIslands(cached.voxel);
+        setMinimaIslands(cached.minima);
+        setOverhangIslands(cached.overhang);
+        setHasScanned(true);
+        setToppleCoverage(cached.toppleCoverage);
+        setDragTotalMm3(cached.dragTotalMm3);
+        setSelectedMarkerId(null);
+      }
       return;
     }
 
-    // No cache entry — clear for new model
-    clear();
-  }, [sourcePath, cacheKey, clear]);
+    if (prev !== cacheKey) {
+      prevCacheKeyRef.current = cacheKey;
+      scanEpochRef.current += 1;
+      setScanning(false);
+      setScanProgress(null);
 
-  // On transform/geom change: always clear (scan is invalidated) and release
-  // the scanning flag — an in-flight scan belongs to the old model. If the
-  // old scan's async work throws on the stale geometry, its own cleanup never
-  // runs, and a stuck `scanning` freezes the auto-support busy chain (the
-  // deferred effect waits forever, `autoSupportDrivingScan` stays set, and
-  // the Generating/scanning modals stop appearing for the new model).
-  useEffect(() => {
-    scanEpochRef.current += 1;
-    clear();
-    setScanning(false);
-    setScanProgress(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    geom,
-    transform.position.x,
-    transform.position.y,
-    transform.position.z,
-    transform.rotation.x,
-    transform.rotation.y,
-    transform.rotation.z,
-    transform.scale.x,
-    transform.scale.y,
-    transform.scale.z,
-  ]);
+      const cached = cacheKey ? scanCacheRef.current.get(cacheKey) : undefined;
+      if (cached) {
+        setVoxelIslands(cached.voxel);
+        setMinimaIslands(cached.minima);
+        setOverhangIslands(cached.overhang);
+        setHasScanned(true);
+        setToppleCoverage(cached.toppleCoverage);
+        setDragTotalMm3(cached.dragTotalMm3);
+        setSelectedMarkerId(null);
+      } else {
+        clear();
+      }
+    }
+  }, [cacheKey, clear]);
 
   const selectNext = useCallback(() => {
     if (orderedIslands.length === 0) return;
@@ -1172,7 +1565,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   const resetSettings = useCallback(() => {
     setDraftPxMm(0.05);
     setDraftSupportBufMm(0.25);
-    setDraftConnectivity(4);
+    setDraftConnectivity(8);
     setDraftConsolidateVoxel(false);
     setDraftConsolidationDistance(0.2);
     setDraftReduceIntersection(false);
@@ -1188,6 +1581,8 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
 
   return {
     scanning,
+    hasScanned,
+    poseKey: cacheKey,
     scanProgress,
     elapsedLabel,
     voxelIslands,
@@ -1197,6 +1592,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     dragTotalMm3,
     filteredIslands,
     orderedIslands,
+    structuralIslands,
     voxelOnlyPucks,
     minimaOnlyPucks,
     intersectionPucks,
@@ -1288,26 +1684,36 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
   };
 }
 
-function dilateVoxelGrid(voxels: VoxelFootprint, pxMm: number, consolidationDistance: number): VoxelFootprint {
-  if (voxels.count === 0) return voxels;
+function dilateVoxelGrid(
+  voxels: VoxelFootprint,
+  pxMm: number,
+  consolidationDistance: number,
+  fallbackZ?: number,
+): VoxelFootprint {
+  if (voxels.count === 0 || pxMm <= 0) return voxels;
 
-  const gridSet = new Set<number>();
-  const originalCoords: { ix: number; iy: number }[] = [];
+  const anchorX = footprintX(voxels, 0);
+  const anchorY = footprintY(voxels, 0);
+  const preserveZ = voxels.z !== null || fallbackZ !== undefined;
+
+  const cellMinZ = new Map<number | string, number>();
+  const originalCoords: { ix: number; iy: number; key: number | string }[] = [];
 
   for (let i = 0; i < voxels.count; i++) {
-    const ix = Math.round(footprintX(voxels, i) / pxMm);
-    const iy = Math.round(footprintY(voxels, i) / pxMm);
-    const key = cellKey(ix, iy);
-    if (!gridSet.has(key)) {
-      gridSet.add(key);
-      originalCoords.push({ ix, iy });
+    const ix = Math.round((footprintX(voxels, i) - anchorX) / pxMm);
+    const iy = Math.round((footprintY(voxels, i) - anchorY) / pxMm);
+    const key = gridBucketKey(ix, iy);
+    const vz = preserveZ ? (footprintZ(voxels, i) ?? fallbackZ ?? 0) : 0;
+    const prevZ = cellMinZ.get(key);
+    if (prevZ === undefined) {
+      cellMinZ.set(key, vz);
+      originalCoords.push({ ix, iy, key });
+    } else if (preserveZ && vz < prevZ) {
+      cellMinZ.set(key, vz);
     }
   }
 
   const rPix = Math.max(1, Math.round(consolidationDistance / (2 * pxMm)));
-  const dilatedSet = new Set<number>();
-  const dilatedVoxels = new VoxelFootprintBuilder(originalCoords.length);
-
   const offsets: { dx: number; dy: number }[] = [];
   for (let dx = -rPix; dx <= rPix; dx++) {
     for (let dy = -rPix; dy <= rPix; dy++) {
@@ -1317,40 +1723,70 @@ function dilateVoxelGrid(voxels: VoxelFootprint, pxMm: number, consolidationDist
     }
   }
 
+  const dilatedMinZ = new Map<number | string, number>();
+  const dilatedCells: { nix: number; niy: number; key: number | string }[] = [];
+
   for (const coord of originalCoords) {
+    const coordZ = cellMinZ.get(coord.key)!;
     for (const offset of offsets) {
       const nix = coord.ix + offset.dx;
       const niy = coord.iy + offset.dy;
-      const nkey = cellKey(nix, niy);
-      if (!dilatedSet.has(nkey)) {
-        dilatedSet.add(nkey);
-        dilatedVoxels.push(nix * pxMm, niy * pxMm);
+      const nkey = gridBucketKey(nix, niy);
+      const prev = dilatedMinZ.get(nkey);
+      if (prev === undefined) {
+        dilatedMinZ.set(nkey, coordZ);
+        dilatedCells.push({ nix, niy, key: nkey });
+      } else if (preserveZ && coordZ < prev) {
+        dilatedMinZ.set(nkey, coordZ);
       }
     }
+  }
+
+  const dilatedVoxels = new VoxelFootprintBuilder(dilatedCells.length, preserveZ);
+  for (const cell of dilatedCells) {
+    dilatedVoxels.push(
+      anchorX + cell.nix * pxMm,
+      anchorY + cell.niy * pxMm,
+      preserveZ ? dilatedMinZ.get(cell.key) : undefined,
+    );
   }
 
   return dilatedVoxels.build();
 }
 
-export function consolidateVoxelIslands(islands: DetectedIsland[], epsilonMm: number, pxMm: number): DetectedIsland[] {
+export function consolidateVoxelIslands(
+  islands: DetectedIsland[],
+  epsilonMm: number,
+  pxMm: number,
+  layerHeightMm = 0.05,
+): DetectedIsland[] {
   const n = islands.length;
   if (n === 0) return [];
-  
+
   const minAreaForContour = 0.06; // mm² (resolution-invariant)
 
   if (n === 1) {
-    const single = { ...islands[0] };
-    if ((single.areaMm2 ?? 0) >= minAreaForContour && !isEmptyFootprint(single.contactVoxels)) {
-      const dilated = dilateVoxelGrid(single.contactVoxels!, pxMm, epsilonMm);
-      single.contactVoxels = dilated;
-      single.areaMm2 = dilated.count * pxMm * pxMm;
-    }
-    single.members = [{ ...islands[0] }];
-    return [single];
+    return [{ ...islands[0], members: [{ ...islands[0] }] }];
   }
 
   const eps2 = epsilonMm * epsilonMm;
+  const zTol = 2 * layerHeightMm + 1e-6;
+  const maxSpanMm = Math.max(epsilonMm, 3 * epsilonMm);
+
   const parent = Array.from({ length: n }, (_, i) => i);
+  const minX = new Float64Array(n);
+  const maxX = new Float64Array(n);
+  const minY = new Float64Array(n);
+  const maxY = new Float64Array(n);
+  const minZ = new Float64Array(n);
+  const maxZ = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const isl = islands[i];
+    minX[i] = maxX[i] = isl.contact.x;
+    minY[i] = maxY[i] = isl.contact.y;
+    minZ[i] = maxZ[i] = isl.baseZ;
+  }
+
   const find = (x: number): number => {
     let root = x;
     while (parent[root] !== root) root = parent[root];
@@ -1361,14 +1797,32 @@ export function consolidateVoxelIslands(islands: DetectedIsland[], epsilonMm: nu
     }
     return root;
   };
-  const union = (a: number, b: number): void => {
-    parent[find(a)] = find(b);
-  };
 
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      if (islands[i].contact.distanceToSquared(islands[j].contact) <= eps2) {
-        union(i, j);
+      if (Math.abs(islands[i].baseZ - islands[j].baseZ) > zTol) continue;
+      if (islands[i].contact.distanceToSquared(islands[j].contact) > eps2) continue;
+      const ri = find(i);
+      const rj = find(j);
+      if (ri === rj) continue;
+      const mMinX = Math.min(minX[ri], minX[rj]);
+      const mMaxX = Math.max(maxX[ri], maxX[rj]);
+      const mMinY = Math.min(minY[ri], minY[rj]);
+      const mMaxY = Math.max(maxY[ri], maxY[rj]);
+      const mMinZ = Math.min(minZ[ri], minZ[rj]);
+      const mMaxZ = Math.max(maxZ[ri], maxZ[rj]);
+      if (
+        (mMaxZ - mMinZ) <= zTol &&
+        (mMaxX - mMinX) <= maxSpanMm &&
+        (mMaxY - mMinY) <= maxSpanMm
+      ) {
+        parent[ri] = rj;
+        minX[rj] = mMinX;
+        maxX[rj] = mMaxX;
+        minY[rj] = mMinY;
+        maxY[rj] = mMaxY;
+        minZ[rj] = mMinZ;
+        maxZ[rj] = mMaxZ;
       }
     }
   }
@@ -1388,30 +1842,44 @@ export function consolidateVoxelIslands(islands: DetectedIsland[], epsilonMm: nu
   for (const members of byRoot.values()) {
     const hasCluster = members.some((m) => (m.areaMm2 ?? 0) >= minAreaForContour);
 
-    if (hasCluster) {
+    if (members.length >= 2 && hasCluster) {
       members.sort((a, b) => a.baseZ - b.baseZ);
       const lowest = members[0];
 
-      let sumX = 0, sumY = 0, totalArea = 0;
-      let minFirstLayer = Infinity, maxLastLayer = -Infinity;
-      const memberFootprints: VoxelFootprint[] = [];
+      let totalArea = 0;
+      let totalVoxels = 0;
+      let minFirstLayer = Infinity;
+      let maxLastLayer = -Infinity;
       for (const m of members) {
-        sumX += m.contact.x;
-        sumY += m.contact.y;
         totalArea += m.areaMm2 ?? 0;
         if (m.layerSpan) {
           minFirstLayer = Math.min(minFirstLayer, m.layerSpan[0]);
           maxLastLayer = Math.max(maxLastLayer, m.layerSpan[1]);
         }
         if (m.contactVoxels) {
-          memberFootprints.push(m.contactVoxels);
+          totalVoxels += m.contactVoxels.count;
         }
       }
 
-      const mergedFootprint = concatFootprints(memberFootprints);
-      const dilatedVoxels = mergedFootprint.count > 0
-        ? dilateVoxelGrid(mergedFootprint, pxMm, epsilonMm)
-        : undefined;
+      let dilatedVoxels: VoxelFootprint | undefined;
+      if (totalVoxels > 0) {
+        const mergedBuilder = new VoxelFootprintBuilder(totalVoxels, true);
+        for (const m of members) {
+          const fp = m.contactVoxels;
+          if (!fp || fp.count === 0) continue;
+          for (let k = 0; k < fp.count; k++) {
+            mergedBuilder.push(
+              footprintX(fp, k),
+              footprintY(fp, k),
+              footprintZ(fp, k) ?? m.baseZ,
+            );
+          }
+        }
+        const mergedFootprint = mergedBuilder.build();
+        if (mergedFootprint.count > 0) {
+          dilatedVoxels = dilateVoxelGrid(mergedFootprint, pxMm, epsilonMm, lowest.baseZ);
+        }
+      }
 
       const finalArea = (dilatedVoxels && dilatedVoxels.count > 0)
         ? dilatedVoxels.count * pxMm * pxMm
@@ -1518,90 +1986,64 @@ export function determineContourThreshold(
   return contouredIds;
 }
 
-interface IslandGridEntry {
-  islandIndex: number;
-  x: number;
-  y: number;
-  z: number;
+const ISLAND_SOURCE_RANK: Record<DetectedIsland['source'], number> = {
+  voxel: 0,
+  minima: 1,
+  overhang: 2,
+};
+
+export function selectSpacedSubApexes(
+  primary: { x: number; y: number; z: number },
+  subApexes: ReadonlyArray<{ x: number; y: number; z: number }> | undefined,
+  minSpacingMm = 0.8,
+): Array<{ x: number; y: number; z: number }> {
+  if (!subApexes || subApexes.length === 0) return [];
+  const accepted: Array<{ x: number; y: number; z: number }> = [];
+  if (Number.isFinite(primary.x) && Number.isFinite(primary.y) && Number.isFinite(primary.z)) {
+    accepted.push(primary);
+  }
+  const safeSpacing = Number.isFinite(minSpacingMm) ? Math.max(0, minSpacingMm) : 0.8;
+  const minD2 = safeSpacing * safeSpacing;
+  const selected: Array<{ x: number; y: number; z: number }> = [];
+
+  for (const ap of subApexes) {
+    if (!Number.isFinite(ap.x) || !Number.isFinite(ap.y) || !Number.isFinite(ap.z)) continue;
+    let nearestD2 = Infinity;
+    for (const prev of accepted) {
+      const dx = ap.x - prev.x;
+      const dy = ap.y - prev.y;
+      const dz = ap.z - prev.z;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < nearestD2) nearestD2 = d2;
+    }
+    if (nearestD2 >= minD2) {
+      accepted.push(ap);
+      selected.push(ap);
+    }
+  }
+
+  return selected;
 }
 
-/**
- * Indexes every contact voxel of every island for tip proximity queries.
- *
- * Kept separate from {@link annotateAndCountSupports} because it depends only on
- * the islands: placing a single support changes the tips, not the geometry, and
- * rebuilding this grid over hundreds of thousands of voxels on every placement
- * was the bulk of the freeze after each click. Entry indices refer to positions
- * in `islands`, which `annotateAndCountSupports` preserves.
- */
-function buildIslandContactGrid(islands: DetectedIsland[]): SpatialHashGrid2D<IslandGridEntry> {
-  const grid = new SpatialHashGrid2D<IslandGridEntry>(1.0);
-  islands.forEach((island, islandIndex) => {
-    const z = island.contact.z;
-    const footprint = island.contactVoxels;
-    if (footprint && footprint.count > 0) {
-      for (let i = 0; i < footprint.count; i++) {
-        const vx = footprintX(footprint, i);
-        const vy = footprintY(footprint, i);
-        grid.insert(vx, vy, { islandIndex, x: vx, y: vy, z });
-      }
-    } else {
-      grid.insert(island.contact.x, island.contact.y, { islandIndex, x: island.contact.x, y: island.contact.y, z });
+export function sortIslandsByBaseZ(islands: readonly DetectedIsland[]): DetectedIsland[] {
+  return [...islands].sort((a, b) => {
+    const aZ = Number.isFinite(a.baseZ) ? a.baseZ : a.contact.z;
+    const bZ = Number.isFinite(b.baseZ) ? b.baseZ : b.contact.z;
+    const aFin = Number.isFinite(aZ);
+    const bFin = Number.isFinite(bZ);
+    if (aFin && bFin) {
+      if (aZ !== bZ) return aZ - bZ;
+    } else if (aFin !== bFin) {
+      return aFin ? -1 : 1;
     }
+
+    const srcDiff = (ISLAND_SOURCE_RANK[a.source] ?? 3) - (ISLAND_SOURCE_RANK[b.source] ?? 3);
+    if (srcDiff !== 0) return srcDiff;
+
+    const aNum = parseInt(a.id.replace(/^\D+/, ''), 10) || 0;
+    const bNum = parseInt(b.id.replace(/^\D+/, ''), 10) || 0;
+    if (aNum !== bNum) return aNum - bNum;
+
+    return a.id.localeCompare(b.id);
   });
-  return grid;
 }
-
-function annotateAndCountSupports(
-  islands: DetectedIsland[],
-  grid: SpatialHashGrid2D<IslandGridEntry>,
-  supportTips: TipInfo[],
-  plateZ: number,
-  areaPerSupport: number,
-  layerHeightMm?: number,
-): DetectedIsland[] {
-  const annotated = annotateFilterFlags(islands.map((i) => ({ ...i })), { supportTips, plateZ, layerHeightMm });
-
-  for (const island of annotated) {
-    island.supportCount = 0;
-  }
-
-  const supportedIslandsThisTip = new Set<number>();
-  const zTolerance = layerHeightMm ? 2 * layerHeightMm : 0.5;
-
-  for (const tip of supportTips) {
-    supportedIslandsThisTip.clear();
-    const actualRadius = tip.diameterMm / 2 + 0.15;
-    const actualRadiusSq = actualRadius * actualRadius;
-
-    const candidates = grid.query(tip.pos.x, tip.pos.y, actualRadius);
-
-    for (const cand of candidates) {
-      if (supportedIslandsThisTip.has(cand.islandIndex)) continue;
-
-      const dz = Math.abs(tip.pos.z - cand.z);
-      if (dz > zTolerance) continue;
-
-      const dx = tip.pos.x - cand.x;
-      const dy = tip.pos.y - cand.y;
-      const distSq = dx * dx + dy * dy;
-      if (distSq <= actualRadiusSq) {
-        supportedIslandsThisTip.add(cand.islandIndex);
-      }
-    }
-
-    for (const idx of supportedIslandsThisTip) {
-      annotated[idx].supportCount = (annotated[idx].supportCount ?? 0) + 1;
-    }
-  }
-
-  for (const island of annotated) {
-    const area = island.areaMm2 ?? 0;
-    island.supported = (island.supportCount ?? 0) > 0;
-    const requiredSupports = Math.max(1, Math.ceil(area / areaPerSupport));
-    island.fullySupported = (island.supportCount ?? 0) >= requiredSupports;
-  }
-
-  return annotated;
-}
-

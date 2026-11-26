@@ -134,21 +134,25 @@ test('a minima tip ends up held by its own tip plus a ring of contacts', () => {
     assert.ok(ringed.length >= MINIMA_RING_COUNT,
         `ring contacts sit off the minima's axis (${ringed.length} of ${contacts.length})`);
 
-    // ... and the crown chunks: ring pillars are stamped with their own origin,
-    // declared convertible, so the consolidation pass pulls them onto the pillar
-    // they ring (one plate contact per chunk) wherever the link clears the
-    // model. On this cone the tip pillar leans off its own axis, so its crown
-    // links pierce the section and only some convert; the plate contacts still
-    // come out below one-per-contact.
+    // ... and the crown chunks: ring supports are stamped with their own origin,
+    // declared convertible, so Dumas merge and the consolidation pass pull them
+    // onto the central minima pillar (one plate contact per chunk) while
+    // preserving the reinforcement origin across trunks, branches, and leaves.
     const snapshot = getSnapshot();
     const roots = Object.keys(snapshot.roots).length;
     assert.ok(
         roots < MINIMA_RING_COUNT + 1,
         `the crown chunks: ${roots} plate contacts for ${MINIMA_RING_COUNT + 1} contacts`,
     );
-    assert.ok(
-        Object.values(snapshot.trunks).some((t) => t.origin === 'reinforcement'),
-        'ring pillars carry the reinforcement origin (what makes them convertible)',
+    const reinforcementSupports = [
+        ...Object.values(snapshot.trunks),
+        ...Object.values(snapshot.branches),
+        ...Object.values(snapshot.leaves),
+    ].filter((e) => e.origin === 'reinforcement');
+    assert.equal(
+        reinforcementSupports.length,
+        MINIMA_RING_COUNT,
+        'all ring supports preserve the reinforcement origin across merge and consolidation',
     );
 
     // Re-running on the now-supported model stacks nothing: the ring sits

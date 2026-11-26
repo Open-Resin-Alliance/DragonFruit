@@ -85,6 +85,10 @@ pub struct FootprintMask {
 pub struct OverhangRegion {
     /// Triangle indices into `IndexedMesh::triangles`.
     pub triangle_ids: Vec<u32>,
+    /// World-space centroid per entry in `triangle_ids`, in the same order.
+    /// The overlay uses these to remap ids when a loader's triangle order
+    /// differs from the order this scan saw.
+    pub triangle_centroids: Vec<[f32; 3]>,
     /// Sum of the 3D triangle areas (mm²).
     pub area_mm2: f32,
     /// Sum of the XY-projected triangle areas (mm²) — the supportable footprint
@@ -235,10 +239,24 @@ pub fn classify_overhangs(
         }
     }
 
-    for pair in edges.windows(2) {
-        if pair[0].key == pair[1].key {
-            union(&mut parent, pair[0].tri, pair[1].tri);
+    let mut run_start = 0;
+    while run_start < edges.len() {
+        let key = edges[run_start].key;
+        let mut run_end = run_start + 1;
+        while run_end < edges.len() && edges[run_end].key == key {
+            run_end += 1;
         }
+        let mut first_overhang: Option<u32> = None;
+        for edge in &edges[run_start..run_end] {
+            if is_overhang[edge.tri as usize] {
+                if let Some(root_tri) = first_overhang {
+                    union(&mut parent, root_tri, edge.tri);
+                } else {
+                    first_overhang = Some(edge.tri);
+                }
+            }
+        }
+        run_start = run_end;
     }
 
     // Group by root (sorted for determinism).
@@ -252,6 +270,115 @@ pub fn classify_overhangs(
     }
     let mut groups: Vec<(u32, Vec<u32>)> = by_root.into_iter().collect();
     groups.sort_by_key(|(root, _)| *root);
+
+    // Merge nearby coplanar / same-Z overhang facets (e.g. low-poly foot soles
+    // split by narrow bevels or unwelded seams) while keeping vertically stacked
+    // overhangs (e.g. arm above foot), sloped limbs, and disjoint arms separate.
+    if groups.len() > 1 {
+        const COPLANAR_XY_GAP_MM: f32 = 0.5;
+        const COPLANAR_Z_GAP_MM: f32 = 1.5;
+        const COPLANAR_NORMAL_DOT_MIN: f32 = 0.866_025_4; // cos(30°)
+        #[derive(Clone, Copy)]
+        struct GroupSummary {
+            xy_min: [f32; 2],
+            xy_max: [f32; 2],
+            z_min: f32,
+            z_max: f32,
+            normal: [f32; 3],
+        }
+        let mut summaries: Vec<GroupSummary> = groups
+            .iter()
+            .map(|(_, tris)| {
+                let mut xy_min = [f32::INFINITY; 2];
+                let mut xy_max = [f32::NEG_INFINITY; 2];
+                let mut z_min = f32::INFINITY;
+                let mut z_max = f32::NEG_INFINITY;
+                let mut n_sum = [0.0f32; 3];
+                for &fi in tris {
+                    let area = mesh.tri_area(fi);
+                    let n = mesh.tri_normal(fi);
+                    n_sum[0] += n.x * area;
+                    n_sum[1] += n.y * area;
+                    n_sum[2] += n.z * area;
+                    for v in mesh.tri_positions(fi) {
+                        xy_min[0] = xy_min[0].min(v.x);
+                        xy_min[1] = xy_min[1].min(v.y);
+                        xy_max[0] = xy_max[0].max(v.x);
+                        xy_max[1] = xy_max[1].max(v.y);
+                        z_min = z_min.min(v.z);
+                        z_max = z_max.max(v.z);
+                    }
+                }
+                let len = (n_sum[0] * n_sum[0] + n_sum[1] * n_sum[1] + n_sum[2] * n_sum[2]).sqrt();
+                let normal = if len > 1e-6 {
+                    [n_sum[0] / len, n_sum[1] / len, n_sum[2] / len]
+                } else {
+                    [0.0, 0.0, -1.0]
+                };
+                GroupSummary { xy_min, xy_max, z_min, z_max, normal }
+            })
+            .collect();
+
+        let mut g_parent: Vec<u32> = (0..groups.len() as u32).collect();
+        for i in 0..groups.len() {
+            for j in (i + 1)..groups.len() {
+                let ri = find(&mut g_parent, i as u32) as usize;
+                let rj = find(&mut g_parent, j as u32) as usize;
+                if ri == rj {
+                    continue;
+                }
+                let a = summaries[ri];
+                let b = summaries[rj];
+                // Only merge flat/coplanar patches; never chain upward across
+                // stepped or tall sloped overhangs.
+                let merged_z_min = a.z_min.min(b.z_min);
+                let merged_z_max = a.z_max.max(b.z_max);
+                if merged_z_max - merged_z_min > COPLANAR_Z_GAP_MM {
+                    continue;
+                }
+                let normal_dot = a.normal[0] * b.normal[0]
+                    + a.normal[1] * b.normal[1]
+                    + a.normal[2] * b.normal[2];
+                if normal_dot < COPLANAR_NORMAL_DOT_MIN {
+                    continue;
+                }
+                let xy_close = a.xy_min[0] - COPLANAR_XY_GAP_MM <= b.xy_max[0]
+                    && b.xy_min[0] - COPLANAR_XY_GAP_MM <= a.xy_max[0]
+                    && a.xy_min[1] - COPLANAR_XY_GAP_MM <= b.xy_max[1]
+                    && b.xy_min[1] - COPLANAR_XY_GAP_MM <= a.xy_max[1];
+                if xy_close {
+                    union(&mut g_parent, ri as u32, rj as u32);
+                    let new_root = find(&mut g_parent, ri as u32) as usize;
+                    summaries[new_root].xy_min[0] = a.xy_min[0].min(b.xy_min[0]);
+                    summaries[new_root].xy_min[1] = a.xy_min[1].min(b.xy_min[1]);
+                    summaries[new_root].xy_max[0] = a.xy_max[0].max(b.xy_max[0]);
+                    summaries[new_root].xy_max[1] = a.xy_max[1].max(b.xy_max[1]);
+                    summaries[new_root].z_min = merged_z_min;
+                    summaries[new_root].z_max = merged_z_max;
+                }
+            }
+        }
+
+        let mut merged_groups: Vec<Option<(u32, Vec<u32>)>> = groups.into_iter().map(Some).collect();
+        for i in 0..merged_groups.len() {
+            let root = find(&mut g_parent, i as u32) as usize;
+            if root != i {
+                if let Some((_, mut tris)) = merged_groups[i].take() {
+                    if let Some((_, target_tris)) = merged_groups[root].as_mut() {
+                        target_tris.append(&mut tris);
+                    }
+                }
+            }
+        }
+        groups = merged_groups
+            .into_iter()
+            .flatten()
+            .map(|(root, mut tris)| {
+                tris.sort_unstable();
+                (root, tris)
+            })
+            .collect();
+    }
 
     // The part's own base plane: the drag moment is measured from it, exactly
     // as `compute_stability_report` does, so a region's share is comparable
@@ -423,6 +550,10 @@ fn accumulate_normal(acc: &mut [f32; 3], n: Vec3, area: f32) {
     acc[2] += n.z * area;
 }
 
+/// Base perimeter inset (mm) applied by the native scan before per-band
+/// expansion on the JS side, keeping narrow rims valid without collapsing.
+pub const SCAN_PERIMETER_BASE_INSET_MM: f32 = 0.10;
+
 fn build_region(
     mesh: &IndexedMesh,
     normal: &[Vec3],
@@ -441,8 +572,14 @@ fn build_region(
     let mut xy_max = [f32::NEG_INFINITY; 2];
 
     let mut normal_acc = [0f32; 3];
+    let mut triangle_centroids = Vec::with_capacity(triangle_ids.len());
     for &fi in &triangle_ids {
         let [a, b, c] = mesh.tri_positions(fi);
+        triangle_centroids.push([
+            (a.x + b.x + c.x) / 3.0,
+            (a.y + b.y + c.y) / 3.0,
+            (a.z + b.z + c.z) / 3.0,
+        ]);
         let area = mesh.tri_area(fi);
         area_mm2 += area;
 
@@ -480,7 +617,7 @@ fn build_region(
     }
 
     let footprint = build_footprint_mask(mesh, &triangle_ids, xy_min, xy_max, px_mm);
-    let perimeter_loops = build_perimeter_loops(mesh, &triangle_ids, 0.25);
+    let perimeter_loops = build_perimeter_loops(mesh, &triangle_ids, SCAN_PERIMETER_BASE_INSET_MM);
 
     // Area-weighted mean normal, normalized.
     let normal_len = (normal_acc[0] * normal_acc[0]
@@ -499,6 +636,7 @@ fn build_region(
 
     OverhangRegion {
         triangle_ids,
+        triangle_centroids,
         area_mm2,
         projected_area_mm2,
         angle_deg: if area_mm2 > 1e-9 {
@@ -699,7 +837,7 @@ fn build_perimeter_loops(
     let mut out: Vec<Vec<[f32; 3]>> = Vec::new();
     for vs in loops {
         let n = vs.len();
-        // Per-edge interior direction (XY) toward opposite vertex
+        // Per-edge interior normal (XY), perpendicular to edge a->b pointing toward opposite vertex
         let mut edge_dirs: Vec<(f32, f32)> = Vec::with_capacity(n);
         for i in 0..n {
             let a = vs[i];
@@ -709,13 +847,24 @@ fn build_perimeter_loops(
                 let pa = mesh.positions[a as usize];
                 let pb = mesh.positions[b as usize];
                 let pc = mesh.positions[*opp as usize];
-                let mid_x = (pa.x + pb.x) * 0.5;
-                let mid_y = (pa.y + pb.y) * 0.5;
-                let dx = pc.x - mid_x;
-                let dy = pc.y - mid_y;
-                let len = (dx * dx + dy * dy).sqrt();
-                if len > 1e-6 {
-                    edge_dirs.push((dx / len, dy / len));
+                let ex = pb.x - pa.x;
+                let ey = pb.y - pa.y;
+                let elen = (ex * ex + ey * ey).sqrt();
+                if elen > 1e-6 {
+                    let mut nx = -ey / elen;
+                    let mut ny = ex / elen;
+                    let to_opp_x = pc.x - pa.x;
+                    let to_opp_y = pc.y - pa.y;
+                    let dot = nx * to_opp_x + ny * to_opp_y;
+                    if dot.abs() <= 1e-6 {
+                        edge_dirs.push((0.0, 0.0));
+                    } else {
+                        if dot < 0.0 {
+                            nx = -nx;
+                            ny = -ny;
+                        }
+                        edge_dirs.push((nx, ny));
+                    }
                 } else {
                     edge_dirs.push((0.0, 0.0));
                 }
@@ -769,17 +918,21 @@ fn build_perimeter_loops(
             };
             inset_loop.push([new_x, new_y, new_z]);
         }
-        // Validate: inset loop must still have area and not collapse.
-        // For narrow features (<0.5 mm) the inset can invert; fall back to raw.
+        // Validate: inset loop must still have area, preserve orientation, and not collapse.
+        // For narrow features the inset can invert; fall back to raw.
         let mut use_raw = false;
         if inset_mm > 1e-6 {
+            let mut raw_area2: f64 = 0.0;
             let mut area2: f64 = 0.0;
             for i in 0..n {
+                let ra = mesh.positions[vs[i] as usize];
+                let rb = mesh.positions[vs[(i + 1) % n] as usize];
+                raw_area2 += (ra.x as f64) * (rb.y as f64) - (rb.x as f64) * (ra.y as f64);
                 let a = inset_loop[i];
                 let b = inset_loop[(i + 1) % n];
                 area2 += (a[0] as f64) * (b[1] as f64) - (b[0] as f64) * (a[1] as f64);
             }
-            if area2.abs() < 1e-6 {
+            if area2.abs() < 1e-6 || (raw_area2 > 0.0 && area2 <= 0.0) || (raw_area2 < 0.0 && area2 >= 0.0) {
                 use_raw = true;
             } else {
                 // Check that inset points remain inside original ring (for outer).
@@ -926,6 +1079,13 @@ pub struct StabilityReport {
     /// Worst hull edge: outward normal angle in XY (deg, 0 = +X, 90 = +Y,
     /// wrapped to [0, 360)).
     pub worst_edge_dir_deg: f32,
+    /// Worst hull edge, world XY (mm): a point on the edge line. Paired with
+    /// `worst_edge_normal` it defines the line the drag/topple moments are
+    /// measured about — a consumer adding the solved Stefan peel moment (the TS
+    /// topple risk) needs the line, not just the direction.
+    pub worst_edge_point_mm: [f32; 2],
+    /// Worst hull edge outward unit normal in XY.
+    pub worst_edge_normal: [f32; 2],
     /// Worst hull edge: how far the centroid sits inside it (mm). Negative
     /// means the centroid is already outside the bearing polygon.
     pub centroid_depth_mm: f32,
@@ -1306,7 +1466,7 @@ pub fn compute_stability_report(
     // INWARD, so it is positive while the mass is still over the edge. A mesh
     // with no enclosed volume has no restoring moment at all, so its margin is
     // 0 (least stable) rather than infinite — the drag never even enters.
-    let mut worst: Option<(f32, f32, f32, f32, f64)> = None;
+    let mut worst: Option<(f32, f32, f32, f32, f64, [f32; 2], [f32; 2])> = None;
     for (ei, e) in edges.iter().enumerate() {
         let depth = (e.2 - centroid_mm[0] as f64) * e.0 + (e.3 - centroid_mm[1] as f64) * e.1;
         let contact_depth = contact_centroid
@@ -1324,19 +1484,36 @@ pub fn compute_stability_report(
         // otherwise reports -180 for the same edge as +180.
         let dir_deg = e.1.atan2(e.0).to_degrees().rem_euclid(360.0) as f32;
         if worst.is_none_or(|w| margin < w.0) {
-            worst = Some((margin, dir_deg, depth as f32, contact_depth as f32, sum));
+            worst = Some((
+                margin,
+                dir_deg,
+                depth as f32,
+                contact_depth as f32,
+                sum,
+                [e.2 as f32, e.3 as f32],
+                [e.0 as f32, e.1 as f32],
+            ));
         }
     }
-    let (margin_mm, worst_edge_dir_deg, centroid_depth_mm, contact_depth_mm, worst_edge_drag_mm3) =
-        match worst {
-            // A point or edge contact has no bearing polygon: no static margin.
-            Some((margin, dir, depth, contact_depth, sum)) => {
-                (margin, dir, depth, contact_depth, sum)
-            }
-            None => (0.0, 0.0, 0.0, 0.0, 0.0),
-        };
+    let (
+        margin_mm,
+        worst_edge_dir_deg,
+        centroid_depth_mm,
+        contact_depth_mm,
+        worst_edge_drag_mm3,
+        worst_edge_point_mm,
+        worst_edge_normal,
+    ) = match worst {
+        // A point or edge contact has no bearing polygon: no static margin.
+        Some((margin, dir, depth, contact_depth, sum, point, normal)) => {
+            (margin, dir, depth, contact_depth, sum, point, normal)
+        }
+        None => (0.0, 0.0, 0.0, 0.0, 0.0, [0.0, 0.0], [0.0, 0.0]),
+    };
     let adhesion_ratio = if worst_edge_drag_mm3 > 1e-9 {
         (bearing_area_mm2 as f64 * contact_depth_mm as f64) / worst_edge_drag_mm3
+    } else if edges.is_empty() && drag_total > 1e-9 {
+        0.0
     } else {
         f64::INFINITY
     };
@@ -1357,6 +1534,8 @@ pub fn compute_stability_report(
         bearing_area_mm2,
         bearing_edges: edges.len(),
         worst_edge_dir_deg,
+        worst_edge_point_mm,
+        worst_edge_normal,
         centroid_depth_mm,
         contact_depth_mm,
         drag_moment_mm3: drag_total,
@@ -2130,6 +2309,7 @@ mod tests {
         // zero and the log must not read as "no drag".
         assert!((r.drag_moment_mm3 - 500.0).abs() < 2.0, "total {}", r.drag_moment_mm3);
         assert_eq!(r.worst_edge_drag_mm3, 0.0);
+        assert_eq!(r.adhesion_ratio, 0.0);
         let line = r.to_log_line();
         assert!(line.contains("no bearing polygon"), "{line}");
         assert!(line.contains("drag 500mm³ over 4 faces"), "{line}");
@@ -2195,6 +2375,23 @@ mod tests {
             (short.worst_edge_dir_deg - 180.0).abs() < 0.01,
             "{}",
             short.worst_edge_dir_deg
+        );
+        // The exposed edge line must describe the same edge the margin is
+        // measured about: unit normal, pointing along `worst_edge_dir_deg`, and
+        // the centroid's inward depth reproduces from it.
+        let n = short.worst_edge_normal;
+        assert!(
+            (n[0] * n[0] + n[1] * n[1] - 1.0).abs() < 1e-4,
+            "normal {n:?}"
+        );
+        let dir = n[1].atan2(n[0]).to_degrees().rem_euclid(360.0);
+        assert!((dir - short.worst_edge_dir_deg).abs() < 0.01, "{dir}");
+        let depth = (short.worst_edge_point_mm[0] - short.centroid_mm[0]) * n[0]
+            + (short.worst_edge_point_mm[1] - short.centroid_mm[1]) * n[1];
+        assert!(
+            (depth - short.centroid_depth_mm).abs() < 1e-3,
+            "depth {depth} vs {}",
+            short.centroid_depth_mm
         );
         assert!(
             (short.drag_moment_mm3 - 300.0).abs() < 1.0,
@@ -2391,5 +2588,241 @@ mod tests {
         // A part with no drag says so rather than printing a bogus margin.
         let flat = report_for(&unit_cube_soup(), 45.0).to_log_line();
         assert!(flat.contains("no down-facing drag"), "{flat}");
+    }
+
+    /// Extrude an outward-wound XZ boundary loop (`perimeter_ccw`) along `y ∈ [0, depth]`,
+    /// capped at `y = 0` and `y = depth` with an explicit non-overlapping triangulation
+    /// (`cap_tris` indices into `perimeter_ccw`, CCW in XZ) so concave shells stay
+    /// strictly 2-manifold and watertight.
+    fn manifold_prism(
+        perimeter_ccw: &[(f32, f32)],
+        cap_tris: &[[usize; 3]],
+        depth: f32,
+    ) -> Vec<f32> {
+        let mut out = Vec::new();
+        let n = perimeter_ccw.len();
+        for i in 0..n {
+            let p = perimeter_ccw[i];
+            let q = perimeter_ccw[(i + 1) % n];
+            let a = [p.0, 0.0, p.1];
+            let b = [q.0, 0.0, q.1];
+            let c = [q.0, depth, q.1];
+            let d = [p.0, depth, p.1];
+            for v in [a, c, b, a, d, c] {
+                out.extend_from_slice(&v);
+            }
+        }
+        for &[i0, i1, i2] in cap_tris {
+            let p0 = perimeter_ccw[i0];
+            let p1 = perimeter_ccw[i1];
+            let p2 = perimeter_ccw[i2];
+            for v in [
+                // -Y cap (normal (0, -1, 0))
+                [p0.0, 0.0, p0.1],
+                [p1.0, 0.0, p1.1],
+                [p2.0, 0.0, p2.1],
+                // +Y cap (normal (0, +1, 0))
+                [p0.0, depth, p0.1],
+                [p2.0, depth, p2.1],
+                [p1.0, depth, p1.1],
+            ] {
+                out.extend_from_slice(&v);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn single_connected_shell_two_disjoint_overhang_arms_stay_separate() {
+        // Single watertight T-bar shell: a central stem with a 60° self-supporting
+        // V-keel base rises to two horizontal downward-facing overhang arms at z = 15:
+        //   left arm:  x ∈ [2, 12],  y ∈ [0, 8], z = 15 (80 mm², normal -Z)
+        //   right arm: x ∈ [18, 28], y ∈ [0, 8], z = 15 (80 mm², normal -Z)
+        // Both arms belong to ONE connected mesh shell connected via vertical walls
+        // and the top crossbar, yet must remain two separate OverhangRegions.
+        let section = [
+            (15.0, 0.0),  // 0: V-keel apex
+            (18.0, 5.2),  // 1: right keel shoulder (~60° > 45°, self-supporting)
+            (18.0, 15.0), // 2: right inner stem corner
+            (28.0, 15.0), // 3: right overhang arm tip (underside 2->3 is -Z)
+            (28.0, 20.0), // 4: right top corner
+            (18.0, 20.0), // 5: top split right
+            (12.0, 20.0), // 6: top split left
+            (2.0, 20.0),  // 7: left top corner
+            (2.0, 15.0),  // 8: left overhang arm tip (underside 8->9 is -Z)
+            (12.0, 15.0), // 9: left inner stem corner
+            (12.0, 5.2),  // 10: left keel shoulder (~60° > 45°, self-supporting)
+        ];
+        let cap_tris = [
+            [0, 1, 10], // V-keel
+            [10, 1, 2], // stem quad
+            [10, 2, 9],
+            [8, 9, 6],  // left crossbar quad
+            [8, 6, 7],
+            [9, 2, 5],  // center crossbar quad
+            [9, 5, 6],
+            [2, 3, 4],  // right crossbar quad
+            [2, 4, 5],
+        ];
+        let soup = manifold_prism(&section, &cap_tris, 8.0);
+        let (mut regions, _) = overhang_and_stability_from_soup(&soup, 45.0, 0.25, false);
+        assert_eq!(
+            regions.len(),
+            2,
+            "disjoint overhang arms on one shell must not collapse: {regions:?}"
+        );
+
+        regions.sort_by(|a, b| a.xy_min[0].total_cmp(&b.xy_min[0]));
+        let left = &regions[0];
+        let right = &regions[1];
+
+        assert!((left.area_mm2 - 80.0).abs() < 0.5, "left area {}", left.area_mm2);
+        assert!((right.area_mm2 - 80.0).abs() < 0.5, "right area {}", right.area_mm2);
+
+        let left_cx = 0.5 * (left.xy_min[0] + left.xy_max[0]);
+        let right_cx = 0.5 * (right.xy_min[0] + right.xy_max[0]);
+        assert!((left_cx - 7.0).abs() < 0.1, "left cx {left_cx}");
+        assert!((right_cx - 23.0).abs() < 0.1, "right cx {right_cx}");
+        assert!(left.xy_max[0] < right.xy_min[0], "footprints stay disjoint in X");
+
+        assert!(!left.perimeter_loops.is_empty(), "left arm has closed perimeter");
+        assert!(!right.perimeter_loops.is_empty(), "right arm has closed perimeter");
+        assert!(
+            left.perimeter_loops[0].iter().all(|p| p[0] >= 2.0 && p[0] <= 12.0),
+            "left perimeter stays on left arm: {:?}",
+            left.perimeter_loops
+        );
+        assert!(
+            right.perimeter_loops[0].iter().all(|p| p[0] >= 18.0 && p[0] <= 28.0),
+            "right perimeter stays on right arm: {:?}",
+            right.perimeter_loops
+        );
+    }
+
+    #[test]
+    fn single_shell_vertically_stacked_ledges_preserve_distinct_surface_z() {
+        // Single watertight F-bracket shell: vertical spine on x ∈ [0, 4] (with a
+        // 60° self-supporting V-keel base) carrying two horizontal overhang ledges
+        // overlapping in XY (x ∈ [4, 14], y ∈ [0, 8]) at Z = 10 mm and Z = 25 mm.
+        let section = [
+            (2.0, 0.0),   // 0: V-keel apex
+            (4.0, 3.5),   // 1: right keel shoulder (~60.3° > 45°)
+            (4.0, 10.0),  // 2: lower ledge root
+            (14.0, 10.0), // 3: lower ledge tip (underside 2->3 at z = 10, -Z)
+            (14.0, 14.0), // 4: lower ledge top tip
+            (4.0, 14.0),  // 5: lower ledge top root (+Z)
+            (4.0, 25.0),  // 6: upper ledge root
+            (14.0, 25.0), // 7: upper ledge tip (underside 6->7 at z = 25, -Z)
+            (14.0, 29.0), // 8: upper ledge top tip
+            (4.0, 29.0),  // 9: top spine split
+            (0.0, 29.0),  // 10: top-left spine
+            (0.0, 25.0),  // 11: left spine at z=25
+            (0.0, 14.0),  // 12: left spine at z=14
+            (0.0, 10.0),  // 13: left spine at z=10
+            (0.0, 3.5),   // 14: left keel shoulder (~60.3° > 45°)
+        ];
+        let cap_tris = [
+            [0, 1, 14],   // V-keel
+            [14, 1, 2],   // spine z 3.5..10
+            [14, 2, 13],
+            [13, 2, 5],   // spine z 10..14
+            [13, 5, 12],
+            [2, 3, 4],    // lower ledge z 10..14
+            [2, 4, 5],
+            [12, 5, 6],   // spine z 14..25
+            [12, 6, 11],
+            [11, 6, 9],   // spine z 25..29
+            [11, 9, 10],
+            [6, 7, 8],    // upper ledge z 25..29
+            [6, 8, 9],
+        ];
+        let soup = manifold_prism(&section, &cap_tris, 8.0);
+        let (mut regions, _) = overhang_and_stability_from_soup(&soup, 45.0, 0.25, false);
+        assert_eq!(
+            regions.len(),
+            2,
+            "stacked overhang ledges on one shell must stay separate: {regions:?}"
+        );
+
+        regions.sort_by(|a, b| a.min_z.total_cmp(&b.min_z));
+        let lower = &regions[0];
+        let upper = &regions[1];
+
+        assert!((lower.min_z - 10.0).abs() < 1e-3, "lower min_z {}", lower.min_z);
+        assert!((lower.max_z - 10.0).abs() < 1e-3, "lower max_z {}", lower.max_z);
+        assert!((upper.min_z - 25.0).abs() < 1e-3, "upper min_z {}", upper.min_z);
+        assert!((upper.max_z - 25.0).abs() < 1e-3, "upper max_z {}", upper.max_z);
+
+        // Sample interior pixel (x = 9.0, y = 4.0) where both ledges overlap in XY.
+        let sample_z = |r: &OverhangRegion, x: f32, y: f32| -> (u8, f32) {
+            let f = &r.footprint;
+            let col = (((x - f.origin_x) / f.px_mm) - 0.5).round() as usize;
+            let row = (((y - f.origin_y) / f.px_mm) - 0.5).round() as usize;
+            let idx = row * f.width as usize + col;
+            (f.data[idx], f.surface_z[idx])
+        };
+        let (lo_on, lo_z) = sample_z(lower, 9.0, 4.0);
+        let (hi_on, hi_z) = sample_z(upper, 9.0, 4.0);
+        assert_eq!(lo_on, 1);
+        assert_eq!(hi_on, 1);
+        assert!((lo_z - 10.0).abs() < 1e-3, "lower surface_z {lo_z}");
+        assert!((hi_z - 25.0).abs() < 1e-3, "upper surface_z {hi_z}");
+    }
+
+    #[test]
+    fn nearby_coplanar_low_poly_facets_merge_across_narrow_bevel_gap() {
+        // Two downward-facing low-poly triangles at Z=2.0 separated by 0.3 mm in X
+        // (simulating a narrow self-supporting bevel or unwelded seam on a foot sole).
+        let soup = vec![
+            0.0, 0.0, 2.0, 0.0, 4.0, 2.0, 2.0, 0.0, 2.0,
+            2.3, 0.0, 2.2, 2.3, 4.0, 2.2, 4.3, 0.0, 2.2,
+        ];
+        let (regions, _) = overhang_and_stability_from_soup(&soup, 45.0, 0.25, false);
+        assert_eq!(
+            regions.len(),
+            1,
+            "nearby coplanar facets on the same sole should merge: {regions:?}"
+        );
+    }
+
+    #[test]
+    fn narrow_overhang_rim_preserves_valid_inset_perimeter_loop() {
+        // Single watertight shell with a narrow 0.35 mm downward-facing flat rim
+        // (x in [0.0, 0.35], y in [0.0, 8.0], z = 10.0) attached above
+        // self-supporting vertical / 60-deg walls.
+        let section = [
+            (2.35, 0.0),  // 0: V-keel apex
+            (4.35, 3.5),  // 1: right keel shoulder (~60.3 deg > 45 deg)
+            (4.35, 14.0), // 2: top right
+            (0.0, 14.0),  // 3: top left
+            (0.0, 10.0),  // 4: narrow rim outer edge (underside 4->5 is -Z at z=10)
+            (0.35, 10.0), // 5: narrow rim inner corner
+            (0.35, 3.5),  // 6: left keel shoulder (~60.3 deg > 45 deg)
+        ];
+        let cap_tris = [
+            [0, 1, 6],
+            [6, 1, 2],
+            [6, 2, 5],
+            [5, 2, 3],
+            [5, 3, 4],
+        ];
+        let soup = manifold_prism(&section, &cap_tris, 8.0);
+        let (regions, _) = overhang_and_stability_from_soup(&soup, 45.0, 0.25, false);
+        assert_eq!(regions.len(), 1, "single narrow rim overhang region: {regions:?}");
+        let region = &regions[0];
+        assert!(
+            !region.perimeter_loops.is_empty(),
+            "narrow 0.35 mm rim must preserve a non-empty perimeter loop"
+        );
+        for lp in &region.perimeter_loops {
+            assert!(!lp.is_empty());
+            for pt in lp {
+                assert!(
+                    pt[0] > 0.0 && pt[0] < 0.35 && pt[0] >= 0.05 && pt[0] <= 0.30,
+                    "loop point x={} must sit inset inside [0.05..0.30] (> 0.0 and < 0.35)",
+                    pt[0]
+                );
+            }
+        }
     }
 }

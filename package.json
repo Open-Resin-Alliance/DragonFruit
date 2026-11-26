@@ -78,7 +78,8 @@
     "generate:support-registrations": "node scripts/generate-support-registrations.mjs",
     "generate:support-renderers": "node scripts/generate-support-renderers.mjs",
     "prebench:auto-supports": "npm run generate:plugin-registry && npm run generate:builtin-simple-plugins && npm run generate:support-registrations && npm run generate:support-renderers",
-    "prebench:duplicate-confirm": "npm run generate:support-registrations"
+    "prebench:duplicate-confirm": "npm run generate:support-registrations",
+    "bench:real-models": "node --import tsx --import ./scripts/test-unit/register.mjs scripts/bench-auto-supports.ts --stress"
   },
   "dependencies": {
     "@lingui/core": "^6.3.0",

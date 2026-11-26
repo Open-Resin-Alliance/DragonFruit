@@ -3,8 +3,9 @@ import type { CandidatePoint } from './types';
 import { getSettings } from '../Settings/state';
 import { getPresetById } from '../Settings/presets';
 import { AUTO_SUPPORT_CONSTRAINTS, MIN_CONTACT_TIP_DIAMETER_MM, SIZING_BANDS } from './settings';
-import type { SizingBand, SizingPreset } from './settings';
+import type { AutoSupportSettings, SizingBand, SizingPreset } from './settings';
 import type { SupportSettings } from '../Settings/types';
+import { GRIDLESS_MERGE_RADIUS_MM } from './constants';
 
 // ---------------------------------------------------------------------------
 // Empirical sizing (locked: no physics pretense)
@@ -21,9 +22,9 @@ import type { SupportSettings } from '../Settings/types';
 // light end is untouched.
 //
 // Tip contact: band × underside angle (flat ceilings get the full contact,
-// steeper slopes less), floored at 30% of the shaft so a thick shaft keeps a
-// proportional tip. Roots ride with the shaft; tip length and penetration are
-// the band, flat.
+// steeper slopes less), floored at 25% of the shaft so a thick shaft keeps a
+// proportional tip and never forms a brittle stress-concentrated needle. Roots
+// ride with the shaft; tip length and penetration are the band, flat.
 //
 // The forest resize pass (post-placement, before commit) thickens trunks
 // that actually carry branches — a trunk with four branches gets thicker, a
@@ -120,9 +121,9 @@ export function resolveSizingBand(id: string | null | undefined): SizingBand {
         : { ...band, tipContactDiameterMm: MIN_CONTACT_TIP_DIAMETER_MM };
 }
 
-/** The band the run sizes with: the Support Studio preset the live settings name. */
-export function activeSizingBand(): SizingBand {
-    return resolveSizingBand(getSettings().autoSupport?.sizingPreset);
+/** The band the run sizes with: the Support Studio preset the run or live settings name. */
+export function activeSizingBand(autoSettings?: Partial<AutoSupportSettings>): SizingBand {
+    return resolveSizingBand((autoSettings ?? getSettings().autoSupport)?.sizingPreset ?? getSettings().autoSupport?.sizingPreset);
 }
 
 /** Tip contact for small-island candidates: the factory `detail` tier's tip,
@@ -139,6 +140,20 @@ const CELL_REFERENCE_AREA_MM2 = 8;
 
 /** Maximum shaft diameter (mm) for very large single supports. */
 const MAX_SHAFT_DIAMETER_MM = 2.0;
+/**
+ * Headroom a band's shaft may gain from the height/load curves before bracing
+ * takes over. The structure band is 1.0 mm, so its poles stay at or below
+ * 1.4 mm; the anchor band (1.4 mm) keeps the full 2.0 mm ceiling because its
+ * job is anchoring, not load-carrying. The explicit `sizeScale` multiplier is
+ * still allowed past this — it is an instruction, not a curve.
+ */
+export const STRUCTURE_SHAFT_HEADROOM_MM = 0.4;
+
+function curveShaftCapMm(bandDiameterMm: number): number {
+    return bandDiameterMm >= 1.4
+        ? MAX_SHAFT_DIAMETER_MM
+        : Math.min(MAX_SHAFT_DIAMETER_MM, bandDiameterMm + STRUCTURE_SHAFT_HEADROOM_MM);
+}
 
 /**
  * Combined ceiling on the three run-level model factors (mm-equivalent).
@@ -184,7 +199,7 @@ export const HEIGHT_REFERENCE_MM = 20;
 export const HEIGHT_EXPONENT = 0.35;
 
 /** Contact tip never narrower than this fraction of the shaft it sits on. */
-export const TIP_CONTACT_MIN_SHAFT_RATIO = 0.3;
+export const TIP_CONTACT_MIN_SHAFT_RATIO = 0.25;
 
 // The three caps are no longer constants: they are the `autoSupport`
 // `modelSizeFactorCap` / `modelLoadFactorCap` / `heightFactorCap` settings, so a
@@ -197,6 +212,25 @@ export const RESIN_DENSITY_G_PER_MM3 = 0.0011;
 function powerFactor(ratio: number, exponent: number, maxFactor: number): number {
     if (!(ratio > 1)) return 1;
     return Math.min(maxFactor, Math.pow(ratio, exponent));
+}
+
+/**
+ * Deterministic order-invariant estimate of standalone host count from candidate XY positions.
+ * Uses active grid spacing when grid mode is enabled, or `GRIDLESS_MERGE_RADIUS_MM` otherwise.
+ */
+export function estimateHostCount(
+    candidates: readonly Pick<CandidatePoint, 'tipPos'>[],
+    grid?: { enabled?: boolean; spacingMm?: number },
+): number {
+    if (candidates.length === 0) return 0;
+    const cellMm = grid?.enabled && grid.spacingMm && grid.spacingMm > 0
+        ? grid.spacingMm
+        : GRIDLESS_MERGE_RADIUS_MM;
+    const cells = new Set<string>();
+    for (const c of candidates) {
+        cells.add(`${Math.floor(c.tipPos.x / cellMm)},${Math.floor(c.tipPos.y / cellMm)}`);
+    }
+    return clamp(cells.size, 1, candidates.length);
 }
 
 /** The run-level terms the sizing reads, and what they resolved to. */
@@ -213,14 +247,15 @@ export interface ModelSizingFactors {
     trunkScale: number;
 }
 
-/** The live model-scale calibrations, read from the `autoSupport` settings. */
-function modelSizingConfig(): { enabled: boolean; sizeCap: number; loadCap: number; heightCap: number } {
-    const auto = getSettings().autoSupport;
+/** The live model-scale calibrations, read from the run's or store's `autoSupport` settings. */
+function modelSizingConfig(autoSettings?: Partial<AutoSupportSettings>): { enabled: boolean; sizeCap: number; loadCap: number; heightCap: number } {
+    const auto = autoSettings ?? getSettings().autoSupport;
+    const live = getSettings().autoSupport;
     return {
-        enabled: auto?.modelScaleEnabled ?? true,
-        sizeCap: auto?.modelSizeFactorCap ?? AUTO_SUPPORT_CONSTRAINTS.modelSizeFactorCap.defaultValue,
-        loadCap: auto?.modelLoadFactorCap ?? AUTO_SUPPORT_CONSTRAINTS.modelLoadFactorCap.defaultValue,
-        heightCap: auto?.heightFactorCap ?? AUTO_SUPPORT_CONSTRAINTS.heightFactorCap.defaultValue,
+        enabled: auto?.modelScaleEnabled ?? live?.modelScaleEnabled ?? true,
+        sizeCap: auto?.modelSizeFactorCap ?? live?.modelSizeFactorCap ?? AUTO_SUPPORT_CONSTRAINTS.modelSizeFactorCap.defaultValue,
+        loadCap: auto?.modelLoadFactorCap ?? live?.modelLoadFactorCap ?? AUTO_SUPPORT_CONSTRAINTS.modelLoadFactorCap.defaultValue,
+        heightCap: auto?.heightFactorCap ?? live?.heightFactorCap ?? AUTO_SUPPORT_CONSTRAINTS.heightFactorCap.defaultValue,
     };
 }
 
@@ -230,8 +265,8 @@ function modelSizingConfig(): { enabled: boolean; sizeCap: number; loadCap: numb
  * ones, so sizing is exactly the band. `autoSupport.modelScaleEnabled === false`
  * pins every factor to ×1 the same way.
  */
-export function modelSizingFactors(ctx?: ModelSizingContext): ModelSizingFactors {
-    const { enabled, sizeCap, loadCap } = modelSizingConfig();
+export function modelSizingFactors(ctx?: ModelSizingContext, autoSettings?: Partial<AutoSupportSettings>): ModelSizingFactors {
+    const { enabled, sizeCap, loadCap } = modelSizingConfig(autoSettings);
     const sizeMm = ctx?.modelSizeMm ?? 0;
     const shareG = ctx && ctx.totalCandidates > 0
         ? (ctx.modelVolumeMm3 * RESIN_DENSITY_G_PER_MM3) / ctx.totalCandidates
@@ -317,7 +352,7 @@ export interface ModelSizingContext {
  * - Tip contact: band × angle factor — a flat ceiling (normal
  *   straight down, |z| ≈ 1) gets the full band contact; a steep slope is
  *   closer to self-supporting and gets a smaller one (down to 60%). Floored
- *   at 30% of the shaft — unless the candidate carries a per-point
+ *   at 20% of the shaft — unless the candidate carries a per-point
  *   tipDiameterMm (small-island shrunk tip), which bypasses band and floor.
  * - Roots: the band, scaled with the trunk. The pad keeps its ratio to the
  *   shaft it carries; a 2 mm shaft on a 2 mm pad has no flare and no grip.
@@ -335,8 +370,9 @@ export function sizeParameters(
     candidate: CandidatePoint,
     sizeScale = 1,
     ctx?: ModelSizingContext,
+    autoSettings?: Partial<AutoSupportSettings>,
 ): SizeOverrides {
-    const band = activeSizingBand();
+    const band = activeSizingBand(autoSettings);
 
     // The area that drives thickness: the candidate's own supported island.
     // No merge-radius cluster summing — dense regions would double-count
@@ -349,26 +385,40 @@ export function sizeParameters(
     // needs a thicker column the further it is from the plate. Monotone from
     // the band at HEIGHT_REFERENCE_MM up to the configured `heightFactorCap` —
     // a support shorter than the reference is at band, never below it.
-    const { enabled: modelScaleEnabled, heightCap } = modelSizingConfig();
+    const { enabled: modelScaleEnabled, heightCap } = modelSizingConfig(autoSettings);
     const heightFactor = modelScaleEnabled
         ? powerFactor(zHeight / HEIGHT_REFERENCE_MM, HEIGHT_EXPONENT, heightCap)
         : 1;
-    const trunkScale = modelSizingFactors(ctx).trunkScale;
+    const trunkScale = modelSizingFactors(ctx, autoSettings).trunkScale;
     const modelScale = Math.min(MAX_MODEL_SCALE_FACTOR, heightFactor * trunkScale);
+    // Height, load and area tail all want more girth; cap the curve at the
+    // band + headroom so a tall light support cannot become a pole. The stress
+    // loop braces/downgrades instead; `sizeScale` below is the explicit escape.
+    const curveCap = curveShaftCapMm(band.shaftDiameterMm);
     const shaftDiameterMm = round(
         clamp(
-            shaftDiameterForArea(band.shaftDiameterMm, areaInput) * modelScale,
+            clamp(
+                shaftDiameterForArea(band.shaftDiameterMm, areaInput) * modelScale,
+                0.001,
+                curveCap,
+            ) * sizeScale,
             0.001,
             MAX_SHAFT_DIAMETER_MM,
-        ) * sizeScale,
+        ),
     3);
     // Underside normal z = cos(angle from straight-down). Flat ceilings
     // (|nz| ≈ 1) peel hardest → full band contact; steep slopes are closer
     // to self-supporting → smaller contact. Bounded to [0.6, 1.0]× band.
+    // Primary initiation and anchoring contacts (minima, stabilization, near-base
+    // soles) keep full band contact so peel fracture never shears a lone start point.
     const nz = Math.abs(candidate.tipNormal?.z ?? -1);
-    const angleFactor = clamp(0.6 + 0.4 * nz, 0.6, 1.0);
+    const keepFullTipContact =
+        candidate.source === 'minima'
+        || candidate.source === 'stabilization'
+        || candidate.nearBase === true;
+    const angleFactor = keepFullTipContact ? 1.0 : clamp(0.6 + 0.4 * nz, 0.6, 1.0);
     // Per-point override (small-island shrunk tip) bypasses the band and
-    // its 30%-of-shaft floor — explicit means explicit.
+    // its 25%-of-shaft floor — explicit means explicit.
     const tipContactDiameterMm = round(
         Math.max(
             MIN_CONTACT_TIP_DIAMETER_MM,
@@ -387,4 +437,5 @@ export function sizeParameters(
         rootsConeHeightMm: band.rootConeHeightMm,
     };
 }
+
 

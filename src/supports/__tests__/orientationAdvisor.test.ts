@@ -384,3 +384,82 @@ test('blocked mask never regresses the suggestion', () => {
     assert.ok(s.suggested.cost <= s.baseline.cost, 'never worse than identity');
     assert.equal(s.suggested.blockedAreaMm2, 0, 'winner turns the blocked face away');
 });
+
+test('restingPoseCandidates discovers flat base past HULL_POINT_CAP prefix', () => {
+    // Build >= 10,000 vertices where the first 6,500+ vertices occupy distinct
+    // grid cells inside a sphere of radius 35 centered at (0, 0, 50), so a
+    // sequential i++ loop saturates HULL_POINT_CAP (6000) before reaching
+    // vertices 7,000..9,999 where a large tilted flat resting base sits.
+    const positions: number[] = [];
+    const step = 5.0;
+    for (let ix = 0; ix < 20; ix++) {
+        for (let iy = 0; iy < 20; iy++) {
+            for (let iz = 0; iz < 15; iz++) {
+                positions.push(ix * step, iy * step, iz * step);
+            }
+        }
+    }
+    assert.equal(positions.length / 3, 6000, 'prefix has exactly 6000 distinct cells');
+
+    // Pad up to 7,000 vertices if needed, then place a large 120x120 flat
+    // resting base tilted by (37 deg X, 23 deg Y) in vertices 7,000..10,000.
+    while (positions.length / 3 < 7000) {
+        positions.push(0, 0, 50);
+    }
+    const rx = (37 * Math.PI) / 180;
+    const ry = (23 * Math.PI) / 180;
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, 0, 'YXZ'));
+    // Local normal (0, 0, -1) rotated by q becomes the world outward normal of the flat base.
+    const baseNormal = new THREE.Vector3(0, 0, -1).applyQuaternion(q).normalize();
+    const corners = [
+        new THREE.Vector3(-60, -60, -60),
+        new THREE.Vector3(60, -60, -60),
+        new THREE.Vector3(60, 60, -60),
+        new THREE.Vector3(-60, 60, -60),
+    ].map((v) => v.applyQuaternion(q));
+    for (let i = 0; i < 3000; i++) {
+        const c = corners[i % 4];
+        // Slight jitter within the 120x120 plane so vertices are spread across the base.
+        const t = (i / 3000) * 0.01;
+        positions.push(c.x * (1 - t), c.y * (1 - t), c.z * (1 - t));
+    }
+    assert.ok(positions.length / 3 >= 10000, `total vertices >= 10000 (got ${positions.length / 3})`);
+
+    const poses = restingPoseCandidates({ positions }, 12);
+    // Check that at least one discovered pose aligns baseNormal with world -Z (0, 0, -1).
+    const foundFlatBase = poses.some((p) => {
+        const ca = Math.cos(p.rotXRad);
+        const sa = Math.sin(p.rotXRad);
+        const cb = Math.cos(p.rotYRad);
+        const sb = Math.sin(p.rotYRad);
+        const y1 = baseNormal.y * ca - baseNormal.z * sa;
+        const z1 = baseNormal.y * sa + baseNormal.z * ca;
+        const z2 = -baseNormal.x * sb + z1 * cb;
+        return z2 < -0.99;
+    });
+    assert.ok(foundFlatBase, 'restingPoseCandidates should sample past the first 6000 vertices and find the tilted flat base');
+});
+
+test('hasRaft option waives stability penalty on an unstable pose', () => {
+    const m = tenMmCube();
+    const a = (45 * Math.PI) / 180;
+    const ca = Math.cos(a);
+    const sa = Math.sin(a);
+    const positions = [...m.positions];
+    for (let i = 0; i < positions.length; i += 3) {
+        const y = positions[i + 1];
+        const z = positions[i + 2];
+        positions[i + 1] = y * ca - z * sa;
+        positions[i + 2] = y * sa + z * ca;
+    }
+    const mesh = { positions, index: m.index };
+
+    const withoutRaft = suggestOrientation(mesh, { candidateCount: 64, hasRaft: false });
+    const withRaft = suggestOrientation(mesh, { candidateCount: 64, hasRaft: true });
+
+    assert.ok(withoutRaft.baseline.stabilityPenaltyMm2 > 0, 'edge-resting pose is penalized without raft');
+    assert.equal(withRaft.baseline.stabilityPenaltyMm2, 0, 'hasRaft waives stability penalty on baseline');
+    assert.equal(withRaft.suggested.stabilityPenaltyMm2, 0, 'hasRaft waives stability penalty on suggested');
+    assert.ok(withRaft.baseline.cost < withoutRaft.baseline.cost, 'waived penalty reduces baseline cost');
+});
+

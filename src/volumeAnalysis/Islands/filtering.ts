@@ -31,6 +31,14 @@ export interface IslandFilterToggles {
   showPlateContact: boolean;
 }
 
+/**
+ * A mesh overhang patch whose top is this close above its plate contact is a
+ * plate-contact patch: the part rests on it, even if the underside has a small
+ * bevel or draft. A domed underside that only touches at one point climbs far
+ * more and stays unsupported.
+ */
+export const PLATE_CONTACT_PATCH_MAX_RISE_MM = 2;
+
 export const DEFAULT_FILTER_TOGGLES: IslandFilterToggles = {
   showAlreadySupported: false,
   showPlateContact: false,
@@ -72,7 +80,10 @@ export function annotateFilterFlags(
     // is at the plate too; islands without one (voxel sections, minima) keep the
     // contact rule, where the contact *is* the base.
     const topZ = Number.isFinite(island.maxZ) ? (island.maxZ as number) : island.contact.z;
-    island.grounded = island.contact.z <= plateCeil && topZ <= plateCeil + zTolerance;
+    const plateContactPatch = island.source === 'overhang'
+      && topZ - island.contact.z <= PLATE_CONTACT_PATCH_MAX_RISE_MM;
+    island.grounded = island.contact.z <= plateCeil
+      && (topZ <= plateCeil + zTolerance || plateContactPatch);
 
     const candidates = grid.query(island.contact.x, island.contact.y, maxRadius);
     let isSupported = false;
@@ -93,6 +104,33 @@ export function annotateFilterFlags(
   return islands;
 }
 
+export const MULTI_SUPPORT_AREA_THRESHOLD_MM2 = 0.5;
+
+export interface IslandFilterOptions {
+  contouredIds?: ReadonlySet<string>;
+  consolidateVoxel?: boolean;
+  removeSupportedAreaClusters?: boolean;
+}
+
+export function isIslandEffectivelySupported(island: DetectedIsland): boolean {
+  if ((island.areaMm2 ?? 0) > MULTI_SUPPORT_AREA_THRESHOLD_MM2) {
+    return island.fullySupported ?? Boolean(island.supported);
+  }
+  return Boolean(island.supported);
+}
+
+export function isIslandHiddenBySupport(
+  island: DetectedIsland,
+  toggles: IslandFilterToggles,
+  opts?: IslandFilterOptions,
+): boolean {
+  if (toggles.showAlreadySupported) return false;
+  if (Boolean(opts?.consolidateVoxel) && Boolean(opts?.contouredIds?.has(island.id))) {
+    return Boolean(opts?.removeSupportedAreaClusters) && Boolean(island.fullySupported ?? island.supported);
+  }
+  return isIslandEffectivelySupported(island);
+}
+
 /**
  * Apply the visibility toggles to produce the subset shown in 3D and in the
  * browser list. Default toggles hide both supported and plate-contact islands,
@@ -101,9 +139,10 @@ export function annotateFilterFlags(
 export function applyFilter(
   islands: DetectedIsland[],
   toggles: IslandFilterToggles,
+  opts?: IslandFilterOptions,
 ): DetectedIsland[] {
   return islands.filter((island) => {
-    if (island.supported && !toggles.showAlreadySupported) return false;
+    if (isIslandHiddenBySupport(island, toggles, opts)) return false;
     if (island.grounded && !toggles.showPlateContact) return false;
     return true;
   });

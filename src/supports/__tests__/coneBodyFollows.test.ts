@@ -149,8 +149,8 @@ test('a cone HOSTED on a type that declares a source does follow that shaft', ()
     >;
     assert.equal(
         synced.leaves['leaf-1'].contactCone.profile?.bodyDiameterMm,
-        1.75,
-        'a cone hosted on a trunk segment follows that shaft',
+        1.225,
+        'a cone hosted on a trunk segment tracks member-proportioned (0.7×) host shaft',
     );
 });
 

@@ -51,6 +51,7 @@ import {
     type AutoPlaceWorkerPayload,
 } from '../src/supports/autoSupport/autoPlace.worker.shared';
 import { getRouterStats, resetRouterStats } from '../src/supports/PlacementLogicV3/SmartPlacementV3';
+import { setAutoSupportVerboseLogging } from '../src/supports/autoSupport/autoPlace';
 import { disposeEventLoopChannel } from '../src/utils/yieldToEventLoop';
 import { supportProxyGeometryOf, type ProxyGeometryContext } from '../src/supports/proxyGeometry/seam';
 import { getFinalSocketPosition } from '../src/supports/SupportPrimitives/ContactCone';
@@ -60,6 +61,7 @@ import { SUPPORT_STATE_TYPES, contactEndpointsFor } from '../src/supports/suppor
 import type { AutoSupportSettings } from '../src/supports/autoSupport/settings';
 import type { AutoSupportPlan } from '../src/supports/autoSupport/types';
 import type { SupportState, Vec3 } from '../src/supports/types';
+import type { SupportFrameStressReport } from '../src/supports/autoSupport/supportGraphStress';
 import type { DetectedIsland } from '../src/volumeAnalysis/Islands/types';
 import type { InstancedShaft } from '../src/supports/SupportPrimitives/Shaft/InstancedShaftGroup';
 import type { InstancedRoot } from '../src/supports/SupportPrimitives/Roots/InstancedRootsGroup';
@@ -98,6 +100,7 @@ interface ModelMetrics {
     /** Contacts whose own cone or socket joint rises over the tip it touches. */
     aboveContact: number;
     worstAboveContactMm: number;
+    aboveContactDetails: AboveContactDetail[];
     coveragePct: number;
     islandsCovered: number;
     islandsUncovered: number;
@@ -117,6 +120,27 @@ interface ModelMetrics {
     routerProbes: number;
     totalMs: number;
     phases: Record<string, number>;
+    /** Frame solve on the committed supports, or null when the run placed none. */
+    stress: StressMetrics | null;
+}
+
+export interface StressMetrics {
+    maxMemberUtilPct: number;
+    overloadedMembers: number;
+    overloadedConeMembers: number;
+    maxTipUtilPct: number;
+    overloadedTips: number;
+    maxTipRockingMm: number;
+    maxTipDeflectionMm: number;
+    reinforcedCount: number;
+    hotspots: Array<{
+        kind: 'tip' | 'member';
+        role?: 'shaft' | 'cone';
+        entityKind: string;
+        utilizationPct: number;
+        layerZMm: number;
+        pos: Vec3;
+    }>;
 }
 
 type Interval = { low: number; high: number };
@@ -134,6 +158,8 @@ function parseArgs(argv: string[]): {
     verbose: boolean;
     detect: boolean;
     detectOptions: DetectOptions;
+    stress: boolean;
+    failOnOverload: boolean;
 } {
     const options = {
         only: null as string[] | null,
@@ -148,6 +174,8 @@ function parseArgs(argv: string[]): {
         verbose: false,
         detect: false,
         detectOptions: { ...DEFAULT_DETECT_OPTIONS },
+        stress: false,
+        failOnOverload: false,
     };
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
@@ -167,6 +195,8 @@ function parseArgs(argv: string[]): {
         else if (arg === '--grid') options.grid = true;
         else if (arg === '--verbose') options.verbose = true;
         else if (arg === '--detect') options.detect = true;
+        else if (arg === '--stress') options.stress = true;
+        else if (arg === '--fail-on-overload') { options.stress = true; options.failOnOverload = true; }
         else if (arg === '--px-mm') options.detectOptions.pxMm = Number(value());
         else if (arg === '--layer-height') options.detectOptions.layerHeightMm = Number(value());
         else if (arg === '--help' || arg === '-h') {
@@ -185,17 +215,46 @@ function corpusFromDirectory(dir: string): CorpusEntry[] {
         .filter((file) => file.toLowerCase().endsWith('.stl'))
         .map((file) => basename(file, file.slice(file.lastIndexOf('.'))))
         .sort()
-        .map((name) => ({
-            name,
-            exercises: `model from ${dir}`,
-            geometry: () => {
-                const buffer = readFileSync(join(dir, `${name}.stl`));
-                return new STLLoader().parse(
-                    buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer,
-                );
-            },
-            islands: null,
-        }));
+        .map((name) => {
+            const islandsPath = join(dir, `${name}.islands.json`);
+            return {
+                name,
+                exercises: `model from ${dir}`,
+                geometry: () => {
+                    const buffer = readFileSync(join(dir, `${name}.stl`));
+                    return new STLLoader().parse(
+                        buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer,
+                    );
+                },
+                // The app's scan output, when present. Without it the harness
+                // falls back to the voxel detector, which under-represents
+                // overhangs (the Rust overhang/minima scanners are Tauri-only).
+                islands: existsSync(islandsPath)
+                    ? () => (JSON.parse(readFileSync(islandsPath, 'utf8')) as Array<DetectedIsland & {
+                        contact: Vec3;
+                        contactVoxels?: { xy: number[] | Float32Array; z?: number[] | Float32Array | null; count: number };
+                    }>).map((island) => ({
+                        ...island,
+                        contact: new THREE.Vector3(island.contact.x, island.contact.y, island.contact.z),
+                        ...(island.contactVoxels
+                            ? {
+                                contactVoxels: {
+                                    xy: island.contactVoxels.xy instanceof Float32Array
+                                        ? island.contactVoxels.xy
+                                        : Float32Array.from(island.contactVoxels.xy),
+                                    z: island.contactVoxels.z
+                                        ? (island.contactVoxels.z instanceof Float32Array
+                                            ? island.contactVoxels.z
+                                            : Float32Array.from(island.contactVoxels.z))
+                                        : null,
+                                    count: island.contactVoxels.count,
+                                },
+                            }
+                            : {}),
+                    }) as DetectedIsland)
+                    : null,
+            };
+        });
 }
 
 interface InstancedPrimitives {
@@ -316,9 +375,10 @@ function measurePrimitives(primitives: InstancedPrimitives): {
  * Read through the registry's declared contact fields, so a type that adds a
  * contact is checked without an edit here.
  */
-function measureAboveContact(state: SupportState): { count: number; worstMm: number } {
+function measureAboveContact(state: SupportState): { count: number; worstMm: number; details: AboveContactDetail[] } {
     let count = 0;
     let worstMm = 0;
+    const details: AboveContactDetail[] = [];
     for (const descriptor of SUPPORT_STATE_TYPES) {
         const upperFields = contactEndpointsFor(descriptor.id)
             .filter((endpoint) => endpoint.end === 'upper')
@@ -333,11 +393,38 @@ function measureAboveContact(state: SupportState): { count: number; worstMm: num
                 if (above > ABOVE_CONTACT_TOLERANCE_MM) {
                     count++;
                     worstMm = Math.max(worstMm, above);
+                    details.push({
+                        type: descriptor.id,
+                        entityId: (entity as { id?: string }).id ?? '?',
+                        field,
+                        pos: contact.pos,
+                        socket: contact.socket,
+                        contactDiameterMm: contact.contactDiameterMm,
+                        bodyDiameterMm: contact.bodyDiameterMm,
+                        leanSin: contact.leanSin,
+                        aboveMm: above,
+                        ...(contact.normal ? { normal: contact.normal } : {}),
+                        ...(contact.surfaceNormal ? { surfaceNormal: contact.surfaceNormal } : {}),
+                    });
                 }
             }
         }
     }
-    return { count, worstMm };
+    return { count, worstMm, details };
+}
+
+export interface AboveContactDetail {
+    type: string;
+    entityId: string;
+    field: string;
+    pos: Vec3;
+    socket: Vec3;
+    contactDiameterMm: number;
+    bodyDiameterMm: number;
+    leanSin: number;
+    aboveMm: number;
+    normal?: Vec3;
+    surfaceNormal?: Vec3;
 }
 
 interface DeclaredContact {
@@ -347,6 +434,9 @@ interface DeclaredContact {
     bodyDiameterMm: number;
     /** Sine of the axis's lean from vertical, for the socket-end rise. */
     leanSin: number;
+    contactDiameterMm: number;
+    normal?: Vec3;
+    surfaceNormal?: Vec3;
 }
 
 /** A value the registry declared as a contact: a tip, an axis and a tip profile. */
@@ -391,6 +481,9 @@ function contactOf(value: unknown): DeclaredContact | null {
         },
         bodyDiameterMm,
         leanSin: Math.hypot(value.normal.x, value.normal.y) / axisLength,
+        contactDiameterMm,
+        normal: value.normal,
+        surfaceNormal,
     };
 }
 
@@ -514,6 +607,7 @@ function metricsFrom(
         memberVolumeMm3: analysis.volumeMm3,
         aboveContact: aboveContact.count,
         worstAboveContactMm: aboveContact.worstMm,
+        aboveContactDetails: aboveContact.details,
         coveragePct: plan.analytics.areaCoverage * 100,
         islandsCovered: plan.analytics.islandsCovered,
         islandsUncovered: plan.analytics.islandsUncovered,
@@ -542,6 +636,30 @@ function metricsFrom(
         phases: Object.fromEntries(
             (plan.analytics.timings?.phases ?? []).map((phase) => [phase.label, Math.round(phase.durationMs)]),
         ),
+        stress: stressFrom(report?.frameStress),
+    };
+}
+
+/** Reduce the frame solve to what a real-model run needs to judge a part. */
+function stressFrom(frame: SupportFrameStressReport | undefined): StressMetrics | null {
+    if (!frame) return null;
+    return {
+        maxMemberUtilPct: frame.maxMemberUtilizationPct,
+        overloadedMembers: frame.overloadedMembers,
+        overloadedConeMembers: frame.memberSegments.filter((seg) => seg.role === 'cone' && seg.utilizationPct > 100).length,
+        maxTipUtilPct: frame.maxTipUtilizationPct,
+        overloadedTips: frame.overloadedTips,
+        maxTipRockingMm: frame.maxTipRockingMm,
+        maxTipDeflectionMm: frame.maxTipDeflectionMm,
+        reinforcedCount: frame.reinforcedCount ?? 0,
+        hotspots: frame.hotspots.map((hotspot) => ({
+            kind: hotspot.kind,
+            ...(hotspot.role ? { role: hotspot.role } : {}),
+            entityKind: hotspot.entityKind,
+            utilizationPct: hotspot.utilizationPct,
+            layerZMm: hotspot.layerZMm,
+            pos: hotspot.pos,
+        })),
     };
 }
 
@@ -633,6 +751,35 @@ function formatTable(rows: ModelMetrics[]): string {
     return [line(header), widths.map((width) => '-'.repeat(width)).join('  '), ...body.map(line), line(totals)].join('\n');
 }
 
+function formatStressTable(rows: ModelMetrics[]): string {
+    const header = ['model', 'member %', 'over', 'cones', 'tip %', 'tipOver', 'rock mm', 'defl mm', 'top hotspot'];
+    const topHotspot = (row: ModelMetrics): string => {
+        const hotspot = row.stress?.hotspots[0];
+        if (!hotspot) return '—';
+        return `${hotspot.entityKind}${hotspot.role ? `/${hotspot.role}` : ''} ${hotspot.utilizationPct.toFixed(0)}% @Z${hotspot.layerZMm.toFixed(1)}`;
+    };
+    const body = rows.map((row) => {
+        const stress = row.stress;
+        return [
+            row.name,
+            stress ? stress.maxMemberUtilPct.toFixed(0) : '—',
+            stress ? String(stress.overloadedMembers) : '—',
+            stress ? String(stress.overloadedConeMembers) : '—',
+            stress ? stress.maxTipUtilPct.toFixed(0) : '—',
+            stress ? String(stress.overloadedTips) : '—',
+            stress ? stress.maxTipRockingMm.toFixed(3) : '—',
+            stress ? stress.maxTipDeflectionMm.toFixed(3) : '—',
+            topHotspot(row),
+        ];
+    });
+    const widths = header.map((_, column) => Math.max(
+        header[column].length,
+        ...body.map((row) => row[column].length),
+    ));
+    const line = (cells: string[]): string => cells.map((cell, column) => cell.padEnd(widths[column])).join('  ');
+    return [line(header), widths.map((width) => '-'.repeat(width)).join('  '), ...body.map(line)].join('\n');
+}
+
 async function main(): Promise<void> {
     const options = parseArgs(process.argv.slice(2));
     const entries = options.corpusDir ? corpusFromDirectory(options.corpusDir) : SYNTHETIC_CORPUS;
@@ -648,6 +795,7 @@ async function main(): Promise<void> {
         settings: options.settings,
     };
     const metrics: ModelMetrics[] = [];
+    if (options.verbose) setAutoSupportVerboseLogging(true);
     const restoreLogs = options.verbose ? null : silencePipelineLogs();
     for (const entry of selected) {
         process.stderr.write(`  running ${entry.name}\n`);
@@ -694,9 +842,25 @@ async function main(): Promise<void> {
         if (undetermined.length > 0) console.log(`\nNOT DETERMINISTIC: ${undetermined.map((row) => row.name).join(', ')}`);
         for (const row of metrics.filter((candidate) => candidate.aboveContact > 0)) {
             console.log(`\nCONTACT ABOVE TIP: ${row.name}: ${row.aboveContact} contact(s), worst ${row.worstAboveContactMm.toFixed(3)}mm`);
+            for (const detail of row.aboveContactDetails) {
+                console.log(`  ${detail.type} ${detail.entityId} ${detail.field}: ${detail.aboveMm.toFixed(3)}mm above · body ${detail.bodyDiameterMm.toFixed(2)} · contact ${detail.contactDiameterMm.toFixed(2)} · leanSin ${detail.leanSin.toFixed(3)}`);
+                console.log(`    pos ${JSON.stringify(detail.pos)} socket ${JSON.stringify(detail.socket)}`);
+                if (detail.surfaceNormal) console.log(`    surfaceNormal ${JSON.stringify(detail.surfaceNormal)} normal ${JSON.stringify(detail.normal)}`);
+            }
         }
         for (const row of metrics.filter((candidate) => candidate.orphans > 0)) {
             console.log(`\nORPHANS: ${row.name}: ${row.orphans} (${JSON.stringify(row.orphansByReason)})`);
+        }
+        if (options.stress) {
+            console.log('\n== Frame stress ==');
+            console.log(formatStressTable(metrics));
+            for (const row of metrics.filter((candidate) => (candidate.stress?.overloadedMembers ?? 0) > 0)) {
+                const over = row.stress!;
+                console.log(`\nOVERLOADED: ${row.name}: ${over.overloadedMembers} member(s), ${over.overloadedConeMembers} cone(s), max ${over.maxMemberUtilPct.toFixed(0)}%`);
+            }
+            for (const row of metrics.filter((candidate) => candidate.entities === 0)) {
+                console.log(`\nNO SUPPORTS: ${row.name}: placement produced no entities`);
+            }
         }
         if (baseline.length > 0) {
             console.log('\n== against baseline ==');
@@ -730,9 +894,17 @@ async function main(): Promise<void> {
         }
         if (differences.some((entry) => entry.hard.length > 0 || entry.soft.length > 0)) process.exitCode = 1;
     }
+
+    if (options.failOnOverload) {
+        const overloaded = metrics.filter((row) => (row.stress?.overloadedMembers ?? 0) > 0);
+        if (overloaded.length > 0) {
+            console.error(`overloaded members: ${overloaded.map((row) => row.name).join(', ')}`);
+            process.exitCode = 1;
+        }
+    }
 }
 
 main().catch((error) => {
-    console.error(error instanceof Error ? error.message : error);
+    console.error(error instanceof Error ? (error.stack ?? error.message) : error);
     process.exitCode = 1;
 });

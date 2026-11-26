@@ -255,6 +255,14 @@ scan_islands_staged(...)  ───►  params            ──────► 
   id and the overlay can copy the exact triangles it is shading.
 - **No matrix or center arguments.** The pose is baked into the staged
   positions.
+- **Overhang triangle ids are remapped by centroid on ingestion.** A loader
+  (LYS in particular) can re-index or reorder the same triangles, leaving the
+  raw ids pointing at unrelated faces. `OverhangRegion.triangleCentroids` is
+  returned by the scan, and `remapOverhangTriangles` maps each centroid through
+  the model's centre and pose onto the rendered index/non-index order before
+  any region reaches the overlay or placement. If no centroid resolves, the
+  region's ids are cleared and a dev `[IslandsPerf]` warning names the geometry,
+  so the overlay is hidden rather than drawn on wrong faces.
 - **The buffer is consumed.** A command `take()`s it; stage immediately before
   invoking. Two staged commands in one scan stage twice.
 - **A missing buffer is not fatal for `scan_islands_from_path`.** It logs and
@@ -284,14 +292,13 @@ An experimental GPU path (wgpu compute shaders) was prototyped and removed becau
 
 ### Deterministic rasterization
 
-The rasterizer uses `IndexMap` (not `HashMap`) for polygon loop stitching. This preserves insertion order, matching JavaScript's `Map` iteration semantics. Without this, the same model produces different rasterized masks across runs due to non-deterministic iteration affecting edge-case loop construction at degenerate triangle intersections.
+Per-layer mask rasterization delegates to `rasterize_triangles_at_z_nonzero_spans` (deterministic non-zero winding scanline rasterizer in `dragonfruit-slicing-engine`), producing coalesced RLE spans with consistent orientation across runs.
 
 ## Dependencies
 
 | Crate | Purpose |
 |-------|---------|
-| `dragonfruit-slicing-engine` | Geometry types (`Vec3`, `Triangle`, `parse_triangles`) |
+| `dragonfruit-slicing-engine` | Geometry types (`Vec3`, `Triangle`, `parse_triangles`) and `rasterize_triangles_at_z_nonzero_spans` |
 | `serde` | Serialization for island types |
 | `rayon` | Parallel rasterization |
-| `indexmap` | Insertion-order map for deterministic loop stitching |
 | `clap` | CLI argument parsing for tooling binaries |

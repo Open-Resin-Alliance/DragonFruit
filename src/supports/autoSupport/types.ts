@@ -1,5 +1,7 @@
 import type { Vec3, SupportState } from '../types';
 import { AUTO_PLACED_TYPE_IDS, type AutoPlacedTypeId, type ShaftHostedMemberTypeId, type SupportTypeId } from '../supportTypeRegistry';
+import type { SupportFrameStressReport } from './supportGraphStress';
+import type { ToppleRiskReport } from './toppleRisk';
 
 export type { AutoPlacedTypeId };
 
@@ -43,6 +45,9 @@ export interface CandidatePoint {
     /** The contact is on a cavity (internal) surface. A plate route would have
      *  to leave the cavity, so only a bridge that stays inside is allowed. */
     interior?: boolean;
+    /** Base overhang within ANCHOR_HEIGHT_THRESHOLD_MM of the model's lowest Z.
+     *  Preserves generated density on slightly sloped soles during dedup. */
+    nearBase?: boolean;
 }
 
 /** Why a candidate was rejected. */
@@ -131,6 +136,14 @@ export interface ForestReport {
     orphans?: OrphanInfo[];
     /** What a deficit budget would add and cull, when the run computed one. */
     loadBudget?: LoadBudgetReport;
+    /** Per-support peel demand vs break capacity in newtons on critical layers. */
+    forceBudget?: ForceBudgetReport;
+    /** 3D support+brace beam-frame & rigid-body peel stress summary on critical layers. */
+    frameStress?: SupportFrameStressReport;
+    /** Solved-demand topple margin about the pose's worst bearing edge. */
+    toppleRisk?: ToppleRiskReport;
+    /** Island starts (first cross-sections) and whether their recipe holds. */
+    starts?: StartReport;
     /** Placement diagnostics: why trunks are where they are, fan/merge refusal counts */
     diagnostics?: {
         candidatesBySource: { voxel: number; minima: number; intersection: number; overhang: number; stabilization: number; reinforcement: number };
@@ -139,6 +152,8 @@ export interface ForestReport {
         mergeRefusals: Partial<Record<string, number>>;
         /** Candidates the grid refused and the fallback then placed without it. */
         gridFallbacks: number;
+        /** Trunk-build failures retried as wide fans after gap-fill. */
+        trunkErrorRetries?: { attempted: number; rescued: number };
         /** Why consolidation (chunk fanning) refused candidates — sameZ means
          *  the surface is too flat for side-leaves at the consolidation
          *  angle (raft/connector territory). */
@@ -147,17 +162,60 @@ export interface ForestReport {
          *  model-to-model instead, by whichever type registered a bridge
          *  builder. Tip = where the bridge starts. */
         cavityFallbacks: Array<{ id: string; kind: SupportTypeId; tip: { x: number; y: number; z: number }; fanRefusal?: string }>;
+        /** Phase 1c representative-layer Voronoi traction optimization stats. */
+        tractionOptimization?: {
+            representativeLayers: number;
+            peakCrossSectionMm2: number;
+            added: number;
+            pruned: number;
+        };
+        /** Force-budget add rounds: candidates generated and placed, split by
+         *  formation overhang vs class-2 force-augmented steep flat. */
+        forceBudgetAdds?: {
+            attempted: number;
+            placed: number;
+            augmentedAttempted: number;
+            augmentedPlaced: number;
+        };
+        /** Co-located trunk roots that were dissolved into a taller host, and
+         *  why a pair could not be (`noHost`, `angle`, `blocked`, `capacity`,
+         *  `cross`, `noTips`, `build`). */
+        rootMerges?: {
+            merged: number;
+            refusals: Partial<Record<string, number>>;
+        };
     };
+}
+
+/** One island start: its recipe, current same-layer coverage, and pancake risk. */
+export interface StartReportRow {
+    id: string;
+    areaMm2: number;
+    contacts: number;
+    minContacts: number;
+    coveragePct: number;
+    uncoveredAreaMm2: number;
+    zMm: number;
+    /** Fewer contacts than the recipe, or coverage below the start target. */
+    pancakeRisk: boolean;
+}
+
+export interface StartReport {
+    count: number;
+    underSupported: number;
+    rows: StartReportRow[];
 }
 
 /** One orphaned leaf/branch — host knot missing, drifted, or path now crosses a thickened shaft. */
 export interface OrphanInfo {
     id: string;
     kind: OrphanKind;
-    reason: 'missingKnot' | 'missingHost' | 'missingSegment' | 'drift' | 'cross' | 'blocked' | 'hostBlocked';
+    reason: 'missingKnot' | 'missingHost' | 'missingSegment' | 'drift' | 'cross' | 'blocked' | 'hostBlocked' | 'cavityCrossing';
     hostId?: string;
     knotId?: string;
     detail?: string;
+    /** True when this member was orphaned because its host shaft pierced the mesh and was culled. */
+    hostCulled?: boolean;
 }
 
 
@@ -187,6 +245,63 @@ export interface LoadBudgetReport {
     worst: LoadBudgetIsland | null;
 }
 
+/** A down-facing surface point where an added contact removes load from an over-budget tip. */
+export interface ForceBudgetAddPoint {
+    islandId: string;
+    /** True when the surface is a self-supporting steep flat (class-2 / force-augmented), not a formation overhang. */
+    steepFlat: boolean;
+    /** Contact point on the model surface (world mm). */
+    pos: Vec3;
+    /** Surface normal at that point (world space, away from the model). */
+    normal: Vec3;
+    /** Plan distance from the over-budget cell's far point to the snapped surface voxel (mm). */
+    snapMm: number;
+}
+
+/** One placed tip's peel demand against its break capacity, at its worst layer. */
+export interface ForceBudgetTipRow {
+    entityId?: string;
+    pos: Vec3;
+    contactDiameterMm: number;
+    /** Narrowest member section on the tip's own entity (mm), when known. */
+    memberDiameterMm?: number;
+    capacityN: number;
+    demandN: number;
+    utilizationPct: number;
+    deficitN: number;
+    /** The layer at which this tip's demand peaks (mm). */
+    layerZMm: number;
+    /** Distance from the tip to the farthest cell it carries (mm). */
+    maxCellDistanceMm: number;
+    addPoint?: ForceBudgetAddPoint;
+}
+
+/**
+ * Per-support peel demand and break capacity in newtons, as the report carries
+ * it. Report plus a list of addition points; placement decisions are made by
+ * the caller. See `forceBudget.ts` for the allocation and capacity rules.
+ */
+export interface ForceBudgetReport {
+    /** Worst utilization first; one row per placed model-contact tip. */
+    rows: ForceBudgetTipRow[];
+    layersEvaluated: number;
+    /** Z of the layer whose peel force was highest (mm). */
+    peakLayerZMm: number;
+    /** Sum of each tip's peak demand — not a single physical layer total. */
+    totalDemandN: number;
+    totalCapacityN: number;
+    overloadedTips: number;
+    /** Layer force whose cells had no active tip below them, worst layer (N). */
+    unattributedN: number;
+    /** Over-budget tips with no down-facing surface within the snap radius. */
+    skippedNoSurface: number;
+    /** Strength the capacities were computed with (MPa). */
+    strengthMpa: number;
+    /** Nominal peel pressure the layer forces use (MPa). */
+    referencePressureMpa: number;
+    worst: ForceBudgetTipRow | null;
+}
+
 /** Competitive distribution bake-off result for anchor surfaces. */
 export interface CompetitiveBakeoffAnalytics {
     /** Anchor regions that went through the bake-off. */
@@ -205,6 +320,10 @@ export interface AutoPlaceAnalytics {
     islandsCovered: number;
     /** Number of islands that still have no nearby support. */
     islandsUncovered: number;
+    /** Island starts (first cross-sections) found in this run. */
+    startIslands: number;
+    /** Starts below their recipe count or 99% coverage. */
+    startsUnderSupported: number;
     /** Breakdown of candidates by assigned preset. */
     presets: { detail: number; structure: number; anchor: number };
     /** Breakdown of rejections by reason. */
@@ -298,6 +417,11 @@ export interface PlacementDiagnostics {
     mergeRefusals: Partial<Record<'noHost' | 'rejected', number>>;
     /** Candidates the grid refused and the fallback then placed without it. */
     gridFallbacks: number;
+    /** Trunk-build failures retried as wide fans after gap-fill. */
+    trunkErrorRetries?: { attempted: number; rescued: number };
+    /** Bare standalone overhang pillars removed because their island is not in
+     *  load deficit without them. */
+    loadCull?: { removed: number; ids: string[] };
     /** Candidates whose trunk could not reach the plate and were bridged
      *  model-to-model instead -- by whichever type registered a bridge
      *  builder. Tip = where the bridge
