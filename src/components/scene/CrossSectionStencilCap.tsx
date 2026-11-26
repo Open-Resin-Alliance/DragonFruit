@@ -944,7 +944,7 @@ function collectStaticStencilEntries(
         frontRenderOrder={SOURCE_FRONT_ORDER}
       />
     ));
-  }, [stencilBack, stencilFront, visibleStaticInstancedEntries]);
+  }, [stencilBack, stencilFront, visibleStaticInstancedEntries, SOURCE_BACK_ORDER, SOURCE_FRONT_ORDER]);
 
   if (!visible || (visibleModelStencilEntries.length === 0 && !hasVisibleStaticSource)) return null;
 

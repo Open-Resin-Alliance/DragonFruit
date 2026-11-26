@@ -18,7 +18,7 @@ import {
 } from '@/features/scene/sceneHistoryLabels';
 import { swapTriangleCorners } from '@/features/mirror/logic/swapTriangleCorners';
 
-type MirrorSession = {
+export type MirrorSession = {
   modelId: string;
   flips: { x: boolean; y: boolean; z: boolean };
   initialTransform: ModelTransform;
@@ -53,6 +53,11 @@ export type UseMirrorManagerOptions = {
   transformMgr: ReturnType<typeof useTransformManager>;
   /** scene.mode === 'prepare' && transformMgr.transformMode === 'mirror' */
   mirrorToolActive: boolean;
+  /**
+   * The live mirror session; `.current` is non-null while one is open. Owned by
+   * the caller, which reads it in effects declared before this hook is called.
+   */
+  mirrorSessionRef: React.RefObject<MirrorSession | null>;
   suppressTransformPersistenceCycles: (cycles?: number) => void;
   requestDestructiveTransformSupportDeletionWithContinuation: (
     operationLabel: string,
@@ -64,8 +69,6 @@ export type UseMirrorManagerResult = {
   handleMirror: (axis: MirrorAxis) => void;
   /** Cancels any pending deferred bake and commits it synchronously now. */
   flushPendingBake: () => void;
-  /** Live mirror session ref — read `.current` to detect an active session. */
-  mirrorSessionRef: React.RefObject<MirrorSession | null>;
 };
 
 /** Owns the world-space mirror tool: live preview reflection, deferred
@@ -74,10 +77,10 @@ export function useMirrorManager({
   scene,
   transformMgr,
   mirrorToolActive,
+  mirrorSessionRef,
   suppressTransformPersistenceCycles,
   requestDestructiveTransformSupportDeletionWithContinuation,
 }: UseMirrorManagerOptions): UseMirrorManagerResult {
-  const mirrorSessionRef = React.useRef<MirrorSession | null>(null);
   const mirrorPrevToolActiveRef = React.useRef(false);
   const mirrorLocalOriginRef = React.useRef(new THREE.Vector3(0, 0, 0));
   // Tracks a pending deferred bake so we can cancel/flush it on mode switch.
@@ -175,7 +178,7 @@ export function useMirrorManager({
 
     const axes = [flips.x && 'X', flips.y && 'Y', flips.z && 'Z'].filter(Boolean).join(', ');
     commitMirror(session, baked, finalizedTransform, axes);
-  }, [commitMirror]);
+  }, [commitMirror, mirrorSessionRef]);
 
   // Schedules baking off the main thread via a Web Worker so the visual mirror
   // renders instantly. Cancels any in-flight worker/timer so rapid successive
@@ -326,7 +329,7 @@ export function useMirrorManager({
       console.error('[Mirror] bake worker failed – falling back to synchronous bake');
       finalizeMirrorSession();
     };
-  }, [commitMirror, finalizeMirrorSession]);
+  }, [commitMirror, finalizeMirrorSession, mirrorSessionRef]);
 
   // Cancels any pending deferred bake (timer or worker) and runs it
   // synchronously now. Used when exiting mirror mode so geometry is committed
@@ -426,7 +429,7 @@ export function useMirrorManager({
     } else {
       performMirror();
     }
-  }, [scene, requestDestructiveTransformSupportDeletionWithContinuation, flushPendingBake, scheduleBake, syncTransformManagerToTransform]);
+  }, [scene, requestDestructiveTransformSupportDeletionWithContinuation, flushPendingBake, scheduleBake, syncTransformManagerToTransform, mirrorSessionRef]);
 
-  return { handleMirror, flushPendingBake, mirrorSessionRef };
+  return { handleMirror, flushPendingBake };
 }

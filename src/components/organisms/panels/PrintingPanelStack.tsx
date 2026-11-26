@@ -5,6 +5,7 @@ import { getSavedUvToolsSettings, resolveUvToolsExecutablePath } from '@/compone
 import type { SliceExportArtifact } from '@/features/slicing/sliceExportOrchestrator';
 import type { SliceIntent } from '@/features/slicing/components/SlicingPanel';
 import type { PrinterProfile } from '@/features/profiles/profileStore';
+import { registerPanelStack } from '@/components/layout/FloatingPanelStack';
 
 export type PrintingPanelStackProps = {
   printingArtifact: SliceExportArtifact | null;
@@ -50,7 +51,7 @@ export function PrintingPanelStack({
   completedSliceIntent,
   completedSaveDestinationPath,
 }: PrintingPanelStackProps) {
-  // Invoked inline by Home (not as <JSX/>) so FloatingPanelStack can flatten these keyed panels as direct children for its layout-profile positioning. 'use no memo' keeps React Compiler from injecting a useMemoCache hook (the conditional inline call must stay hook-free).
+  // Called by FloatingPanelStack while it flattens its children (see registerPanelStack), not rendered as a component. 'use no memo' keeps React Compiler from injecting a useMemoCache hook: the call must stay hook-free.
   'use no memo';
   return (
     <>
@@ -90,3 +91,5 @@ export function PrintingPanelStack({
     </>
   );
 }
+
+registerPanelStack(PrintingPanelStack);

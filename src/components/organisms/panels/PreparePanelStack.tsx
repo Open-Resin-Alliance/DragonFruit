@@ -11,6 +11,7 @@ import type { useSceneCollectionManager } from '@/features/scene/useSceneCollect
 import type { useTransformManager } from '@/features/transform/useTransformManager';
 import type { useArrangeManager } from '@/features/scene/arrange/useArrangeManager';
 import type { SelectionRotationMode } from '@/features/scene/selectionTransform';
+import { registerPanelStack } from '@/components/layout/FloatingPanelStack';
 
 export type PreparePanelStackProps = {
   scene: ReturnType<typeof useSceneCollectionManager>;
@@ -132,7 +133,7 @@ export function PreparePanelStack({
   arrangeSpacingMm,
   setArrangeSpacingMm,
 }: PreparePanelStackProps) {
-  // Invoked inline by Home (not as <JSX/>) so FloatingPanelStack can flatten these keyed panels as direct children for its layout-profile positioning. 'use no memo' keeps React Compiler from injecting a useMemoCache hook (the conditional inline call must stay hook-free).
+  // Called by FloatingPanelStack while it flattens its children (see registerPanelStack), not rendered as a component. 'use no memo' keeps React Compiler from injecting a useMemoCache hook: the call must stay hook-free.
   'use no memo';
   const {
     arrangePrecisionMode,
@@ -391,3 +392,5 @@ export function PreparePanelStack({
     </>
   );
 }
+
+registerPanelStack(PreparePanelStack);

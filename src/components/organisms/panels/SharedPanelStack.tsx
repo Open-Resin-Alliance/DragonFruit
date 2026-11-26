@@ -5,11 +5,12 @@ import type { useSceneCollectionManager } from '@/features/scene/useSceneCollect
 import type { useTransformManager } from '@/features/transform/useTransformManager';
 import { SupportInspectorPanel } from '@/supports/SupportInspectorPanel';
 import { Card, CardHeader } from '@/components/atoms/Card';
+import { registerPanelStack } from '@/components/layout/FloatingPanelStack';
 
 type DebugStamp = { perfMs: number; epochMs: number };
 type Vec3Like = { x: number; y: number; z: number };
 
-type TransformDebugStats = {
+export type TransformDebugStats = {
   activeModel: unknown;
   storeTransform: { position: THREE.Vector3; rotation: Vec3Like; scale: THREE.Vector3 } | null;
   liveTransform: { position: THREE.Vector3; rotation: Vec3Like; scale: THREE.Vector3 };
@@ -105,7 +106,7 @@ export type SharedPanelStackProps = {
   isTransformDebugOverlayOpen: boolean;
   setIsTransformDebugOverlayOpen: (open: boolean) => void;
   displayActiveModelId: string | null;
-  transformDebugStats: TransformDebugStats;
+  transformDebugStats: TransformDebugStats | null;
   supportDebugStats: SupportDebugStats;
 
   formatDebugVec3: (v: THREE.Vector3 | null | undefined) => string;
@@ -168,12 +169,12 @@ export function SharedPanelStack({
   printingSendStatusText,
   printingSlicingBenchmark,
 }: SharedPanelStackProps) {
-  // Invoked inline by Home (not as <JSX/>) so FloatingPanelStack can flatten these keyed panels as direct children for its layout-profile positioning. 'use no memo' keeps React Compiler from injecting a useMemoCache hook (the conditional inline call must stay hook-free).
+  // Called by FloatingPanelStack while it flattens its children (see registerPanelStack), not rendered as a component. 'use no memo' keeps React Compiler from injecting a useMemoCache hook: the call must stay hook-free.
   'use no memo';
   return (
     <>
       {/* i18n-ignore-start: developer debug overlay (Ctrl+Shift+X), kept in English */}
-      {isTransformDebugOverlayOpen && (
+      {isTransformDebugOverlayOpen && transformDebugStats && (
         <Card
           key="transform-debug-overlay"
           className="font-mono text-[10px] leading-tight"
@@ -424,3 +425,5 @@ export function SharedPanelStack({
     </>
   );
 }
+
+registerPanelStack(SharedPanelStack);

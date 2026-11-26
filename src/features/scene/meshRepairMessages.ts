@@ -25,6 +25,14 @@ export function repairFailedForModelMessage(modelName: string, message: string, 
   return translate(msg`Repair failed for ${modelName}: ${message}`);
 }
 
+export function remeshFailedMessage(message: string, translate: Translate): string {
+  return translate(msg`Remesh failed: ${message}`);
+}
+
+export function shrinkWrapFailedMessage(message: string, translate: Translate): string {
+  return translate(msg`Shrink-Wrap failed: ${message}`);
+}
+
 export function repairCancelledMessage(count: number, translate: Translate): string {
   return translate(msg`${plural(count, {
     one: 'Repair cancelled. The model is unchanged.',

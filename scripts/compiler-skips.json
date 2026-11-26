@@ -1,9 +1,6 @@
 {
   "comment": "Components and hooks the React Compiler skips, by file. Checked by scripts/check-compiler-skips.mjs; only ever shrink it.",
   "files": {
-    "src/app/page.tsx": [
-      "Home"
-    ],
     "src/components/AppLogger.tsx": [
       "AppLogger"
     ],
@@ -221,9 +218,6 @@
     ],
     "src/features/scene/arrange/useArrangeManager.ts": [
       "useArrangeManager"
-    ],
-    "src/features/scene/useSceneCollectionManager.ts": [
-      "useSceneCollectionManager"
     ],
     "src/features/slicing/components/LutCurveEditor.tsx": [
       "LutCurveEditorModal"

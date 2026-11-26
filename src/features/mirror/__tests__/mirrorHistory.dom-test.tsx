@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { resolveObjectURL } from 'node:buffer';
 import test from 'node:test';
 import * as THREE from 'three';
-import { useEffect } from 'react';
-import { useMirrorManager } from '@/features/mirror/useMirrorManager';
+import { useEffect, useRef } from 'react';
+import { useMirrorManager, type MirrorSession } from '@/features/mirror/useMirrorManager';
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import { useTransformManager } from '@/features/transform/useTransformManager';
 import { clearHistory, getUndoCount, redo, undo } from '@/history/historyStore';
@@ -72,10 +72,12 @@ type Mounted = { scene: Scene; mirror: Mirror };
 function Probe({ onRender }: { onRender: (mounted: Mounted) => void }) {
   const scene = useSceneCollectionManager();
   const transformMgr = useTransformManager({ geom: scene.geom, activeModel: scene.activeModel ?? null });
+  const mirrorSessionRef = useRef<MirrorSession | null>(null);
   const mirror = useMirrorManager({
     scene,
     transformMgr,
     mirrorToolActive: true,
+    mirrorSessionRef,
     suppressTransformPersistenceCycles: () => {},
     requestDestructiveTransformSupportDeletionWithContinuation: () => true,
   });
