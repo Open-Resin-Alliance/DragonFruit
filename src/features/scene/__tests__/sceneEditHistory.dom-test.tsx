@@ -6,7 +6,25 @@ import { msg } from '@lingui/core/macro';
 import * as THREE from 'three';
 import { serializeVoxlDocumentV2 } from '@/features/scene/voxl';
 import { clearHistory, getUndoCount, redo, undo } from '@/history/historyStore';
-import { addRoot, getSnapshot } from '@/supports/state';
+import { encodeSupportSettingsHex } from '@/supports/Settings/supportSettingsCodec';
+import { createDefaultSettings } from '@/supports/Settings/types';
+import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
+import type { ContactCone } from '@/supports/SupportPrimitives/ContactCone/types';
+import {
+  addRoot,
+  cloneSupportState,
+  getSnapshot,
+  loadFromImportFormat,
+  resetKickstandsInState,
+  resetStore,
+} from '@/supports/state';
+import {
+  getSupportTypeDescriptor,
+  SUPPORT_COLLECTION_KEYS,
+  type SupportCollectionKey,
+  type SupportTypeId,
+} from '@/supports/supportTypeRegistry';
+import type { DragonfruitImportFormat, SupportCollectionByType } from '@/supports/types';
 import { renderWithProviders, settle } from '@/utils/__tests__/helpers/renderDom';
 import { useSceneCollectionManager } from '../useSceneCollectionManager';
 
@@ -157,6 +175,225 @@ test('scene edits from the model list land in undo history', async (t) => {
       repaired.forEach((geometry, i) => assert.notEqual(geometry, originals[i]));
       assert.equal(getUndoCount(), 1);
       await assertUndoRedo(geometries, originals, repaired);
+    });
+
+    await t.test('repairing a model in place leaves attached non-collinear supports bit-identical across undo and redo', async () => {
+      resetStore();
+      resetKickstandsInState();
+      clearHistory();
+
+      try {
+        const settingsCodeHex = encodeSupportSettingsHex(createDefaultSettings());
+        const diskProfile = {
+          type: 'disk' as const,
+          contactDiameterMm: 0.4,
+          bodyDiameterMm: 1.2,
+          lengthMm: 3,
+          penetrationMm: 0.05,
+          diskThicknessMm: 0.12,
+          maxStandoffMm: 0.5,
+          standoffAngleThreshold: Math.PI / 4,
+        };
+        const trunkCone: ContactCone = {
+          id: 'dom-repair-trunk-cone',
+          pos: { x: 1, y: 0.5, z: 12 },
+          normal: { x: 0.28, y: 0, z: -0.96 },
+          surfaceNormal: { x: 0.6, y: 0, z: -0.8 },
+          diskLengthOverride: 0.42,
+          socketJointId: 'dom-repair-trunk-tj',
+          profile: { ...diskProfile },
+        };
+        const leafCone: ContactCone = {
+          id: 'dom-repair-leaf-cone',
+          pos: { x: 2.5, y: 1.5, z: 7.5 },
+          normal: { x: 0.6, y: 0, z: -0.8 },
+          surfaceNormal: { x: 0, y: 0.6, z: -0.8 },
+          diskLengthOverride: 0.29,
+          profile: { ...diskProfile },
+        };
+        const stickConeA: ContactCone = {
+          id: 'dom-repair-stick-cone-a',
+          pos: { x: -3, y: 1, z: 2 },
+          normal: { x: 0, y: 0.6, z: 0.8 },
+          surfaceNormal: { x: 0.6, y: 0, z: 0.8 },
+          diskLengthOverride: 0.24,
+          socketJointId: 'dom-repair-stick-bj',
+          profile: { ...diskProfile },
+        };
+        const stickConeB: ContactCone = {
+          id: 'dom-repair-stick-cone-b',
+          pos: { x: -3.5, y: 1.5, z: 10 },
+          normal: { x: 2 / 7, y: 3 / 7, z: -6 / 7 },
+          surfaceNormal: { x: 0, y: 0.8, z: -0.6 },
+          diskLengthOverride: 0.31,
+          socketJointId: 'dom-repair-stick-tj',
+          profile: { ...diskProfile },
+        };
+
+        const emptyCollections = {} as Record<string, unknown[]>;
+        for (const key of SUPPORT_COLLECTION_KEYS) emptyCollections[key] = [];
+        const payload: DragonfruitImportFormat = {
+          ...(emptyCollections as unknown as Pick<DragonfruitImportFormat, SupportCollectionKey>),
+          version: 1,
+          meta: { source: 'dom-repair-invariance', objectCenter: { x: 0, y: 0, z: 0 } },
+          roots: [
+            {
+              id: 'dom-repair-root',
+              modelId: cube.id,
+              transform: { pos: { x: 0, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
+              diameter: 6,
+              diskHeight: 1,
+              coneHeight: 1,
+            },
+          ],
+          knots: [
+            {
+              id: 'dom-repair-k-leaf',
+              parentShaftId: 'dom-repair-trunk-seg-lower',
+              t: 0.5,
+              pos: { x: 0, y: 0, z: 4 },
+              diameter: 1.3,
+            },
+          ],
+        };
+        const setCollection = <K extends SupportTypeId>(
+          typeId: K,
+          entities: DragonfruitImportFormat[SupportCollectionByType[K] & keyof DragonfruitImportFormat],
+        ) => {
+          (payload as unknown as Record<string, unknown>)[getSupportTypeDescriptor(typeId).location.key] = entities;
+        };
+
+        setCollection('trunk', [
+          {
+            id: 'dom-repair-trunk',
+            modelId: cube.id,
+            rootId: 'dom-repair-root',
+            settingsCodeHex,
+            segments: [
+              {
+                id: 'dom-repair-trunk-seg-lower',
+                type: 'straight',
+                diameter: 1.2,
+                topJoint: { id: 'dom-repair-trunk-mid', pos: { x: 0, y: 0, z: 6 }, diameter: 1.3 },
+              },
+              {
+                id: 'dom-repair-trunk-seg-upper',
+                type: 'straight',
+                diameter: 1.2,
+                bottomJoint: { id: 'dom-repair-trunk-mid', pos: { x: 0, y: 0, z: 6 }, diameter: 1.3 },
+                topJoint: { id: 'dom-repair-trunk-tj', pos: getFinalSocketPosition(trunkCone), diameter: 1.3 },
+              },
+            ],
+            contactCone: trunkCone,
+          },
+        ]);
+        setCollection('leaf', [
+          {
+            id: 'dom-repair-leaf',
+            modelId: cube.id,
+            parentKnotId: 'dom-repair-k-leaf',
+            settingsCodeHex,
+            contactCone: leafCone,
+          },
+        ]);
+        setCollection('stick', [
+          {
+            id: 'dom-repair-stick',
+            modelId: cube.id,
+            settingsCodeHex,
+            segments: [
+              {
+                id: 'dom-repair-stick-seg',
+                type: 'straight',
+                diameter: 1.0,
+                bottomJoint: { id: 'dom-repair-stick-bj', pos: getFinalSocketPosition(stickConeA), diameter: 1.1 },
+                topJoint: { id: 'dom-repair-stick-tj', pos: getFinalSocketPosition(stickConeB), diameter: 1.1 },
+              },
+            ],
+            contactConeA: stickConeA,
+            contactConeB: stickConeB,
+          },
+        ]);
+        setCollection('twig', [
+          {
+            id: 'dom-repair-twig',
+            modelId: cube.id,
+            settingsCodeHex,
+            segments: [
+              {
+                id: 'dom-repair-twig-seg',
+                type: 'straight',
+                diameter: 0.36,
+                bottomJoint: { id: 'dom-repair-twig-bj', pos: { x: 8.168, y: -2, z: 3.224 }, diameter: 0.46 },
+                topJoint: { id: 'dom-repair-twig-tj', pos: { x: 8.5, y: -1.296, z: 5.728 }, diameter: 0.46 },
+              },
+            ],
+            contactDiskA: {
+              id: 'dom-repair-twig-disk-a',
+              pos: { x: 8, y: -2, z: 3 },
+              surfaceNormal: { x: 0.6, y: 0, z: 0.8 },
+              coneAxis: { x: 0, y: 0.6, z: 0.8 },
+              diskLengthOverride: 0.28,
+              contactDiameterMm: 0.36,
+              profile: {
+                type: 'disk',
+                diskThicknessMm: 0.1,
+                maxStandoffMm: 0.5,
+                standoffAngleThreshold: Math.PI / 4,
+              },
+            },
+            contactDiskB: {
+              id: 'dom-repair-twig-disk-b',
+              pos: { x: 8.5, y: -1.5, z: 6 },
+              surfaceNormal: { x: 0, y: 0.6, z: -0.8 },
+              coneAxis: { x: -2 / 7, y: 3 / 7, z: -6 / 7 },
+              diskLengthOverride: 0.34,
+              contactDiameterMm: 0.36,
+              profile: {
+                type: 'disk',
+                diskThicknessMm: 0.1,
+                maxStandoffMm: 0.5,
+                standoffAngleThreshold: Math.PI / 4,
+              },
+            },
+          },
+        ]);
+
+        loadFromImportFormat(payload);
+        const supportsBefore = cloneSupportState(getSnapshot());
+        const assertSupportsBitIdentical = (phase: string) => {
+          const snap = getSnapshot();
+          assert.deepStrictEqual(snap, supportsBefore, `${phase}: support snapshot must stay bit-identical`);
+          assert.deepStrictEqual(snap.trunks['dom-repair-trunk'].contactCone, trunkCone, `${phase}: trunk cone`);
+          assert.deepStrictEqual(snap.leaves['dom-repair-leaf'].contactCone, leafCone, `${phase}: leaf cone`);
+          assert.deepStrictEqual(snap.sticks['dom-repair-stick'].contactConeA, stickConeA, `${phase}: stick coneA`);
+          assert.deepStrictEqual(snap.sticks['dom-repair-stick'].contactConeB, stickConeB, `${phase}: stick coneB`);
+          assert.deepStrictEqual(snap.twigs['dom-repair-twig'].contactDiskA, supportsBefore.twigs['dom-repair-twig'].contactDiskA, `${phase}: twig diskA`);
+          assert.deepStrictEqual(snap.twigs['dom-repair-twig'].contactDiskB, supportsBefore.twigs['dom-repair-twig'].contactDiskB, `${phase}: twig diskB`);
+        };
+
+        const original = model()!.geometry.geometry;
+        assert.equal(await scene().repairModelsInPlace([cube.id]), true);
+        await settle(20);
+        const repaired = model()!.geometry.geometry;
+        assert.notEqual(repaired, original);
+        assert.equal(getUndoCount(), 1);
+        assertSupportsBitIdentical('after repairModelsInPlace');
+
+        undo();
+        await settle(20);
+        assert.equal(model()?.geometry.geometry, original);
+        assertSupportsBitIdentical('after undo');
+
+        redo();
+        await settle(20);
+        assert.equal(model()?.geometry.geometry, repaired);
+        assertSupportsBitIdentical('after redo');
+      } finally {
+        resetStore();
+        resetKickstandsInState();
+        clearHistory();
+      }
     });
   } finally {
     await tree.unmount();
