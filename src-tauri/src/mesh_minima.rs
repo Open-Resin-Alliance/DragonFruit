@@ -949,27 +949,20 @@ pub async fn scan_islands_from_path(
     k: Option<usize>,
     overhang_self_support_angle_deg: Option<f32>,
     overhang_px_mm: Option<f32>,
-    overhang_from_staged: Option<bool>,
+    overhang_mesh_id: Option<String>,
     has_raft: Option<bool>,
 ) -> Result<CombinedIslandScanResult, String> {
-    // The frontend stages the soup it renders so overhang ids index the
-    // overlay geometry. A missing buffer falls back to the file mesh.
-    let staged_overhang_soup: Option<Vec<f32>> = if overhang_from_staged.unwrap_or(false) {
-        let bytes = crate::staged_mesh()
-            .lock()
-            .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
-            .take();
-        match bytes {
-            Some(bytes) => Some(crate::bytes_to_f32_vec(&bytes)?),
-            None => {
-                log::warn!(
-                    "[islands-combined] overhang_from_staged was set but no mesh was staged; using the file mesh"
-                );
+    // The frontend stores the soup it renders so overhang ids index the
+    // overlay geometry. A soup the store no longer has falls back to the file mesh.
+    let staged_overhang_soup: Option<Vec<f32>> = match overhang_mesh_id.as_deref() {
+        Some(id) => match crate::take_stored_soup(id, "Overhang classification") {
+            Ok(soup) => Some(soup),
+            Err(err) => {
+                log::warn!("[islands-combined] no overhang soup ({err}); using the file mesh");
                 None
             }
-        }
-    } else {
-        None
+        },
+        None => None,
     };
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -998,11 +991,12 @@ pub async fn scan_islands_from_path(
 /// Combined island scan against the staged world-space triangle soup.
 ///
 /// This is the pathless-model entrypoint (a VOXL has no source file): the
-/// frontend stages exactly the positions it renders, so every returned
-/// `triangleId` indexes the rendered geometry. It consumes the staged buffer.
+/// frontend stores exactly the positions it renders, so every returned
+/// `triangleId` indexes the rendered geometry. It consumes the stored soup.
 #[tauri::command]
 pub async fn scan_islands_staged(
     app: crate::DragonFruitAppHandle,
+    mesh_id: String,
     layer_height_mm: f64,
     px_mm: f64,
     support_buffer_mm: f64,
@@ -1013,18 +1007,7 @@ pub async fn scan_islands_staged(
     has_raft: Option<bool>,
 ) -> Result<CombinedIslandScanResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let bytes = crate::staged_mesh()
-            .lock()
-            .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
-            .take()
-            .ok_or("No staged mesh binary — call stage_mesh_binary_set first")?;
-        let soup = crate::bytes_to_f32_vec(&bytes)?;
-        if soup.is_empty() || soup.len() % 9 != 0 {
-            return Err(format!(
-                "Staged island scan needs a triangle soup (9 floats per triangle); got {} floats",
-                soup.len()
-            ));
-        }
+        let soup = crate::take_stored_soup(&mesh_id, "Staged island scan")?;
         let mesh = IndexedMesh::from_triangle_soup(&soup, 1e-5);
         scan_islands_from_mesh(
             app,

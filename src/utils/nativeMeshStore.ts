@@ -200,6 +200,26 @@ export async function withNativeMesh<T>(
   }
 }
 
+/**
+ * Puts a triangle soup into the store for the length of `pass`, as `withNativeMesh` does for a
+ * geometry. A pass that consumes its input (the island and overhang scans) leaves nothing to
+ * drop; one that fails before it does still has its soup dropped.
+ */
+export async function withNativeSoup<T>(
+  core: TauriCoreModule,
+  soup: Float32Array,
+  pass: (meshId: string) => Promise<T>,
+): Promise<T> {
+  const meshId = await putNativeSoup(core, soup);
+  try {
+    return await pass(meshId);
+  } catch (error) {
+    return rethrowNativeMeshStoreError(error);
+  } finally {
+    await dropNativeMeshes(core, [meshId]).catch(() => undefined);
+  }
+}
+
 /** The store's counters: entries, bytes, peak, evictions and expired reads. */
 export interface NativeMeshStoreStats {
   entries: number;

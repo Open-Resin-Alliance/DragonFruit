@@ -1,17 +1,17 @@
 /**
  * Native (Rust) island scan bridge via Tauri IPC.
  *
- * Uses the same two-phase IPC pattern as slicing:
- *   1. stage_mesh_binary_set() — send geometry bytes (raw binary, single-shot)
- *   2. run_island_scan_native() — run scan, receive results
+ * Two IPC calls:
+ *   1. mesh_store_put — send the geometry's positions as raw bytes; returns an id
+ *   2. run_island_scan_native(meshId) — run the scan on that id, which it consumes
  *
  * Returns a `ScanResults`-compatible object so all existing overlay/voxel
  * rendering works unchanged.
  */
 
-import * as core from '@tauri-apps/api/core';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import * as THREE from 'three';
+import type * as THREE from 'three';
+import { withNativeSoup } from '@/utils/nativeMeshStore';
+import { loadTauriCore } from '@/utils/tauriMeshBridge';
 import type { ScanResults, ScanParams, GridRef, ScanLayerResult } from './ScanOrchestrator';
 import type { Island } from './types';
 import type { RleMask, RleLabels } from './rle';
@@ -123,25 +123,19 @@ export async function runIslandScanNative(
   params: ScanParams,
   onProgress?: (done: number, total: number) => void,
 ): Promise<ScanResults> {
-  // Step 1: Stage mesh binary via raw binary IPC.
-  // Uses `stage_mesh_binary_set` (single-shot), which replaced the old `stage_mesh_binary` command in v3.1.
+  const core = await loadTauriCore();
+  if (!core) throw new Error('The native island scan needs the Tauri runtime');
   const positions = geom.geometry.getAttribute('position').array as Float32Array;
-  const meshBytes = new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength);
 
-  await core.invoke('stage_mesh_binary_set', meshBytes, {
-    headers: { 'Content-Type': 'application/octet-stream' },
-  });
-
-  // Step 2: Listen for progress events
-  let unlisten: UnlistenFn | null = null;
+  let unlisten: (() => void) | null = null;
   if (onProgress) {
-    unlisten = await listen<{ done: number; total: number }>('islandscan://progress', (event) => {
+    unlisten = await core.listen<{ done: number; total: number }>('islandscan://progress', (event) => {
       onProgress(event.payload.done, event.payload.total);
     });
   }
 
   try {
-    // Step 3: Build params JSON and invoke native scan
+    // Build the params JSON and run the scan on the stored positions
     const bb = geom.bbox;
     const paramsJson = JSON.stringify({
       px_mm: params.px_mm,
@@ -159,9 +153,9 @@ export async function runIslandScanNative(
       bbox_max_z: bb.max.z,
     });
 
-    const native = await core.invoke<NativeIslandScanResult>('run_island_scan_native', {
-      paramsJson,
-    });
+    const native = await withNativeSoup(core, positions, (meshId) => (
+      core.invoke<NativeIslandScanResult>('run_island_scan_native', { paramsJson, meshId })
+    ));
 
     console.log(
       `[native island scan] rasterize=${native.rasterizeMs.toFixed(0)}ms ` +
@@ -169,7 +163,7 @@ export async function runIslandScanNative(
       `islands=${native.islands.length}`
     );
 
-    // Step 4: Convert to ScanResults (frontend-compatible)
+    // Convert to ScanResults (frontend-compatible)
     const grid: GridRef = {
       originX: native.grid.originX,
       originZ: native.grid.originZ,

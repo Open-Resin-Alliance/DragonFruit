@@ -114,7 +114,7 @@ geometry it sent — through the index buffer, when the geometry has one.
 
 **Why the body and not the staging buffer.** It is an instance of the
 geometry-indexed rule in *Conventions to respect* above: staging is process-wide
-mutable state shared with the mesh passes still on it (islands, slicing), so a bake
+mutable state shared with the mesh passes still on it (shrink-wrap, slicing), so a bake
 that read it could compute occlusion for a different mesh than the one the values were
 attached to. Raw bytes rather than a JSON `Vec<f32>` because a print-sized soup
 is millions of floats and the JS side already has a byte buffer.

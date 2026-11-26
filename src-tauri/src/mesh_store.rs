@@ -299,6 +299,26 @@ impl MeshStore {
         Ok(Arc::try_unwrap(shared).unwrap_or_else(|still_shared| (*still_shared).clone()))
     }
 
+    /// Removes the triangle soup under `id` and returns its bytes as `take` does. An id of
+    /// another kind fails with `wrong_kind` and is left where it is.
+    pub fn take_soup(&self, id: &str) -> Result<Vec<u8>, StoreError> {
+        {
+            let mut inner = self.lock();
+            match inner.slots.get(id) {
+                Some(slot) if slot.entry.kind() != EntryKind::Soup => {
+                    return Err(wrong_kind(id, EntryKind::Soup.as_str(), slot.entry.kind()));
+                }
+                Some(_) => {}
+                None => return Err(inner.miss(id)),
+            }
+        }
+        let entry = self.take(id)?;
+        let kind = entry.kind();
+        entry
+            .into_bytes()
+            .ok_or_else(|| wrong_kind(id, EntryKind::Soup.as_str(), kind))
+    }
+
     /// The triangle soup under `id`, shared; `wrong_kind` when the id holds something else.
     /// A caller that got `Ok` can rely on `soup_bytes()` being `Some`.
     pub fn get_soup(&self, id: &str) -> Result<Arc<Entry>, StoreError> {
@@ -600,8 +620,22 @@ mod tests {
                 && err.to_string().contains("holds a buffer"),
             "{err}"
         );
+        assert_eq!(store.take_soup(&id).unwrap_err().code(), "wrong_kind");
         assert_eq!(store.take_bytes(&id).unwrap(), vec![9u8; 12]);
         assert_eq!(store.stats().bytes, 0);
+    }
+
+    #[test]
+    fn a_taken_soup_is_gone_and_a_failed_take_leaves_the_entry() {
+        let store = MeshStore::new(1 << 20);
+        let id = store.put(client("c"), soup(36, 4));
+        assert_eq!(store.take_soup(&id).unwrap(), vec![4u8; 36]);
+        assert_eq!(store.take_soup(&id).unwrap_err().code(), "unknown");
+        assert_eq!(store.stats().bytes, 0);
+
+        let session = store.put(client("c"), hollow_session());
+        assert_eq!(store.take_soup(&session).unwrap_err().code(), "wrong_kind");
+        assert!(store.hollow_source(&session).is_ok());
     }
 
     #[test]
