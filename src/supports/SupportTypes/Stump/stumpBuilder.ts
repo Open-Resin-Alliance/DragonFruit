@@ -108,9 +108,9 @@ export function buildStumpData(input: StumpBuildInput): StumpBuildResult {
     );
     const socketPos = getFinalSocketPosition(authoredCone);
 
-    // Root and joint are positioned at the computed cone socket
+    // Root and joint are positioned at the computed cone socket (clamped above root top)
     const rootPos: Vec3 = { x: socketPos.x, y: socketPos.y, z: 0 };
-    const jointPos: Vec3 = { x: socketPos.x, y: socketPos.y, z: socketPos.z };
+    const jointPos: Vec3 = { x: socketPos.x, y: socketPos.y, z: Math.max(targetSocketZ, socketPos.z) };
     const joint: Joint = {
         id: uuidv4(),
         pos: jointPos,

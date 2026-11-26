@@ -183,3 +183,25 @@ test('a short-span stump aligns joint.pos.z and socketJointId when socketPos.z s
     resetStore();
   }
 });
+
+test('a stump whose contact sits below the root top at tipZ = 0.5 is refused as STUMP_BELOW_ROOT', () => {
+  resetStore();
+  const defaults = createDefaultSettings();
+  setSettings({
+    ...defaults,
+    tip: {
+      ...defaults.tip,
+      lengthMm: 6,
+    },
+  });
+
+  try {
+    const result = placeStumpOn(0.5);
+    assert.equal(result?.refusal, 'STUMP_BELOW_ROOT');
+    const stump = result?.placed.entity as Stump;
+    assert.equal(stump.joint.pos.z, 1.1);
+  } finally {
+    setSettings(createDefaultSettings());
+    resetStore();
+  }
+});
