@@ -62,9 +62,30 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
----
+### 5. It's a group project, keep the project tidy.
+
+ **Comments:** 
+ 
+ - Default to none where appropriate. 
+ - State a reason only where it is not obvious from the code.
+ - Do not narrate process (ie "previously", "before"), use first-person, or provide measurement receipts (counts, named test files as evidence).
+ - Keep byte offsets, format layout, and constraints invisible from the code.
+ - Code comments describe what the code is doing in strictly conscise terms.
+ - Same for commit messages — short and plain, 4 lines or fewer if possible.
+
+ **Helpers:** 
+ - A variety of existing geometry and math helpers exist in src/utils.
+ - Check the helpers before creating new ones, use them where appropriate.
+ - If a helper is going to be used multiple times in Dragonfruit, create it once, add it to utils, then import the function.
+
+ **Structure:**
+ - Support specific code does not leave src/supports.
+ - Some of the support specific code still exists in modules throughout the codebase. It will eventually be refactored, do not add to the mess.
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+---
+
 
 ## New interfaces require dev documentation
 
