@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 import { collectFanShaftPoints, computeAutoSupportPlan, fanLeafToHost } from '../autoSupport/autoPlace';
 import { getSnapshot, resetStore, resetKickstandsInState } from '../state';
 import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
-import { initializeBVH } from '@/utils/bvh';
+import { accelerateGeometry, initializeBVH } from '@/utils/bvh';
 import { footprintFromPoints } from '@/volumeAnalysis/Islands/voxelFootprint';
 import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
 import { buildTrunkData } from '../SupportTypes/Trunk/trunkBuilder';
@@ -218,5 +219,128 @@ test('off-grid placement honors leafFanMaxAngleDeg without clamping to grid.minB
     );
     assert.ok(onGridPlan, 'grid-enabled plan computed');
     assert.equal(onGridPlan.result.placed.leaf, 0, 'grid-enabled mode enforces 90 - minBranchAngleDeg = 30° cap');
+});
+
+function createSpyBaffleMesh(baffle: { x: number; z: number; sx: number; sy: number; sz: number }): {
+    mesh: THREE.Mesh;
+    getCenterUpDiscCasts: () => number;
+    getTotalRaycasts: () => number;
+    resetCounts: () => void;
+} {
+    const targetCeiling = new THREE.BoxGeometry(2, 2, 2).translate(2.5, 0, 35);
+    const baffleBox = new THREE.BoxGeometry(baffle.sx, baffle.sy, baffle.sz).translate(baffle.x, 0, baffle.z);
+    const merged = mergeGeometries([targetCeiling, baffleBox]);
+    assert.ok(merged, 'merged baffle geometry');
+    accelerateGeometry(merged);
+    const mesh = new THREE.Mesh(merged);
+    mesh.updateMatrixWorld(true);
+
+    let centerUpDiscCasts = 0;
+    let totalRaycasts = 0;
+    const origRaycast = mesh.raycast.bind(mesh);
+    mesh.raycast = (raycaster, intersects) => {
+        totalRaycasts += 1;
+        const o = raycaster.ray.origin;
+        const d = raycaster.ray.direction;
+        if (
+            Math.abs(o.x - 2.5) < 1e-6
+            && Math.abs(o.y) < 1e-6
+            && Math.abs(o.z - 32) < 1e-6
+            && Math.abs(d.x) < 1e-6
+            && Math.abs(d.y) < 1e-6
+            && Math.abs(d.z - 1) < 1e-6
+        ) {
+            centerUpDiscCasts += 1;
+        }
+        origRaycast(raycaster, intersects);
+    };
+
+    return {
+        mesh,
+        getCenterUpDiscCasts: () => centerUpDiscCasts,
+        getTotalRaycasts: () => totalRaycasts,
+        resetCounts: () => {
+            centerUpDiscCasts = 0;
+            totalRaycasts = 0;
+        },
+    };
+}
+
+test('1F: fanLeafToHost resolves target surface normal once across primary and fallback sample retries', () => {
+    const { state, points } = scenario();
+    const [template] = points as Array<Record<string, unknown>>;
+    const pool = [29.5, 29.6, 29.7, 29.8, 29.9].map((z) => ({
+        ...template,
+        pos: { x: 0, y: 0, z },
+    }));
+    const target = { x: 2.5, y: 0, z: 34 };
+
+    // 1. Blocked primary (5 branch attempts) + fallback (5 slim-leaf attempts):
+    //    target normal is invariant across all 10 probes, so only 1 center-up disc cast runs.
+    const blockedSpy = createSpyBaffleMesh({ x: 1.25, z: 31.85, sx: 1.0, sy: 2.0, sz: 1.6 });
+    const blockedRes = fanLeafToHost(
+        target,
+        MODEL,
+        pool as never,
+        new Set<string>(),
+        'fan-1f-blocked',
+        8,
+        2.5,
+        45,
+        12,
+        state as never,
+        blockedSpy.mesh,
+    );
+    assert.equal(blockedRes.ok, false);
+    if (!blockedRes.ok) assert.equal(blockedRes.reason, 'blocked');
+    assert.equal(
+        blockedSpy.getCenterUpDiscCasts(),
+        1,
+        'invariant resolveSurfaceNormal must execute once across all primary + fallback samples',
+    );
+
+    // 2. 0-pool early exit: no sample clears initial filter -> 0 raycasts.
+    blockedSpy.resetCounts();
+    const noHostRes = fanLeafToHost(
+        { x: 30, y: 0, z: 34 },
+        MODEL,
+        pool as never,
+        new Set<string>(),
+        'fan-1f-nohost',
+        8,
+        2.5,
+        45,
+        12,
+        state as never,
+        blockedSpy.mesh,
+    );
+    assert.equal(noHostRes.ok, false);
+    if (!noHostRes.ok) assert.equal(noHostRes.reason, 'noHost');
+    assert.equal(blockedSpy.getCenterUpDiscCasts(), 0, '0-pool exit must cast 0 center-up disc rays');
+    assert.equal(blockedSpy.getTotalRaycasts(), 0, '0-pool exit must trigger 0 total raycasts');
+
+    // 3. Partial baffle: deepest/steepest samples (29.5, 29.6) hit the lowered baffle while a shallower
+    //    sample (29.7) clears, attaching with only 1 resolveSurfaceNormal disc cast.
+    const partialSpy = createSpyBaffleMesh({ x: 1.25, z: 31.4, sx: 0.4, sy: 2.0, sz: 0.2 });
+    const partialRes = fanLeafToHost(
+        target,
+        MODEL,
+        pool as never,
+        new Set<string>(),
+        'fan-1f-partial',
+        8,
+        2.5,
+        45,
+        12,
+        state as never,
+        partialSpy.mesh,
+    );
+    assert.equal(partialRes.ok, true, `expected shallower sample to clear lowered baffle, got ${JSON.stringify(partialRes)}`);
+    if (partialRes.ok) {
+        const knots = Object.values((partialRes.draft as unknown as { knots: Record<string, { id: string; pos: { z: number } }> }).knots);
+        const attachedKnot = knots.find((k) => k.id.startsWith('fan-1f-partial'));
+        assert.ok(attachedKnot && attachedKnot.pos.z > 29.5, `expected retry past blocked 29.5 sample, got ${JSON.stringify(attachedKnot)}`);
+    }
+    assert.equal(partialSpy.getCenterUpDiscCasts(), 1, 'partial baffle attach resolves surface normal once');
 });
 

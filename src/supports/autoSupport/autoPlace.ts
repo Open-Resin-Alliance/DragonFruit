@@ -4043,11 +4043,27 @@ export function fanLeafToHost(
         ? [...rankedCandidates, ...rescue.slice(0, 6)]
         : (rankedCandidates.length > 0 ? rankedCandidates : rescue);
 
+    type ResolvedSurfaceNormal = ReturnType<typeof resolveSurfaceNormal>;
+    let cachedSurfaceNormal: ResolvedSurfaceNormal | null = null;
+    const getResolvedSurfaceNormal = (): ResolvedSurfaceNormal => {
+        if (!cachedSurfaceNormal) {
+            const resolved = resolveSurfaceNormal(target, mesh ?? undefined);
+            cachedSurfaceNormal = {
+                point: { x: resolved.point.x, y: resolved.point.y, z: resolved.point.z },
+                normal: { x: resolved.normal.x, y: resolved.normal.y, z: resolved.normal.z },
+                hit: resolved.hit,
+            };
+        }
+        return cachedSurfaceNormal;
+    };
+
     const tryAttachPool = (leafSpanCeilingMm: number, allowBranch: boolean) => {
         let lastBlockedReason: FanLeafRefusal | null = null;
         for (const { sp, dist2, angleDeg } of pool) {
             const spanMm = Math.sqrt(dist2);
             if (!allowBranch && spanMm > leafSpanCeilingMm) continue;
+            const isBranchHost = sp.hostTypeId === 'branch';
+            if (isBranchHost && spanMm > MAX_LEAF_FALLBACK_SPAN_MM) continue;
             const parentKnot = {
                 id: freeKnotId(draft, knotIdPrefix),
                 parentShaftId: sp.segmentId ?? sp.hostId,
@@ -4055,7 +4071,7 @@ export function fanLeafToHost(
                 pos: sp.pos,
                 diameter: sp.diameter + 0.125,
             };
-            const resolved = resolveSurfaceNormal(target, mesh ?? undefined);
+            const resolved = getResolvedSurfaceNormal();
             /**
              * The pre-test asks the question the member will have to answer at build
              * time, and no more. A leaf is one tapered cone from the host to the tip,
@@ -4068,8 +4084,6 @@ export function fanLeafToHost(
              * branch, which is a real shaft, still has to reach a point short of the
              * tip, because its own collision test runs after it is built.
              */
-            const isBranchHost = sp.hostTypeId === 'branch';
-            if (isBranchHost && spanMm > MAX_LEAF_FALLBACK_SPAN_MM) continue;
             const isBranchAttempt = allowBranch && !isBranchHost && spanMm > leafSpanCeilingMm;
             if (mesh) {
                 const toTip = {
@@ -4116,8 +4130,8 @@ export function fanLeafToHost(
                     const band = activeSizingBand(autoSettings);
                     const built = buildHostedBranch(
                         {
-                            tipPos: resolved.point,
-                            tipNormal: resolved.normal,
+                            tipPos: { ...resolved.point },
+                            tipNormal: { ...resolved.normal },
                             modelId,
                             parentKnot,
                             mesh: mesh ?? undefined,
@@ -4181,8 +4195,8 @@ export function fanLeafToHost(
             let leaf;
             try {
                 const built = buildLeafData({
-                    tipPos: resolved.point,
-                    surfaceNormal: resolved.normal,
+                    tipPos: { ...resolved.point },
+                    surfaceNormal: { ...resolved.normal },
                     modelId,
                     parentKnot,
                     hostDiameterMm: sp.diameter,
