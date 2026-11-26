@@ -35,7 +35,7 @@ import {
   subscribeToThemeMeshHighlightColors,
 } from '@/components/settings/themeCustomizations';
 import { useMeshSmoothingGeometryReplacement } from '@/features/mesh-smoothing/useMeshSmoothingGeometryReplacement';
-import { useMirrorManager } from '@/features/mirror/useMirrorManager';
+import { useMirrorManager, type MirrorSession } from '@/features/mirror/useMirrorManager';
 import { useArrangeManager } from '@/features/scene/arrange/useArrangeManager';
 import { useHolePunchManager } from '@/features/hole-punching/useHolePunchManager';
 import { type MeshShaderType } from '@/features/shaders/mesh';
@@ -125,6 +125,7 @@ import { BlockingOverlay, Button, IconButton, Toast, ToastViewport } from '@/com
 import { EditorContextMenu, MENU_ITEMS, type EditorMenuAction, type EditorMenuItemDef } from '@/components/ui/EditorContextMenu';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
+import { raise, withCleanup, withCleanupAsync } from '@/utils/compilerControlFlow';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { RenderProfilerOverlay } from '@/components/debug/RenderProfilerOverlay';
 import { toggleRenderProfilerEnabled } from '@/utils/debug/renderProfiler';
@@ -792,6 +793,13 @@ function formatPlateLockedNotice(
   }), { plateName });
 }
 
+// The lazily loaded modules Home needs. A dynamic `import()` inside the component would
+// take it out of the React Compiler (#941); called through these it stays in.
+const importTauriCore = () => import('@tauri-apps/api/core');
+const importTauriWindow = () => import('@tauri-apps/api/window');
+const importTauriEvent = () => import('@tauri-apps/api/event');
+const importAthenaNetwork = () => import('../../plugins/athena/network');
+
 export default function Home() {
   const { _, i18n } = useLingui();
   const fmt = useLocaleFormat();
@@ -1138,6 +1146,12 @@ export default function Home() {
 
   // 2. Transform Management (needs geom for bounds)
   const transformMgr = useTransformManager({ geom: scene.geom, activeModel: scene.activeModel ?? null });
+  // Taken out of the manager's result so writes to `.current` go through the ref
+  // itself; the React Compiler rejects a write through a hook's return value.
+  const { pendingTransformRef } = transformMgr;
+  // Owned here rather than by useMirrorManager: the transform persistence effect
+  // reads it and is declared long before the mirror manager is called.
+  const mirrorSessionRef = React.useRef<MirrorSession | null>(null);
   const [uniformScaling, setUniformScaling] = React.useState(true);
   // Gizmo frame: world axes, or the active model's own (issue #504).
   const [localTransformSpace, setLocalTransformSpace] = React.useState(false);
@@ -3124,7 +3138,7 @@ export default function Home() {
             const bytes = a.blob
               ? new Uint8Array(await a.blob.arrayBuffer())
               : (nativePathForWrite ? await readPrintArtifactBytesFromPath(nativePathForWrite) : null);
-            if (!bytes) throw new Error('No artifact bytes available for write.');
+            if (!bytes) raise(new Error('No artifact bytes available for write.'));
             await writeBytesToNativePath(destinationPath, bytes);
             savedPath = destinationPath;
           } catch (error) {
@@ -3149,7 +3163,7 @@ export default function Home() {
               const bytes = a.blob
                 ? new Uint8Array(await a.blob.arrayBuffer())
                 : (nativePath2 ? await readPrintArtifactBytesFromPath(nativePath2) : null);
-              if (!bytes) throw new Error('No artifact bytes');
+              if (!bytes) raise(new Error('No artifact bytes'));
               const resolvedPath = await savePrintArtifactWithNativeDialog(bytes, a.outputName);
               savedPath = resolvedPath || a.outputName;
             } catch (err) {
@@ -4143,9 +4157,8 @@ export default function Home() {
       await flushAutosave();
     } catch (error) {
       console.warn('[Slicing] Failed to flush autosave before slicing; continuing.', error);
-    } finally {
-      setIsPreSliceSceneSaveInProgress(false);
     }
+    setIsPreSliceSceneSaveInProgress(false);
   }, [flushAutosave]);
 
   const handleBeforeSliceStart = React.useCallback(async (
@@ -4513,7 +4526,7 @@ export default function Home() {
         ? new Uint8Array(await printingArtifact.blob.arrayBuffer())
         : (nativeTempPath ? await readPrintArtifactBytesFromPath(nativeTempPath) : null);
       if (!bytes) {
-        throw new Error('No print artifact bytes available for download.');
+        raise(new Error('No print artifact bytes available for download.'));
       }
       await savePrintArtifactWithNativeDialog(bytes, printingArtifact.outputName);
       return;
@@ -4565,9 +4578,8 @@ export default function Home() {
       if (runCapture) exportThumbnailPng = await runCapture();
     } catch {
       // Non-fatal: save proceeds without thumbnail.
-    } finally {
-      setIsTemporarilyDisablingCrossSectionForThumbnail(false);
     }
+    setIsTemporarilyDisablingCrossSectionForThumbnail(false);
 
     const savedPath = await ExportManager.exportScene(
       null,
@@ -4674,14 +4686,14 @@ export default function Home() {
       setTimeout(resolve, 0);
     });
 
-    try {
+    await withCleanupAsync(async () => { try {
       // Read exactly the payload discovery resolved — the sidecar beside the
       // project, or the generic location if that is where the tick fell back to.
       // The backend re-validates the path against its own candidate list.
       const bytes = await readAutosaveRecoveryBytes(recoverySnapshot?.voxlPath ?? null);
       const uint8 = new Uint8Array(bytes);
       if (uint8.byteLength === 0) {
-        throw new Error('Autosaved VOXL file is empty.');
+        raise(new Error('Autosaved VOXL file is empty.'));
       }
       const file = new File([uint8], 'autosave.voxl', { type: 'application/octet-stream' });
       suppressSceneAutosave(60_000);
@@ -4714,14 +4726,14 @@ export default function Home() {
         detail: errorMessage,
       });
       await clearAutosave();
-    } finally {
+    } }, () => {
       setNativePickerPreparationState({
         active: false,
         label: '',
         detail: '',
         progress: null,
       });
-    }
+    });
   }, [autosaveRecovery, clearAutosave, importSceneFile, setSceneSaveError, _]);
 
   const handleAutosaveDiscard = React.useCallback(async () => {
@@ -4947,7 +4959,7 @@ export default function Home() {
         // If launched with a file, suppress recovery even if the pending flag wasn't yet set
         // when this effect first ran (race between launch-file fetch and recovery fetch).
         try {
-          const core = await import('@tauri-apps/api/core');
+          const core = await importTauriCore();
           const launchEntries = await core.invoke<unknown[]>('get_launch_scene_files');
           if (Array.isArray(launchEntries) && launchEntries.length > 0) {
             if (!cancelled) setAutosaveRecovery(null);
@@ -5006,7 +5018,7 @@ export default function Home() {
 
     allowProgrammaticWindowCloseRef.current = true;
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const { getCurrentWindow } = await importTauriWindow();
       await getCurrentWindow().close();
     } catch {
       allowProgrammaticWindowCloseRef.current = false;
@@ -5038,28 +5050,30 @@ export default function Home() {
   const handleDiscardAndCloseProgram = React.useCallback(() => {
     void (async () => {
       setCloseUnsavedChangesBusy('discard_and_close');
-      try {
+      await withCleanupAsync(async () => {
         setShowCloseUnsavedChangesModal(false);
         await closeDesktopWindowNow();
-      } finally {
+      }, () => {
         setCloseUnsavedChangesBusy('none');
-      }
+      });
     })();
   }, [closeDesktopWindowNow]);
 
   const handleSaveAndCloseProgram = React.useCallback(() => {
     void (async () => {
       setCloseUnsavedChangesBusy('save_and_close');
-      try {
-        const saved = await saveCurrentSceneNow();
-        if (!saved) return;
-        setShowCloseUnsavedChangesModal(false);
-        await closeDesktopWindowNow();
-      } catch (error) {
-        console.error('[SceneSave] Save-and-close failed.', error);
-      } finally {
+      await withCleanupAsync(async () => {
+        try {
+          const saved = await saveCurrentSceneNow();
+          if (!saved) return;
+          setShowCloseUnsavedChangesModal(false);
+          await closeDesktopWindowNow();
+        } catch (error) {
+          console.error('[SceneSave] Save-and-close failed.', error);
+        }
+      }, () => {
         setCloseUnsavedChangesBusy('none');
-      }
+      });
     })();
   }, [closeDesktopWindowNow, saveCurrentSceneNow]);
 
@@ -5086,27 +5100,29 @@ export default function Home() {
 
   const handleDiscardAndNewScene = React.useCallback(() => {
     setNewSceneBusy('discard_and_new');
-    try {
+    withCleanup(() => {
       setShowNewSceneUnsavedChangesModal(false);
       startNewScene();
-    } finally {
+    }, () => {
       setNewSceneBusy('none');
-    }
+    });
   }, [startNewScene]);
 
   const handleSaveAndNewScene = React.useCallback(() => {
     void (async () => {
       setNewSceneBusy('save_and_new');
-      try {
-        const saved = await saveCurrentSceneNow();
-        if (!saved) return;
-        setShowNewSceneUnsavedChangesModal(false);
-        startNewScene();
-      } catch (error) {
-        console.error('[SceneSave] Save-and-new-scene failed.', error);
-      } finally {
+      await withCleanupAsync(async () => {
+        try {
+          const saved = await saveCurrentSceneNow();
+          if (!saved) return;
+          setShowNewSceneUnsavedChangesModal(false);
+          startNewScene();
+        } catch (error) {
+          console.error('[SceneSave] Save-and-new-scene failed.', error);
+        }
+      }, () => {
         setNewSceneBusy('none');
-      }
+      });
     })();
   }, [saveCurrentSceneNow, startNewScene]);
 
@@ -5141,7 +5157,7 @@ export default function Home() {
 
     void (async () => {
       try {
-        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const { getCurrentWindow } = await importTauriWindow();
         const currentWindow = getCurrentWindow();
         unlisten = await currentWindow.onCloseRequested((event) => {
           if (allowProgrammaticWindowCloseRef.current) {
@@ -5192,7 +5208,7 @@ export default function Home() {
 
     const revealWindow = async () => {
       try {
-        const core = await import('@tauri-apps/api/core');
+        const core = await importTauriCore();
         // Use reveal_main_window_command (show only, no set_focus) to avoid
         // triggering Windows' focus-stealing prevention error sound.
         await core.invoke('reveal_main_window_command');
@@ -5214,7 +5230,7 @@ export default function Home() {
         // would never close.
         desktopWindowRevealRequestedRef.current = true;
         // Signal the splashscreen to fade out gracefully before revealing.
-        import('@tauri-apps/api/event').then(({ emit }) => {
+        importTauriEvent().then(({ emit }) => {
           emit('splash-fade-out').catch(() => {});
         });
         setTimeout(() => {
@@ -5234,7 +5250,8 @@ export default function Home() {
   const performSendToPrinter = React.useCallback(async (targetDevice: PrinterNetworkDevice, selectedMaterialIdOverride?: string) => {
     if (!printingArtifact || !activePrinterProfile) return;
     if (!activeNetworkUiAdapter) return;
-    if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations?.platesList) return;
+    const platesListOperation = printingMonitoringAdapter.operations?.platesList;
+    if (!printingMonitoringAdapter.pluginId || !platesListOperation) return;
 
     const host = (targetDevice.ipAddress || activePrinterProfile.network?.ipAddress || '').trim();
     const port = targetDevice.port || 80;
@@ -5293,14 +5310,14 @@ export default function Home() {
     setPrintingDeviceProcessingStartedAtMs(null);
     setPrintingDeviceProcessingElapsedSec(0);
 
-    try {
+    await withCleanupAsync(async () => { try {
       const nativeTempPath = printingArtifact.nativeTempPath?.trim() || '';
       const zipFilePath = nativeTempPath.length > 0 ? nativeTempPath : null;
       const zipBlob = printingArtifact.blob ?? null;
       throwIfCanceled();
 
       if (!zipBlob && !zipFilePath) {
-        throw new Error('No print artifact payload available for printer upload.');
+        raise(new Error('No print artifact payload available for printer upload.'));
       }
 
       throwIfCanceled();
@@ -5308,7 +5325,7 @@ export default function Home() {
       const pathBase = printingArtifact.outputName.replace(/\.[^.]+$/i, '');
       const networkMode = (activeNetworkUiAdapter.mode || '').trim();
       if (!networkMode) {
-        throw new Error('No network mode available for printer upload.');
+        raise(new Error('No network mode available for printer upload.'));
       }
       
       // Build the printer host URL
@@ -5380,7 +5397,7 @@ export default function Home() {
       throwIfCanceled();
 
       if (!uploadResult.ok) {
-        throw new Error('Upload failed on printer backend');
+        raise(new Error('Upload failed on printer backend'));
       }
 
       const startedAt = Date.now();
@@ -5394,7 +5411,7 @@ export default function Home() {
         try {
           const responseReady = await pluginNetworkFetch({
             pluginId: printingMonitoringAdapter.pluginId,
-            operation: printingMonitoringAdapter.operations.platesList,
+            operation: platesListOperation,
             ipAddress: host,
             port,
             plateId: resolvedPlateId,
@@ -5424,7 +5441,7 @@ export default function Home() {
         } catch {
           pollFailureCount += 1;
           if (pollFailureCount >= 6) {
-            throw new Error('Lost connection while waiting for device processing.');
+            raise(new Error('Lost connection while waiting for device processing.'));
           }
         }
 
@@ -5480,10 +5497,10 @@ export default function Home() {
       setPrintingUploadTelemetry(null);
       setPrintingSendProgress(0);
       setPrintingUploadDisplayProgress(0);
-    } finally {
+    } }, () => {
       setPrintingSendBusy(false);
       printingSendCancelRequestedRef.current = false;
-    }
+    });
   }, [
     _,
     activeNetworkUiAdapter,
@@ -5537,7 +5554,7 @@ export default function Home() {
     setPrintingSendStatusText(_(msg`Canceling upload…`));
 
     if (activeNetworkUiAdapter?.pluginId === 'athena') {
-      void import('../../plugins/athena/network')
+      void importAthenaNetwork()
         .then((mod) => {
           if (typeof mod.abortUpload === 'function') {
             mod.abortUpload();
@@ -5551,7 +5568,8 @@ export default function Home() {
 
   const handlePrintNow = React.useCallback(async () => {
     if (!activePrinterProfile || !printingTargetDevice) return;
-    if (!printingMonitoringAdapter.pluginId || !printingMonitoringAdapter.operations?.start) return;
+    const startOperation = printingMonitoringAdapter.operations?.start;
+    if (!printingMonitoringAdapter.pluginId || !startOperation) return;
     if (printingTargetDevice.connected !== true) return;
     if (!printingReadyPlateId) return;
 
@@ -5567,10 +5585,10 @@ export default function Home() {
     setPrintingUploadDialogStage('starting');
     setPrintingDeviceProcessingStartedAtMs(null);
 
-    try {
+    await withCleanupAsync(async () => { try {
       const response = await pluginNetworkFetch({
         pluginId: printingMonitoringAdapter.pluginId,
-        operation: printingMonitoringAdapter.operations.start,
+        operation: startOperation,
         ipAddress: host,
         port,
         plateId: printingReadyPlateId,
@@ -5594,9 +5612,9 @@ export default function Home() {
       setPrintingSendStageText(_(msg`Start print failed`));
       setPrintingUploadDialogStage('failed');
       setPrintingSendStatusText(formatPrintStartFailed(_, message));
-    } finally {
+    } }, () => {
       setPrintingPrintNowBusy(false);
-    }
+    });
   }, [_, activePrinterProfile, openPrintingMonitorForTargetDevice, printingMonitoringAdapter.operations, printingMonitoringAdapter.pluginId, printingReadyPlateId, printingTargetDevice]);
 
 
@@ -5884,7 +5902,7 @@ export default function Home() {
         }
       : null;
 
-    const pendingTransform = transformMgr.pendingTransformRef.current;
+    const pendingTransform = pendingTransformRef.current;
     const afterTransform = explicitAfter ?? (
       (
         scene.activeModelId === pending.modelId
@@ -5949,7 +5967,7 @@ export default function Home() {
     pendingTransformHistoryRef.current = null;
     transformHistoryCommitRequestedRef.current = false;
     return true;
-  }, [captureTransformSupportSnapshot, invalidatePendingTransformHistory, isFiniteTransform, scene, transformMgr.pendingTransformRef, transformMgr.transform, transformsApproximatelyEqual]);
+  }, [captureTransformSupportSnapshot, invalidatePendingTransformHistory, isFiniteTransform, scene, pendingTransformRef, transformMgr.transform, transformsApproximatelyEqual]);
 
   const scheduleCommitPendingTransformHistory = React.useCallback((frameDelay = 1) => {
     const scheduledNonce = ++transformHistoryCommitNonceRef.current;
@@ -6083,7 +6101,7 @@ export default function Home() {
 
     pendingHistoryTransformResyncRef.current = false;
     invalidatePendingTransformHistory();
-    transformMgr.pendingTransformRef.current = null;
+    pendingTransformRef.current = null;
     transformMgr.setIsTransforming(false);
 
     cancelPendingHistoryTransformResyncFrames();
@@ -6131,7 +6149,7 @@ export default function Home() {
     isFiniteTransform,
     scene.activeModel,
     scene.activeModelId,
-    transformMgr.pendingTransformRef,
+    pendingTransformRef,
     transformMgr.setIsTransforming,
     transformMgr.transformHook,
   ]);
@@ -6739,7 +6757,7 @@ export default function Home() {
     // transient values (pendingTransformRef is set from SceneCanvas drag updates).
     // If isTransforming ever lingers true without a pending gizmo payload, we still
     // need manual Transform panel edits to persist and reflow support geometry.
-    if (transformMgr.isTransforming && transformMgr.pendingTransformRef.current) return;
+    if (transformMgr.isTransforming && pendingTransformRef.current) return;
 
     // Skip if handleTransformEnd already flushed the final transform synchronously.
     // The persistence effect would otherwise re-apply the delta because React state
@@ -6752,7 +6770,7 @@ export default function Home() {
     // Mirror mode/session writes model transforms explicitly through raw scene
     // updates. Persistence during this window can race and re-apply stale
     // reflected transforms after finalize.
-    if (transformMgr.transformMode === 'mirror' || mirror.mirrorSessionRef.current) {
+    if (transformMgr.transformMode === 'mirror' || mirrorSessionRef.current) {
       return;
     }
 
@@ -6837,7 +6855,7 @@ export default function Home() {
           };
         }
 
-        const isDirectTransformPath = !transformMgr.pendingTransformRef.current;
+        const isDirectTransformPath = !pendingTransformRef.current;
         scene.updateModelTransform(scene.activeModelId, current);
 
         const pendingAfter = pendingTransformHistoryRef.current;
@@ -6893,14 +6911,14 @@ export default function Home() {
     transformMgr.setIsTransforming(true);
     if (isScaleGestureRef.current) {
       // Scale gizmos already hold the starting bottom; the live snap would recompute the same Z.
-      transformMgr.pendingTransformRef.current = { pos: pos.clone(), rot: rot.clone(), scl: scl.clone() };
+      pendingTransformRef.current = { pos: pos.clone(), rot: rot.clone(), scl: scl.clone() };
       transformMgr.transformHook.setPosition(pos.x, pos.y, pos.z);
       transformMgr.transformHook.setRotation(rot.x, rot.y, rot.z);
       transformMgr.transformHook.setScale(scl.x, scl.y, scl.z);
       return;
     }
     transformMgr.onTransformChange(pos, rot, scl);
-  }, [transformMgr.onTransformChange, transformMgr.pendingTransformRef, transformMgr.setIsTransforming, transformMgr.transformHook]);
+  }, [transformMgr.onTransformChange, pendingTransformRef, transformMgr.setIsTransforming, transformMgr.transformHook]);
 
   // 3. Slicing (Global context - operates on scene bounds, not just active model)
   const hasAnyEntries = React.useCallback((record: Record<string, unknown>) => {
@@ -8613,7 +8631,7 @@ export default function Home() {
   // When rotation ends, we must clear scan data as it invalidates the scan
   const applyPostRotateLift = (): ModelTransform | null => {
     if (!scene.activeModelId) {
-      transformMgr.pendingTransformRef.current = null;
+      pendingTransformRef.current = null;
       return null;
     }
 
@@ -8624,16 +8642,16 @@ export default function Home() {
 
     // Run immediately: onRotateEnd already writes the latest transform into
     // pendingTransformRef, so performAutoSnap can safely use current values.
-    try {
+    return withCleanup(() => {
       const snapped = transformMgr.performAutoSnap(pendingTransformHistoryRef.current?.before);
       // handleTransformEnd flushes the raw rotated transform first so support
       // geometry can catch up. Once the reseat adjusts Z, we need to let the
       // normal persistence effect write that result back to the model.
       transformEndFlushedRef.current = false;
       return snapped;
-    } finally {
+    }, () => {
       postRotateLiftScheduledRef.current = false;
-    }
+    });
   };
 
   const handleTransformEnd = (
@@ -8657,7 +8675,7 @@ export default function Home() {
 
     if (options?.skipStoreCommit) {
       transformMgr.setIsTransforming(false);
-      transformMgr.pendingTransformRef.current = null;
+      pendingTransformRef.current = null;
       invalidatePendingTransformHistory();
       return;
     }
@@ -8701,7 +8719,7 @@ export default function Home() {
     // we reset the visual drag-group matrix. This eliminates the 1-frame
     // flash where supports snap back to their pre-drag positions.
     if (scene.activeModelId && displayActiveModelId === scene.activeModelId) {
-      const pending = transformMgr.pendingTransformRef.current;
+      const pending = pendingTransformRef.current;
       const pendingHistory = pendingTransformHistoryRef.current;
       const current = snappedAfter
         ? {
@@ -8847,11 +8865,11 @@ export default function Home() {
       islands.clearScanData();
     } else {
       // Scale keeps the gizmo's preserved bottom instead of running post-rotation reseat.
-      transformMgr.pendingTransformRef.current = null;
+      pendingTransformRef.current = null;
     }
 
     if (pendingTransformHistoryRef.current && targetModelId && pendingTransformHistoryRef.current.modelId === targetModelId) {
-      const pendingTransform = transformMgr.pendingTransformRef.current;
+      const pendingTransform = pendingTransformRef.current;
       const afterFromPending = (
         pendingTransform
         && isFiniteTransform({
@@ -10636,6 +10654,7 @@ export default function Home() {
     scene,
     transformMgr,
     mirrorToolActive,
+    mirrorSessionRef,
     suppressTransformPersistenceCycles,
     requestDestructiveTransformSupportDeletionWithContinuation,
   });
