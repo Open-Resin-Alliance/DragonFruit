@@ -12,7 +12,7 @@ that use it can run at the same time on different meshes, which the staging regi
 `stage_mesh_binary_set` writes one process-wide slot, and the next command that reads staging
 reads whatever is there. Two passes in flight on two meshes read each other's mesh and nothing
 errors, so the frontend had to queue every pass. The register stays for the families not yet
-migrated (islands, shrink-wrap, slicing); new code should not add callers to it.
+migrated (shrink-wrap, slicing); new code should not add callers to it.
 
 ## Public surface
 
@@ -96,11 +96,26 @@ The seam comes back in the response because it is asked for on every frame of a 
 and a second round trip to read it would double that. A cut that refused (`engine: "noop"`)
 returns no parts.
 
+**Island and overhang scans** run on the store only, and require their ids. Each scan takes
+its soup out of the store, so the id is gone once the scan has it; the frontend puts the
+rendered world-space soup for one scan and has nothing to collect afterwards.
+
+| Command | Input | Result |
+| --- | --- | --- |
+| `run_island_scan_native(paramsJson, meshId)` | `meshId`, taken | the scan, directly |
+| `scan_islands_staged(meshId, …)` | `meshId`, taken | the scan, directly |
+| `scan_islands_from_path(filePath, …, overhangMeshId?)` | a file path, and `overhangMeshId`, taken, for the overhang pass | the scan, directly |
+| `scan_overhangs_staged(meshId, …)` | `meshId`, taken | the regions and the topple report, directly |
+
+`scan_islands_from_path` classifies overhang on the file mesh when `overhangMeshId` is absent,
+and also when the store no longer has it, which it logs.
+
 **TypeScript** (`src/utils/nativeMeshStore.ts`) is the only frontend module that calls the
 primitives:
 
 - `withNativeMesh(core, geometry, pass)` stores a geometry for the length of `pass` and drops it
-  afterwards, whether the pass succeeds or not.
+  afterwards, whether the pass succeeds or not. `withNativeSoup(core, soup, pass)` does the
+  same for a soup; a scan that takes its input leaves it nothing to drop.
 - `takeResultPositions(core, commandResult, command)` reads a command's result and drops it.
 - `openNativeMeshClient(core)` returns this page load's client id, opening it on first use.
 - `putNativeMesh`, `putNativeSoup`, `readNativeMesh`, `readNativeBuffer`, `dropNativeMeshes`,

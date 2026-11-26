@@ -1518,33 +1518,23 @@ pub async fn scan_overhangs(
     .map_err(|e| format!("Overhang scan task panicked: {e}"))?
 }
 
-/// Tauri IPC command: weld the staged world-space triangle soup and classify
+/// Tauri IPC command: weld a stored world-space triangle soup and classify
 /// overhang regions plus the topple report.
 ///
-/// The frontend stages exactly the positions it renders, so the returned
+/// The frontend stores exactly the positions it renders, so the returned
 /// `triangleIds` index the rendered geometry. This is the binary counterpart
 /// of `scan_overhangs`: no JSON number array crosses the boundary. The command
-/// consumes the staged buffer.
+/// consumes the stored soup.
 #[tauri::command]
 pub async fn scan_overhangs_staged(
+    mesh_id: String,
     self_support_angle_deg: f32,
     px_mm: f32,
     label: Option<String>,
     has_raft: Option<bool>,
 ) -> Result<OverhangScan, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let bytes = crate::staged_mesh()
-            .lock()
-            .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
-            .take()
-            .ok_or("No staged mesh binary — call stage_mesh_binary_set first")?;
-        let soup = crate::bytes_to_f32_vec(&bytes)?;
-        if soup.is_empty() || soup.len() % 9 != 0 {
-            return Err(format!(
-                "Staged overhang scan needs a triangle soup (9 floats per triangle); got {} floats",
-                soup.len()
-            ));
-        }
+        let soup = crate::take_stored_soup(&mesh_id, "Staged overhang scan")?;
 
         let (regions, report) = overhang_and_stability_from_soup(
             &soup,
@@ -2391,5 +2381,91 @@ mod tests {
         // A part with no drag says so rather than printing a bogus margin.
         let flat = report_for(&unit_cube_soup(), 45.0).to_log_line();
         assert!(flat.contains("no down-facing drag"), "{flat}");
+    }
+
+    // --- scans on the native mesh store ------------------------------------
+
+    fn store_soup(owner: &str, soup: &[f32]) -> String {
+        use crate::mesh_store::{self, Entry, Owner};
+        let bytes = soup.iter().flat_map(|v| v.to_le_bytes()).collect();
+        mesh_store::global().put(Owner::Frontend(owner.to_string()), Entry::Soup(bytes))
+    }
+
+    fn scan_stored(mesh_id: String) -> Result<OverhangScan, String> {
+        tauri::async_runtime::block_on(scan_overhangs_staged(mesh_id, 45.0, 0.5, None, None))
+    }
+
+    /// What a scan found, without the perimeter loops, whose starting vertex varies from run
+    /// to run: each region's sorted triangle ids and its area.
+    fn region_json(regions: &[OverhangRegion]) -> serde_json::Value {
+        regions
+            .iter()
+            .map(|region| {
+                let mut ids = region.triangle_ids.clone();
+                ids.sort_unstable();
+                serde_json::json!({ "ids": ids, "area": region.area_mm2 })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn overhang_scans_on_two_stored_meshes_never_see_each_other() {
+        let upright = unit_cube_soup();
+        let tilted: Vec<f32> = rotate_x(&unit_cube_soup(), 30.0)
+            .iter()
+            .map(|v| v * 2.0)
+            .collect();
+        let expected = [&upright, &tilted]
+            .map(|soup| region_json(&overhang_and_stability_from_soup(soup, 45.0, 0.5, false).0));
+        assert_ne!(
+            expected[0], expected[1],
+            "the two meshes must scan differently"
+        );
+
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let soup = if i % 2 == 0 {
+                    upright.clone()
+                } else {
+                    tilted.clone()
+                };
+                std::thread::spawn(move || {
+                    let id = store_soup("overhang-isolation", &soup);
+                    (i % 2, region_json(&scan_stored(id).unwrap().regions))
+                })
+            })
+            .collect();
+        for thread in threads {
+            let (which, regions) = thread.join().unwrap();
+            assert_eq!(regions, expected[which]);
+        }
+    }
+
+    #[test]
+    fn an_overhang_scan_consumes_its_stored_soup() {
+        let id = store_soup("overhang-consumes", &unit_cube_soup());
+        scan_stored(id.clone()).unwrap();
+        let err = scan_stored(id).unwrap_err();
+        assert!(err.starts_with("mesh-store/unknown"), "{err}");
+    }
+
+    #[test]
+    fn an_overhang_scan_on_the_wrong_id_says_why() {
+        use crate::mesh_store::{self, Entry, Owner};
+        let store = mesh_store::global();
+        let buffer = store.put(
+            Owner::Frontend("overhang-errors".into()),
+            Entry::Buffer(vec![0; 36]),
+        );
+        let err = scan_stored(buffer.clone()).unwrap_err();
+        assert!(err.starts_with("mesh-store/wrong_kind"), "{err}");
+        assert!(
+            store.read_bytes(&buffer).is_ok(),
+            "a failed take leaves the entry"
+        );
+
+        let ragged = store_soup("overhang-errors", &[0.0; 10]);
+        let err = scan_stored(ragged).unwrap_err();
+        assert!(err.contains("9 floats per triangle"), "{err}");
     }
 }

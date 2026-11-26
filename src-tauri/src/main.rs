@@ -556,6 +556,22 @@ fn normalize_staged_mesh_prealloc_bytes(total_bytes_hint: usize) -> usize {
         .min(STAGED_MESH_PREALLOC_MAX_BYTES)
 }
 
+/// Takes the triangle soup a scan was handed by id out of the native mesh store, as `f32`s.
+/// Scans consume their input: the frontend puts the soup for one scan, and the id is gone
+/// once the scan has it. `what` names the scan in the error for a soup that is not whole
+/// triangles.
+pub(crate) fn take_stored_soup(mesh_id: &str, what: &str) -> Result<Vec<f32>, String> {
+    let bytes = mesh_store::global().take_soup(mesh_id)?;
+    let soup = bytes_to_f32_vec(&bytes)?;
+    if soup.is_empty() || soup.len() % 9 != 0 {
+        return Err(format!(
+            "{what} needs a triangle soup (9 floats per triangle); got {} floats",
+            soup.len()
+        ));
+    }
+    Ok(soup)
+}
+
 fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, String> {
     if bytes.len() % 4 != 0 {
         return Err(format!(
@@ -1942,20 +1958,15 @@ struct NativeRleLabels {
 async fn run_island_scan_native(
     window: DragonFruitWindow,
     params_json: String,
+    mesh_id: String,
 ) -> Result<NativeIslandScanResult, String> {
-    // Take staged mesh bytes
-    let mesh_bytes = staged_mesh()
-        .lock()
-        .map_err(|e| format!("staged mesh lock poisoned: {e}"))?
-        .take()
-        .ok_or("No staged mesh binary — call stage_mesh_binary first")?;
+    let triangles_xyz = take_stored_soup(&mesh_id, "Native island scan")?;
 
     let win = window.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let params: IslandScanParams = serde_json::from_str(&params_json)
             .map_err(|e| format!("Invalid island scan params JSON: {e}"))?;
 
-        let triangles_xyz = bytes_to_f32_vec(&mesh_bytes)?;
         let triangles = dragonfruit_slicing_engine::geometry::parse_triangles(&triangles_xyz);
 
         log::debug!(

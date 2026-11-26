@@ -203,38 +203,41 @@ Run from `rust/dragonfruit-islands/`:
 ## Tauri IPC Integration
 
 The island scan is exposed to the frontend through Tauri commands. All of them
-take geometry as raw `f32` bytes on the shared staging buffer
-(`stage_mesh_binary_set`); no mesh crosses the boundary as a JSON number array.
+take geometry as raw `f32` bytes put into the native mesh store
+(`mesh_store_put`, see `native-mesh-store.md`) and named by id; no mesh crosses the
+boundary as a JSON number array.
 
 | Command | Used for | Mesh source |
 |---|---|---|
-| `run_island_scan_native` | Volume Analysis (RLE volume + per-layer labels) | staged transformed geometry |
+| `run_island_scan_native` | Volume Analysis (RLE volume + per-layer labels) | stored transformed geometry (`meshId`) |
 | `scan_islands_from_path` | Islands panel, model with a source file | file, loaded once in Rust |
-| `scan_islands_staged` | Islands panel, **pathless model (VOXL)** | staged rendered world soup |
-| `scan_overhangs_staged` | last-resort client detector's overhang pass | staged rendered world soup |
+| `scan_islands_staged` | Islands panel, **pathless model (VOXL)** | stored rendered world soup (`meshId`) |
+| `scan_overhangs_staged` | last-resort client detector's overhang pass | stored rendered world soup (`meshId`) |
 
 `scan_islands_from_path` and `scan_islands_staged` share one body: voxel
 islands, mesh minima and overhang classification run **concurrently on one
 welded mesh**, and the topple report comes from the same overhang pass. The path
-variant classifies overhang on the file mesh unless the frontend stages its
-soup and passes `overhangFromStaged: true`. The staged variant always uses the
-staged soup, so its `triangleIds` index the rendered geometry.
+variant classifies overhang on the file mesh unless the frontend stores its
+soup and passes its id as `overhangMeshId`. The staged variant always uses the
+stored soup, so its `triangleIds` index the rendered geometry.
 
 ### IPC Flow
 
 ```text
 Frontend                         Tauri IPC                  Rust Backend
 ────────                         ─────────                  ────────────
-stage_mesh_binary_set()  ────►  raw binary body  ──────►  staged_mesh (Mutex)
+mesh_store_put()         ────►  raw binary body  ──────►  native mesh store
+  ◄─ meshId ─────────────────────────────────────────
 
-run_island_scan_native() ────►  { paramsJson }   ──────►  spawn_blocking {
+run_island_scan_native() ────►  { paramsJson,    ──────►  take the soup by id
+                                  meshId }                spawn_blocking {
                                                            parse triangles
   ◄─ islandscan://progress ──  window.emit()   ◄──────    rasterize (rayon, chunked)
   ◄─ islandscan://progress ──  window.emit()   ◄──────    run_island_scan_streaming()
   ◄─ NativeIslandScanResult ─  return JSON     ◄──────    serialize
 }
 
-scan_islands_staged(...)  ───►  params            ──────►  spawn_blocking {
+scan_islands_staged(...)  ───►  meshId, params    ──────►  spawn_blocking {
                                                            IndexedMesh::from_triangle_soup
                                                            thread A: rasterize + scan (voxel)
                                                            thread B: minima
@@ -247,17 +250,18 @@ scan_islands_staged(...)  ───►  params            ──────► 
        overhangIslands, stability }             ◄──────
 ```
 
-### The staged-soup contract
+### The stored-soup contract
 
-- **Stage the rendered triangles.** `prepareWorldGeom()` produces non-indexed
+- **Store the rendered triangles.** `prepareWorldGeom()` produces non-indexed
   world-space positions in the rendered triangle order. `from_triangle_soup`
   preserves that order, so an overhang `triangleId` is the rendered triangle
   id and the overlay can copy the exact triangles it is shading.
-- **No matrix or center arguments.** The pose is baked into the staged
+- **No matrix or center arguments.** The pose is baked into the stored
   positions.
-- **The buffer is consumed.** A command `take()`s it; stage immediately before
-  invoking. Two staged commands in one scan stage twice.
-- **A missing buffer is not fatal for `scan_islands_from_path`.** It logs and
+- **The soup is consumed.** A command takes it out of the store, so its id is
+  gone once the scan has it; `withNativeSoup` puts it for one scan and drops it
+  only if the scan never took it. Two scans store twice.
+- **A missing soup is not fatal for `scan_islands_from_path`.** It logs and
   classifies overhang on the file mesh instead of failing the scan.
 
 ### Files

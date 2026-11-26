@@ -29,6 +29,8 @@ import {
   footprintY,
   isEmptyFootprint,
 } from './voxelFootprint';
+import { dropNativeMeshes, putNativeSoup, withNativeSoup } from '@/utils/nativeMeshStore';
+import { loadTauriCore, type TauriCoreModule } from '@/utils/tauriMeshBridge';
 
 /** Self-support angle for mesh-normal overhang detection (surfaces flatter
  *  than this from horizontal get supports). Tunable per resin later. */
@@ -381,9 +383,12 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
     // undersides, 11°–45° surfaces). Non-fatal if the command is unavailable
     // (plain-browser context).
     if (sourcePath && geom) {
+      let tauri: TauriCoreModule | null = null;
+      let overhangMeshId: string | null = null;
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const { listen } = await import('@tauri-apps/api/event');
+        tauri = await loadTauriCore();
+        if (!tauri) throw new Error('the Tauri runtime is not available');
+        const { invoke, listen } = tauri;
 
         if (!geom.geometry.boundingBox) {
           geom.geometry.computeBoundingBox();
@@ -401,7 +406,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         const centerCoords = [center.x, center.y, center.z];
 
         // Overhang is classified on the exact soup the overlay draws, so its
-        // triangle ids index `geom.geometry`. Staging it also keeps the mesh
+        // triangle ids index `geom.geometry`. Storing it also keeps the mesh
         // off the JSON path: the command reads raw f32 bytes.
         let world: { positions: Float32Array; bbox: THREE.Box3 } | null = null;
         try {
@@ -410,12 +415,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
           console.warn('[Islands] world soup prep failed; overhang will use the file mesh', err);
         }
         if (world) {
-          const { positions } = world;
-          await invoke(
-            'stage_mesh_binary_set',
-            new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
-            { headers: { 'Content-Type': 'application/octet-stream' } },
-          );
+          overhangMeshId = await putNativeSoup(tauri, world.positions);
         }
 
         // The combined Rust scan emits phase progress — wire it into the
@@ -465,7 +465,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
             overhangSelfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
               ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
             overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
-            overhangFromStaged: world !== null,
+            overhangMeshId,
             hasRaft,
           },
         ).finally(() => unlisten());
@@ -499,7 +499,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         }));
         setMinimaIslands(minimaMapped);
 
-        // The command classified overhang on the staged soup, so the ids
+        // The command classified overhang on the stored soup, so the ids
         // index exactly what the overlay draws; the stability report came
         // back with the same pass. Nothing else to re-run here.
         setToppleCoverage(scanNeedsCoverage(combined.stability));
@@ -515,6 +515,11 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
         usedSideload = true;
       } catch (err) {
         console.warn('[Islands] Sideloaded Rust scan failed, falling back to client-side...', err);
+      } finally {
+        // The scan consumes its overhang soup; this only drops one it never reached.
+        if (tauri && overhangMeshId) {
+          void dropNativeMeshes(tauri, [overhangMeshId]).catch(() => undefined);
+        }
       }
     }
 
@@ -535,12 +540,13 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       }
 
       // A pathless model (VOXL) has no file for the combined path, but the
-      // staged soup is exactly what that command needs. Run the whole native
+      // rendered soup is exactly what that command needs. Run the whole native
       // scan here first: voxel islands, minima and overhang in one pass, with
       // no JSON geometry and no second mesh weld.
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const { listen } = await import('@tauri-apps/api/event');
+        const tauri = await loadTauriCore();
+        if (!tauri) throw new Error('the Tauri runtime is not available');
+        const { invoke, listen } = tauri;
         const unlisten = await listen<{ done: number; total: number }>(
           'island-scan-progress',
           (e) => {
@@ -548,13 +554,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
             setScanProgress({ done: e.payload.done, total: e.payload.total });
           },
         );
-        const { positions } = world;
-        await invoke(
-          'stage_mesh_binary_set',
-          new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
-          { headers: { 'Content-Type': 'application/octet-stream' } },
-        );
-        const combined = await invoke<{
+        const combined = await withNativeSoup(tauri, world.positions, (meshId) => invoke<{
           voxelIslands: Array<{
             id: string;
             contact: { x: number; y: number; z: number };
@@ -571,6 +571,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
           overhangIslands: OverhangRegion[];
           stability?: PoseStabilityWire | null;
         }>('scan_islands_staged', {
+          meshId,
           layerHeightMm,
           pxMm,
           supportBufferMm: supportBufMm,
@@ -580,7 +581,7 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
             ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
           overhangPxMm: OVERHANG_FOOTPRINT_PX_MM,
           hasRaft,
-        }).finally(() => unlisten());
+        })).finally(() => unlisten());
         if (scanEpochRef.current !== epoch) return;
 
         const voxelMapped: DetectedIsland[] = combined.voxelIslands
@@ -620,22 +621,18 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
       }
 
       // Last resort: the client-side detectors. Overhang still goes through
-      // the binary staged command below; only voxel/minima are JS here.
+      // the binary stored-soup command below; only voxel/minima are JS here.
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const { positions } = world;
-        await invoke(
-          'stage_mesh_binary_set',
-          new Uint8Array(positions.buffer, positions.byteOffset, positions.byteLength),
-          { headers: { 'Content-Type': 'application/octet-stream' } },
-        );
-        const scan = await invoke<OverhangScan>('scan_overhangs_staged', {
+        const tauri = await loadTauriCore();
+        if (!tauri) throw new Error('the Tauri runtime is not available');
+        const scan = await withNativeSoup(tauri, world.positions, (meshId) => tauri.invoke<OverhangScan>('scan_overhangs_staged', {
+          meshId,
           selfSupportAngleDeg: getSettings().autoSupport?.overhangSelfSupportAngleDeg
             ?? OVERHANG_SELF_SUPPORT_ANGLE_DEG,
           pxMm: OVERHANG_FOOTPRINT_PX_MM,
           label: sourcePath ?? null,
           hasRaft,
-        });
+        }));
         if (scanEpochRef.current !== epoch) return;
         setToppleCoverage(scanNeedsCoverage(scan.stability));
         setDragTotalMm3(scan.stability?.dragMomentMm3 ?? 0);
