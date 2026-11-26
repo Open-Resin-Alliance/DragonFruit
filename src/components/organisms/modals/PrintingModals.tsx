@@ -423,6 +423,20 @@ export function PrintingModals({
   const { _ } = useLingui();
   const fmt = useLocaleFormat();
 
+  // An MJPEG <img> fires `load` once, for its first frame. On a fast LAN that frame can arrive before the effect that
+  // resets the webcam state for a new stream URL has run; the readiness check it started is then cancelled and no
+  // second `load` ever comes (the panel stayed on "Loading camera feed…"). While the feed is not marked loaded, look
+  // at the image itself once a second and run the readiness check when it already has frames.
+  const printingMonitorWebcamImageRef = React.useRef<HTMLImageElement | null>(null);
+  React.useEffect(() => {
+    if (isPrintingMonitorWebcamLoaded || printingMonitorWebcamUsesRelayWs || !printingMonitorWebcamUrl) return;
+    const id = window.setInterval(() => {
+      const img = printingMonitorWebcamImageRef.current;
+      if (img && img.naturalWidth > 0 && img.naturalHeight > 0) schedulePrintingMonitorMjpegReadinessCheck(img);
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [isPrintingMonitorWebcamLoaded, printingMonitorWebcamUrl, printingMonitorWebcamUsesRelayWs, schedulePrintingMonitorMjpegReadinessCheck]);
+
   const cancelPreSlicePrintConfirm = React.useCallback(() => {
     setPreSlicePrintConfirmOpen(false);
     if (preSlicePrintConfirmResolverRef.current) {
@@ -2203,6 +2217,7 @@ export function PrintingModals({
                             />
                           ) : (
                             <img
+                              ref={printingMonitorWebcamImageRef}
                               src={printingMonitorWebcamUrl}
                               alt={_(msg`Printer webcam preview`)}
                               className="block h-full w-full object-contain transition-opacity duration-150"
