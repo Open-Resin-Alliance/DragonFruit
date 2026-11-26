@@ -4,7 +4,7 @@ import { msg } from '@lingui/core/macro';
 import { useLingui } from '@lingui/react';
 import { Trans } from '@lingui/react/macro';
 import type { MessageDescriptor } from '@lingui/core';
-import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Maximize2, Minimize2, Play, Printer, RefreshCw, Trash2, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Download, LayoutGrid, Maximize2, Minimize2, Play, Printer, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 import { Button, IconButton, ProgressBar, Spinner } from '@/components/atoms';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { SliceCompletedModal } from '@/components/modals/SliceCompletedModal';
@@ -27,6 +27,7 @@ import type {
   PrintingMonitorPendingConfirmation,
   PrintingMonitorRecentPlate,
 } from '@/features/printing/printingMonitorTypes';
+import type { ExternalPrintUpload } from '@/features/printing/slicedFileUpload';
 import { openProfileSettingsModal } from '@/components/settings/profileModalEvents';
 import {
   selectPrinterNetworkDevice,
@@ -50,7 +51,8 @@ export type PrintingModalsProps = {
   activeNetworkUiAdapter: ProfileNetworkUiAdapter | null;
   activePrinterProfile: PrinterProfile | null;
   canPrintNow: boolean;
-  canSendToPrinter: boolean;
+  canRetryUpload: boolean;
+  canUploadSlicedFile: boolean;
   cancelPrintingMonitorWebcamReadinessCheck: () => void;
   dashboardMonitorDevices: PrinterNetworkDevice[];
   executeDeleteMonitorRecentPlate: (plateId: number) => Promise<void>;
@@ -66,7 +68,8 @@ export type PrintingModalsProps = {
   handleResetPrintingMonitorWebcamStreamSlot: () => Promise<void>;
   handleSavePrintingMonitorWebcamSnapshot: () => Promise<void>;
   handleCancelSendToPrinter: () => void;
-  handleSendToPrinter: () => Promise<void>;
+  handleRetryUpload: () => Promise<void>;
+  handleUploadSlicedFile: () => Promise<void>;
   handleStartMonitorRecentPlate: (plateId: number) => void;
   hasPrintingMonitorFleet: boolean;
   isPreSliceTargetPicker: boolean;
@@ -97,6 +100,7 @@ export type PrintingModalsProps = {
   printerReachabilityByDeviceId: PrinterReachabilityMap;
   printingArtifact: SliceExportArtifact | null;
   printingDialogIsIndeterminate: boolean;
+  printingExternalUpload: ExternalPrintUpload | null;
   printingDialogProgressPercent: number;
   printingDialogStageLabel: string;
   printingMonitorActionBusy: "start" | "pause" | "resume" | "cancel" | "emergency-stop" | "delete" | "webcam-enable" | "webcam-disable" | "timelapse-enable" | "timelapse-disable" | null;
@@ -265,7 +269,8 @@ export function PrintingModals({
   activeNetworkUiAdapter,
   activePrinterProfile,
   canPrintNow,
-  canSendToPrinter,
+  canRetryUpload,
+  canUploadSlicedFile,
   cancelPrintingMonitorWebcamReadinessCheck,
   dashboardMonitorDevices,
   executeDeleteMonitorRecentPlate,
@@ -281,7 +286,8 @@ export function PrintingModals({
   handleResetPrintingMonitorWebcamStreamSlot,
   handleSavePrintingMonitorWebcamSnapshot,
   handleCancelSendToPrinter,
-  handleSendToPrinter,
+  handleRetryUpload,
+  handleUploadSlicedFile,
   handleStartMonitorRecentPlate,
   hasPrintingMonitorFleet,
   isPreSliceTargetPicker,
@@ -312,6 +318,7 @@ export function PrintingModals({
   printerReachabilityByDeviceId,
   printingArtifact,
   printingDialogIsIndeterminate,
+  printingExternalUpload,
   printingDialogProgressPercent,
   printingDialogStageLabel,
   printingMonitorActionBusy,
@@ -432,6 +439,12 @@ export function PrintingModals({
       preSlicePrintConfirmResolverRef.current = null;
     }
   }, [preSlicePrintConfirmResolverRef, setPreSlicePrintConfirmOpen]);
+
+  // A file from disk stays with its own printer; the target device falls back to another one
+  // when that printer disconnects.
+  const uploadDialogDevice = printingExternalUpload
+    ? monitorSelectableDevices.find((device) => device.id === printingExternalUpload.deviceId) ?? null
+    : printingTargetDevice;
 
   const cancelPrintingTargetPicker = React.useCallback(() => {
     setPrintingTargetPickerOpen(false);
@@ -966,7 +979,7 @@ export function PrintingModals({
                   <Trans>Upload to {activeNetworkUiAdapter?.displayName ?? _(msg`Printer`)}</Trans>
                 </div>
                 <div className="mt-0.5 text-xs truncate" style={{ color: 'var(--text-muted)' }}>
-                  {printingArtifact?.outputName ?? _(msg`Preparing artifact`)}
+                  {(printingExternalUpload?.file ?? printingArtifact)?.outputName ?? _(msg`Preparing artifact`)}
                 </div>
               </div>
             </div>
@@ -981,8 +994,8 @@ export function PrintingModals({
                 </div>
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
                   <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}><Trans>Target printer</Trans></div>
-                  <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={printingTargetDevice?.displayName || printingTargetDevice?.hostName || printingTargetDevice?.ipAddress || _(msg`Pending`)}>
-                    {printingTargetDevice?.displayName || printingTargetDevice?.hostName || printingTargetDevice?.ipAddress || _(msg`Pending`)}
+                  <div className="text-sm font-semibold truncate" style={{ color: 'var(--text-strong)' }} title={uploadDialogDevice?.displayName || uploadDialogDevice?.hostName || uploadDialogDevice?.ipAddress || _(msg`Pending`)}>
+                    {uploadDialogDevice?.displayName || uploadDialogDevice?.hostName || uploadDialogDevice?.ipAddress || _(msg`Pending`)}
                   </div>
                 </div>
                 <div className="rounded-md border px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}>
@@ -1105,13 +1118,13 @@ export function PrintingModals({
                   <Button
                     variant="tinted-accent"
                     className="gap-1.5"
-                    onClick={() => { void handleSendToPrinter(); }}
-                    disabled={printingSendBusy || printingPrintNowBusy || !canSendToPrinter}
+                    onClick={() => { void handleRetryUpload(); }}
+                    disabled={printingSendBusy || printingPrintNowBusy || !canRetryUpload}
                   >
                     <Trans>Retry Upload</Trans>
                   </Button>
                 )}
-                {printingUploadDialogStage === 'ready' && (
+                {printingUploadDialogStage === 'ready' && !printingExternalUpload && (
                   <Button
                     variant="tinted-accent"
                     className="gap-1.5"
@@ -1122,11 +1135,14 @@ export function PrintingModals({
                   </Button>
                 )}
 
-                {printingUploadDialogStage === 'started' && (
+                {(printingUploadDialogStage === 'started' || (printingUploadDialogStage === 'ready' && printingExternalUpload)) && (
                   <Button
                     variant="tinted-accent"
                     className="gap-1.5"
-                    onClick={() => openPrintingMonitorForTargetDevice(printingTargetDevice?.id ?? null)}
+                    onClick={() => {
+                      if (printingExternalUpload) setPrintingUploadDialogOpen(false);
+                      openPrintingMonitorForTargetDevice(printingExternalUpload?.deviceId ?? printingTargetDevice?.id ?? null);
+                    }}
                     disabled={printingSendBusy || printingPrintNowBusy}
                   >
                     <Trans>Open Monitor</Trans>
@@ -1733,17 +1749,28 @@ export function PrintingModals({
                         </button>
                       </div>
                     )}
-                    <IconButton
-                      onClick={() => {
-                        void refreshPrintingMonitorRecentPlates();
-                      }}
-                      disabled={printingMonitorAnyActionBusy || isPrintingMonitorRecentPlatesLoading}
-                      className="!p-1.5 justify-self-end"
-                      title={_(msg`Refresh print files`)}
-                      aria-label={_(msg`Refresh print files`)}
-                    >
-                      {isPrintingMonitorRecentPlatesLoading ? <Spinner size="sm" icon={RefreshCw} /> : <RefreshCw className="w-3.5 h-3.5" />}
-                    </IconButton>
+                    <div className="inline-flex items-center gap-1 justify-self-end">
+                      <IconButton
+                        onClick={() => { void handleUploadSlicedFile(); }}
+                        disabled={!canUploadSlicedFile || printingMonitorAnyActionBusy || isPrintingMonitorSelectedPrinterOffline}
+                        className="!p-1.5"
+                        title={_(msg`Upload a sliced file`)}
+                        aria-label={_(msg`Upload a sliced file`)}
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                      </IconButton>
+                      <IconButton
+                        onClick={() => {
+                          void refreshPrintingMonitorRecentPlates();
+                        }}
+                        disabled={printingMonitorAnyActionBusy || isPrintingMonitorRecentPlatesLoading}
+                        className="!p-1.5"
+                        title={_(msg`Refresh print files`)}
+                        aria-label={_(msg`Refresh print files`)}
+                      >
+                        {isPrintingMonitorRecentPlatesLoading ? <Spinner size="sm" icon={RefreshCw} /> : <RefreshCw className="w-3.5 h-3.5" />}
+                      </IconButton>
+                    </div>
                   </div>
                   <div className="mt-1.5 w-full min-w-0 max-w-full rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 6%)' }}>
                     <div className="h-[clamp(220px,30vh,320px)] w-full">
