@@ -219,9 +219,6 @@
     "src/features/scene/arrange/useArrangeManager.ts": [
       "useArrangeManager"
     ],
-    "src/features/scene/useSceneCollectionManager.ts": [
-      "useSceneCollectionManager"
-    ],
     "src/features/slicing/components/LutCurveEditor.tsx": [
       "LutCurveEditorModal"
     ],

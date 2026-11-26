@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useState, useCallback, useEffect, useInsertionEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
@@ -126,11 +126,13 @@ import {
   repairCancelledMessage,
   repairedModelsMessage,
   remeshedMessage,
+  remeshFailedMessage,
   repairFailedForModelMessage,
   repairFailedMessage,
   repairStoppedMessage,
   tetSurfacedMessage,
   shrinkWrappedMessage,
+  shrinkWrapFailedMessage,
 } from '@/features/scene/meshRepairMessages';
 import {
   addPlateLabel,
@@ -1493,6 +1495,7 @@ import { getImportDefaultsRaftPatch, getSavedImportDefaultsSettings } from '@/fe
 import { readNativeFileSize } from '@/utils/pluginNetworkBridge';
 import { perfMark, perfMeasure } from '@/utils/perfProbe';
 import { clonePlainData } from '@/utils/plainDataClone';
+import { attempt, attemptAsync, withCleanup, withCleanupAsync } from '@/utils/compilerControlFlow';
 
 type ImportProgressState = {
   active: boolean;
@@ -1896,6 +1899,14 @@ export function useSceneCollectionManager(options?: {
   );
 
   const [models, setModels] = useState<LoadedModel[]>([]);
+  const modelsRef = useRef<LoadedModel[]>([]);
+  const activeModelIdRef = useRef<string | null>(null);
+  const selectedModelIdsRef = useRef<string[]>([]);
+  // Whether the most recently loaded .voxl was the chunked 3.1 layout. Read by
+  // the import/export manager right after a load to seed the scene's save-format
+  // so autosave preserves an old file's format without ever downgrading a 3.1
+  // one. Defaults to true (newest) for non-voxl / fresh scenes.
+  const lastLoadedVoxlFormatChunkedRef = useRef<boolean>(true);
   useEffect(() => {
     installLiveModelsProvider(() => modelsRef.current);
     return () => installLiveModelsProvider(null);
@@ -1921,7 +1932,12 @@ export function useSceneCollectionManager(options?: {
    */
   const [plateViewRunId, setPlateViewRunId] = useState(0);
   const activePlateIdRef = useRef(activePlateId);
-  activePlateIdRef.current = activePlateId;
+  // The refs below mirror the latest render for callbacks that run before the next one.
+  // They are written at the start of the commit, ahead of every effect, rather than
+  // during render, which the React Compiler refuses (#941).
+  useInsertionEffect(() => {
+    activePlateIdRef.current = activePlateId;
+  });
 
   const activePlate = plates.find((plate) => plate.id === activePlateId) ?? plates[0];
   /**
@@ -1943,7 +1959,9 @@ export function useSceneCollectionManager(options?: {
    */
   const [lockedPlateIds, setLockedPlateIds] = useState<string[]>([]);
   const lockedPlateIdsRef = useRef<string[]>([]);
-  lockedPlateIdsRef.current = lockedPlateIds;
+  useInsertionEffect(() => {
+    lockedPlateIdsRef.current = lockedPlateIds;
+  });
   const plateLocked = lockedPlateIds.includes(activePlateId);
   const setPlateLocked = useCallback((locked: boolean) => {
     const target = activePlateIdRef.current;
@@ -1954,7 +1972,9 @@ export function useSceneCollectionManager(options?: {
   }, []);
 
   const platesRef = useRef<ScenePlate[]>(plates);
-  platesRef.current = plates;
+  useInsertionEffect(() => {
+    platesRef.current = plates;
+  });
   /**
    * The plate frames, in a ref because the guards and transform writers are
    * declared above them and must read the live ones rather than a stale closure.
@@ -2012,18 +2032,12 @@ export function useSceneCollectionManager(options?: {
     setPlates((prev) => (prev[0]?.name ? [{ ...prev[0], name: '' }] : prev));
   }, [models.length, plates.length]);
 
-  const modelsRef = useRef<LoadedModel[]>([]);
-  const activeModelIdRef = useRef<string | null>(null);
-  const selectedModelIdsRef = useRef<string[]>([]);
-  // Whether the most recently loaded .voxl was the chunked 3.1 layout. Read by
-  // the import/export manager right after a load to seed the scene's save-format
-  // so autosave preserves an old file's format without ever downgrading a 3.1
-  // one. Defaults to true (newest) for non-voxl / fresh scenes.
-  const lastLoadedVoxlFormatChunkedRef = useRef<boolean>(true);
-  modelsRef.current = models;
-  onBlockedByLockRef.current = options?.onBlockedByLock;
-  activeModelIdRef.current = activeModelId;
-  selectedModelIdsRef.current = selectedModelIds;
+  useInsertionEffect(() => {
+    modelsRef.current = models;
+    onBlockedByLockRef.current = options?.onBlockedByLock;
+    activeModelIdRef.current = activeModelId;
+    selectedModelIdsRef.current = selectedModelIds;
+  });
 
   // Keep the COW chunk store in step with the scene (Ph0.1 sub-phase C).
   // Coalesced and idle-scheduled, so a burst of imports or an Auto-Arrange
@@ -2446,12 +2460,16 @@ export function useSceneCollectionManager(options?: {
     getMultiPlateSettingsServerSnapshot,
   );
   const followLandedPlateRef = useRef(multiPlateSettings.followLandedPlate);
-  followLandedPlateRef.current = multiPlateSettings.followLandedPlate;
+  useInsertionEffect(() => {
+    followLandedPlateRef.current = multiPlateSettings.followLandedPlate;
+  });
   /** The grid the beds are laid out on, in the shape the cascade reads. */
   const plateOrdering = useMemo<PlateOrdering>(() => plateOrderingFor(multiPlateSettings), [multiPlateSettings]);
   /** Read inside callbacks that must not be rebuilt when the layout changes. */
   const plateOrderingRef = useRef(plateOrdering);
-  plateOrderingRef.current = plateOrdering;
+  useInsertionEffect(() => {
+    plateOrderingRef.current = plateOrdering;
+  });
   /** The ordering the models' positions were last laid out under. */
   const appliedPlateOrderingRef = useRef(plateOrdering);
 
@@ -2577,7 +2595,9 @@ export function useSceneCollectionManager(options?: {
     return computePlateFrames({ plates, footprint: { widthMm, depthMm, originMode }, ordering: plateOrdering });
   }, [plateOrdering, plates, view3dSettings]);
 
-  plateFramesRef.current = plateFrames;
+  useInsertionEffect(() => {
+    plateFramesRef.current = plateFrames;
+  });
 
   /**
    * The frames of `plateList` under the live ordering, for callbacks that read the plates
@@ -2592,6 +2612,77 @@ export function useSceneCollectionManager(options?: {
     },
     ordering: plateOrderingRef.current,
   }), [view3dSettings.widthMm, view3dSettings.depthMm, view3dSettings.originMode]);
+
+  /**
+   * The models, moved with their beds when the grid is re-laid: `relaidPlateShifts` in
+   * plateLayout decides how far each one moves, and this applies it to the app's models.
+   * A model that stays put keeps its transform object, which is how the support shift
+   * knows to skip it.
+   */
+  const modelsShiftedForRelaidPlates = useCallback((
+    before: readonly ScenePlate[],
+    after: readonly ScenePlate[],
+    models: readonly LoadedModel[],
+    options?: PlateRelayoutOptions,
+  ): LoadedModel[] => {
+    const { widthMm, depthMm, originMode } = view3dSettings;
+    const shifts = relaidPlateShifts({
+      before,
+      after,
+      models,
+      footprint: { widthMm, depthMm, originMode },
+      ordering: plateOrderingRef.current,
+      laidOut: options?.laidOut,
+      wasOrdering: options?.wasOrdering,
+    });
+    if (shifts.size === 0) return models as LoadedModel[];
+
+    return models.map((model) => {
+      const shift = shifts.get(model.id);
+      if (!shift) return model;
+      return {
+        ...model,
+        transform: {
+          ...model.transform,
+          position: model.transform.position.clone().add(new THREE.Vector3(shift.dxMm, shift.dyMm, 0)),
+        },
+      };
+    });
+  }, [view3dSettings]);
+
+  /**
+   * Where a plate sits in the world, from its place in the cascade. The first
+   * plate is the origin, so a single-plate scene is exactly where it always was.
+   */
+  const plateOffsetFor = useCallback((plateId: string): { dxMm: number; dyMm: number } => {
+    // From the refs, not `plateFrames`: a caller that has just added beds asks in the
+    // same tick, before the render that would refresh the memo.
+    const frame = plateFrameFor({ frames: liveFramesFor(platesRef.current), plateId });
+    return { dxMm: frame?.dxMm ?? 0, dyMm: frame?.dyMm ?? 0 };
+  }, [liveFramesFor]);
+  /**
+   * The offset lookup and the batched bed insert, for callers declared above `addPlates`.
+   *
+   * A paste that overflows needs both, and it is defined earlier in this hook than the
+   * insert is; going through refs keeps the hook's declaration order intact instead of
+   * rearranging a thousand lines to satisfy it. `addPlatesRef` is filled in where
+   * `addPlates` is declared.
+   */
+  const plateOffsetForRef = useRef(plateOffsetFor);
+  useInsertionEffect(() => {
+    plateOffsetForRef.current = plateOffsetFor;
+  });
+  const addPlatesRef = useRef<(count: number) => {
+    plates: ScenePlate[];
+    added: ScenePlate[];
+    offsets: Map<string, { dxMm: number; dyMm: number }>;
+  }>(() => ({ plates: [], added: [], offsets: new Map() }));
+  // The footprint the beds were last laid out for; see the layout effect that keeps it.
+  const laidOutFootprintRef = useRef<{
+    printerId: string | null;
+    widthMm: number;
+    depthMm: number;
+  } | null>(null);
 
   /** The plate new work goes to: the active one, or the first when it is gone. */
   const activePlateFrame = useMemo(
@@ -3340,10 +3431,12 @@ export function useSceneCollectionManager(options?: {
 
     let preferredMeshColor = DEFAULT_MESH_COLOR;
     if (typeof window !== 'undefined') {
-      try {
+      const outcome = attempt(() => {
         const savedAppearance = readMeshAppearanceFromLocalStorage();
         if (savedAppearance?.meshColor) preferredMeshColor = savedAppearance.meshColor;
-      } catch { }
+      });
+      if (!outcome.ok) { 
+      }
     }
 
     const stagedNewModels: LoadedModel[] = [];
@@ -3388,11 +3481,10 @@ export function useSceneCollectionManager(options?: {
     const hadActiveModelAtStart = Boolean(activeModelIdRef.current);
     let firstLoadedModelId: string | null = null;
 
-    try {
+    return withCleanupAsync(async () => {
       // Process sequentially to avoid freezing UI too much
-      for (let i = 0; i < files.length; i++) {
+      for (const [i, file] of files.entries()) {
         const multiTankImportDefault = resolveMultiTankImportDefault();
-        const file = files[i];
         const url = URL.createObjectURL(file);
 
         setImportProgress({
@@ -3407,7 +3499,7 @@ export function useSceneCollectionManager(options?: {
 
         console.log(`[SceneCollection] Loading ${file.name}... (${(file.size / 1_000_000).toFixed(0)} MB)`);
 
-        try {
+        const outcome = await attemptAsync(async () => {
           console.log(`[SceneCollection] Loading ${file.name}...`);
 
           // Shared loading options for all mesh types
@@ -3605,7 +3697,9 @@ export function useSceneCollectionManager(options?: {
               });
             }
           }
-        } catch (err) {
+        });
+        if (!outcome.ok) {
+          const err = outcome.error;
           const message = err instanceof Error ? err.message : String(err);
           if (message === 'MESH_IMPORT_CANCELLED_BY_USER') {
             console.log(`[SceneCollection] Import cancelled for ${file.name}`);
@@ -3657,7 +3751,7 @@ export function useSceneCollectionManager(options?: {
           }
         }
       }
-    } finally {
+    }, () => {
       setImportProgress({
         active: false,
         type: null,
@@ -3665,8 +3759,8 @@ export function useSceneCollectionManager(options?: {
         detail: '',
         progress: null,
       });
-    }
-  }, [_, buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, isActivePlateLocked, liveFramesFor, requestMeshRepairConfirmation, trackRecentOpenedFiles, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm, waitForUiYield]);
+    });
+  }, [_, buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, isActivePlateLocked, liveFramesFor, requestMeshRepairConfirmation, trackRecentOpenedFiles, view3dSettings, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -4284,7 +4378,7 @@ export function useSceneCollectionManager(options?: {
       const scheduleIdle = (cb: () => void) => scheduleWhenIdle(cb, 250);
       pendingFlatteningPlanesRef.current += 1;
       scheduleIdle(() => {
-        try {
+        return withCleanup(() => {
           const planes = computeFlatteningPlanes(nextBufferGeometry);
           nextGeometry.flatteningPlanes = planes;
           setModels((prev) => prev.map((m) => (
@@ -4292,9 +4386,9 @@ export function useSceneCollectionManager(options?: {
               ? { ...m, geometry: { ...m.geometry, flatteningPlanes: planes } }
               : m
           )));
-        } finally {
+        }, () => {
           pendingFlatteningPlanesRef.current = Math.max(0, pendingFlatteningPlanesRef.current - 1);
-        }
+        });
       });
     }
 
@@ -4760,28 +4854,31 @@ export function useSceneCollectionManager(options?: {
       const model = modelsRef.current.find((m) => m.id === id);
       const geometry = model ? displayGeometryOf(model.geometry) : undefined;
       if (geometry) pendingAoGeometriesRef.current.add(geometry);
-      try {
-        if (geometry) {
-          const occlusion = await bakeOcclusionForGeometry(geometry);
-          // Attach whatever came back even if this run was superseded: the
-          // values belong to this geometry, and discarding them is what left
-          // it looking unbaked and re-queueable on the next `models` change.
-          if (occlusion) {
-            const attribute = new THREE.BufferAttribute(occlusion, 1);
-            attribute.setUsage(THREE.StaticDrawUsage);
-            geometry.setAttribute(BAKED_OCCLUSION_ATTRIBUTE, attribute);
-            // The store, not the `models` array: replacing that array here
-            // invalidated everything derived from it — the clearance map and
-            // the raft rebuilt on every bake that landed. See
-            // `bumpBakedOcclusionVersion`.
-            bumpBakedOcclusionVersion(geometry);
+      return withCleanupAsync(async () => {
+        const outcome = await attemptAsync(async () => {
+          if (geometry) {
+            const occlusion = await bakeOcclusionForGeometry(geometry);
+            // Attach whatever came back even if this run was superseded: the
+            // values belong to this geometry, and discarding them is what left
+            // it looking unbaked and re-queueable on the next `models` change.
+            if (occlusion) {
+              const attribute = new THREE.BufferAttribute(occlusion, 1);
+              attribute.setUsage(THREE.StaticDrawUsage);
+              geometry.setAttribute(BAKED_OCCLUSION_ATTRIBUTE, attribute);
+              // The store, not the `models` array: replacing that array here
+              // invalidated everything derived from it — the clearance map and
+              // the raft rebuilt on every bake that landed. See
+              // `bumpBakedOcclusionVersion`.
+              bumpBakedOcclusionVersion(geometry);
+            }
           }
-        }
-      } catch (error) {
+        });
+        if (outcome.ok) return outcome.value;
+        const error = outcome.error;
         // A failed bake is not worth surfacing: the model simply keeps the
         // unoccluded look it has today.
         console.warn('[ao] bake failed', error);
-      } finally {
+      }, () => {
         if (geometry) pendingAoGeometriesRef.current.delete(geometry);
         pendingAoBakeRef.current = Math.max(0, pendingAoBakeRef.current - 1);
         // One model per idle callback, not a loop over the queue. The soup copy
@@ -4789,7 +4886,7 @@ export function useSceneCollectionManager(options?: {
         // back is what made a fifteen-model scene stutter for the whole drain
         // rather than between models. Interaction always outranks this.
         scheduleIdle(() => void bakeOne());
-      }
+      });
     };
 
     // Two bakes in flight, not one. The ray pass saturates the pool on its own,
@@ -4816,16 +4913,16 @@ export function useSceneCollectionManager(options?: {
     const scheduleIdle = (cb: () => void) => scheduleWhenIdle(cb, 250);
     pendingFlatteningPlanesRef.current += 1;
     scheduleIdle(() => {
-      try {
+      return withCleanup(() => {
         const planes = computeFlatteningPlanes(geom);
         setModels((prev) => prev.map((m) => (
           m.id === id && m.geometry.geometry === geom
             ? { ...m, geometry: { ...m.geometry, flatteningPlanes: planes } }
             : m
         )));
-      } finally {
+      }, () => {
         pendingFlatteningPlanesRef.current = Math.max(0, pendingFlatteningPlanesRef.current - 1);
-      }
+      });
     });
   }, [deferAccelerateGeometry]);
 
@@ -5057,265 +5154,41 @@ export function useSceneCollectionManager(options?: {
     });
     await waitForUiYield();
 
-    try {
-    const source = modelsRef.current.find((m) => m.id === modelId);
-    if (!source) return;
+    return withCleanupAsync(async () => {
+      const outcome = await attemptAsync(async () => {
+      const source = modelsRef.current.find((m) => m.id === modelId);
+      if (!source) return;
 
-    const split = splitClassifiedSupportGeometry(source, {
-      interactive: true,
-      computeEdgeGeometry: getSavedWorkspaceCameraSettings().higherContrastModelEdges,
-    });
-    if (!split) return;
-    const {
-      modelGeometry: modelGeom,
-      supportGeometry: supportGeom,
-      modelPosition,
-      supportPosition,
-      modelTriangleCount: modelTriCount,
-      supportTriangleCount: supportTriCount,
-      totalTriangleCount: totalTris,
-    } = split;
+      const split = splitClassifiedSupportGeometry(source, {
+        interactive: true,
+        computeEdgeGeometry: getSavedWorkspaceCameraSettings().higherContrastModelEdges,
+      });
+      if (!split) return;
+      const {
+        modelGeometry: modelGeom,
+        supportGeometry: supportGeom,
+        modelPosition,
+        supportPosition,
+        modelTriangleCount: modelTriCount,
+        supportTriangleCount: supportTriCount,
+        totalTriangleCount: totalTris,
+      } = split;
 
-    setImportProgress((p) => ({ ...p, detail: importDetailFinalizing(_) }));
-    await waitForUiYield();
+      setImportProgress((p) => ({ ...p, detail: importDetailFinalizing(_) }));
+      await waitForUiYield();
 
-    // Tag the support geometry so the renderer uses orange hover/select tints
-    // (the `likely_support_geometry` flag drives tint color in SceneCanvas).
-    supportGeom.meshDefects = {
-      hasDefects: false,
-      repairedFloats: 0,
-      totalVertices: supportTriCount * 3,
-      nativeRepairReport: {
-        version: 1,
-        source_path: null,
-        pre: {
-          triangle_count: supportTriCount,
-          vertex_count: supportTriCount * 3,
-          non_manifold_edges: 0,
-          non_manifold_vertices: 0,
-          boundary_edges: 0,
-          boundary_loops: 0,
-          inconsistent_edges: 0,
-          degenerate_triangles: 0,
-          duplicate_triangles: 0,
-          component_count: 0,
-          self_intersections: 0,
-          signed_volume: 0,
-          is_watertight: false,
-          timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
-        },
-        post: {
-          triangle_count: supportTriCount,
-          vertex_count: supportTriCount * 3,
-          non_manifold_edges: 0,
-          non_manifold_vertices: 0,
-          boundary_edges: 0,
-          boundary_loops: 0,
-          inconsistent_edges: 0,
-          degenerate_triangles: 0,
-          duplicate_triangles: 0,
-          component_count: 0,
-          self_intersections: 0,
-          signed_volume: 0,
-          is_watertight: false,
-          timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
-        },
-        steps: [],
-        likely_support_geometry: true,
-        residual_issues: [],
-        fully_repaired: true,
-        rebuilt: false,
-        cancelled: false,
-        total_ms: 0,
-      },
-    };
-
-    const currentActiveModelId = activeModelIdRef.current;
-    const currentSelectedModelIds = selectedModelIdsRef.current;
-
-    const before = captureSceneSnapshot(
-      modelsRef.current,
-      currentActiveModelId,
-      currentSelectedModelIds,
-      { includeSupportState: true },
-    );
-
-    const baseName = source.name.replace(/\.(stl|obj|3mf)$/i, '');
-    const modelModel: LoadedModel = {
-      id: uuidv4(),
-      name: `${baseName} (Model)`,
-      fileUrl: source.fileUrl,
-      fileSizeBytes: source.fileSizeBytes ? Math.round(source.fileSizeBytes * (modelTriCount / totalTris)) : undefined,
-      // The split geometry no longer matches the original file on disk, so
-      // clear sourcePath to prevent downstream consumers (e.g. island scanner)
-      // from sideloading stale data from the original file.
-      sourcePath: null,
-      geometry: modelGeom,
-      transform: {
-        position: modelPosition,
-        rotation: source.transform.rotation.clone(),
-        scale: source.transform.scale.clone(),
-      },
-      visible: source.visible,
-      color: source.color,
-      polygonCount: modelTriCount,
-      autoLift: source.autoLift,
-      liftRestoreMm: source.liftRestoreMm,
-      isSupportGeometry: false,
-    };
-
-    const supportModel: LoadedModel = {
-      id: uuidv4(),
-      name: `${baseName} (Supports)`,
-      fileUrl: source.fileUrl,
-      fileSizeBytes: source.fileSizeBytes ? Math.round(source.fileSizeBytes * (supportTriCount / totalTris)) : undefined,
-      // The split geometry no longer matches the original file on disk.
-      sourcePath: null,
-      geometry: supportGeom,
-      transform: {
-        position: supportPosition,
-        rotation: source.transform.rotation.clone(),
-        scale: source.transform.scale.clone(),
-      },
-      visible: source.visible,
-      color: source.color,
-      polygonCount: supportTriCount,
-      autoLift: source.autoLift,
-      liftRestoreMm: source.liftRestoreMm,
-      isSupportGeometry: true,
-    };
-
-    const nextModels = [
-      ...modelsRef.current.filter((m) => m.id !== modelId),
-      modelModel,
-      supportModel,
-    ];
-
-    setModels(nextModels);
-    setActiveModelId(modelModel.id);
-    setSelectedModelIds([modelModel.id, supportModel.id]);
-
-    const after = captureSceneSnapshot(
-      nextModels,
-      modelModel.id,
-      [modelModel.id, supportModel.id],
-      { includeSupportState: true },
-    );
-    pushSceneSnapshotHistory(before, after, splitSupportsLabel(source.name));
-    } catch (e) {
-      console.error(e);
-      emitSceneImportReport(reportSplitSupportsFailed(_), 'error');
-    } finally {
-      setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
-    }
-  }, [_, pushSceneSnapshotHistory, setImportProgress, waitForUiYield, emitSceneImportReport]);
-
-  /** Re-combines split model and support geometries back into a single model,
-   *  transforming the supports to align with any model movement/rotation. */
-  const mergeSupports = useCallback(async () => {
-    setImportProgress({
-      active: true,
-      type: 'mesh',
-      label: importLabelMergingSupports(_),
-      detail: importDetailRecombiningGeometry(_),
-      progress: null,
-    });
-    await waitForUiYield();
-
-    try {
-      const selectedIds = selectedModelIdsRef.current;
-      if (selectedIds.length !== 2) return;
-
-      const selectedModels = modelsRef.current.filter((m) => selectedIds.includes(m.id));
-      if (selectedModels.length !== 2) return;
-
-      const modelModel = selectedModels.find((m) => !m.isSupportGeometry)
-        || selectedModels.find((m) => m.id === activeModelIdRef.current)
-        || selectedModels[0];
-      const supportModel = selectedModels.find((m) => m.id !== modelModel.id)!;
-
-      // Model and Support might have different transformations.
-      // Compute matrix to transform support vertices into model local space.
-      const modelMatrix = new THREE.Matrix4().compose(
-        modelModel.transform.position,
-        new THREE.Quaternion().setFromEuler(modelModel.transform.rotation),
-        modelModel.transform.scale,
-      );
-      const supportMatrix = new THREE.Matrix4().compose(
-        supportModel.transform.position,
-        new THREE.Quaternion().setFromEuler(supportModel.transform.rotation),
-        supportModel.transform.scale,
-      );
-      const supportToModelMatrix = new THREE.Matrix4().copy(modelMatrix).invert().multiply(supportMatrix);
-
-      const modelGeom = modelModel.geometry.geometry;
-      const supportGeom = supportModel.geometry.geometry;
-
-      const modelPositions = modelGeom.getAttribute('position').array;
-      const supportPositions = supportGeom.getAttribute('position').array;
-
-      const modelCenter = modelModel.geometry.center;
-      const supportCenter = supportModel.geometry.center;
-
-      const tempV = new THREE.Vector3();
-      const mappedSupportPositions = new Float32Array(supportPositions.length);
-      for (let i = 0; i < supportPositions.length; i += 3) {
-        tempV.set(
-          supportPositions[i] - supportCenter.x,
-          supportPositions[i + 1] - supportCenter.y,
-          supportPositions[i + 2] - supportCenter.z,
-        );
-        tempV.applyMatrix4(supportToModelMatrix);
-        mappedSupportPositions[i] = tempV.x + modelCenter.x;
-        mappedSupportPositions[i + 1] = tempV.y + modelCenter.y;
-        mappedSupportPositions[i + 2] = tempV.z + modelCenter.z;
-      }
-
-      const combinedPositions = new Float32Array(modelPositions.length + mappedSupportPositions.length);
-      combinedPositions.set(modelPositions, 0);
-      combinedPositions.set(mappedSupportPositions, modelPositions.length);
-
-      const modelTriangleCount = modelPositions.length / 9;
-      const supportTriangleCount = mappedSupportPositions.length / 9;
-
-      const mergedGeometryObj = new THREE.BufferGeometry();
-      mergedGeometryObj.setAttribute('position', new THREE.BufferAttribute(combinedPositions, 3));
-      mergedGeometryObj.computeVertexNormals();
-      mergedGeometryObj.computeBoundingBox();
-
-      const bbox = mergedGeometryObj.boundingBox?.clone() ?? new THREE.Box3();
-      const center = bbox.getCenter(new THREE.Vector3());
-      const size = bbox.getSize(new THREE.Vector3());
-
-      const mergedGeometry: GeometryWithBounds = {
-        geometry: mergedGeometryObj,
-        bbox,
-        center,
-        size,
-        flatteningPlanes: modelModel.geometry.flatteningPlanes || [],
-        edgeGeometry: modelModel.geometry.edgeGeometry,
-      };
-
-      const supportGeo = new THREE.BufferGeometry();
-      supportGeo.setAttribute('position', new THREE.BufferAttribute(mappedSupportPositions, 3));
-      supportGeo.computeVertexNormals();
-
-      const modelGeo = new THREE.BufferGeometry();
-      modelGeo.setAttribute('position', new THREE.BufferAttribute(modelPositions, 3));
-
-      // Set the nativeRepairReport properties to preserve support triangle designation
-      mergedGeometry.meshDefects = {
+      // Tag the support geometry so the renderer uses orange hover/select tints
+      // (the `likely_support_geometry` flag drives tint color in SceneCanvas).
+      supportGeom.meshDefects = {
         hasDefects: false,
         repairedFloats: 0,
-        totalVertices: combinedPositions.length / 3,
-        supportSectionGeometry: supportGeo,
-        modelSectionGeometry: modelGeo,
+        totalVertices: supportTriCount * 3,
         nativeRepairReport: {
           version: 1,
           source_path: null,
           pre: {
-            triangle_count: modelTriangleCount + supportTriangleCount,
-            vertex_count: (modelTriangleCount + supportTriangleCount) * 3,
+            triangle_count: supportTriCount,
+            vertex_count: supportTriCount * 3,
             non_manifold_edges: 0,
             non_manifold_vertices: 0,
             boundary_edges: 0,
@@ -5330,8 +5203,8 @@ export function useSceneCollectionManager(options?: {
             timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
           },
           post: {
-            triangle_count: modelTriangleCount + supportTriangleCount,
-            vertex_count: (modelTriangleCount + supportTriangleCount) * 3,
+            triangle_count: supportTriCount,
+            vertex_count: supportTriCount * 3,
             non_manifold_edges: 0,
             non_manifold_vertices: 0,
             boundary_edges: 0,
@@ -5346,8 +5219,7 @@ export function useSceneCollectionManager(options?: {
             timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
           },
           steps: [],
-          likely_support_geometry: false,
-          model_triangle_count: modelTriangleCount,
+          likely_support_geometry: true,
           residual_issues: [],
           fully_repaired: true,
           rebuilt: false,
@@ -5356,61 +5228,292 @@ export function useSceneCollectionManager(options?: {
         },
       };
 
+      const currentActiveModelId = activeModelIdRef.current;
+      const currentSelectedModelIds = selectedModelIdsRef.current;
+
       const before = captureSceneSnapshot(
         modelsRef.current,
-        activeModelIdRef.current,
-        selectedModelIdsRef.current,
+        currentActiveModelId,
+        currentSelectedModelIds,
         { includeSupportState: true },
       );
 
-      const baseName = modelModel.name.replace(/ \(Model\)$/i, '');
-      const mergedModel: LoadedModel = {
+      const baseName = source.name.replace(/\.(stl|obj|3mf)$/i, '');
+      const modelModel: LoadedModel = {
         id: uuidv4(),
-        name: baseName,
-        fileUrl: modelModel.fileUrl,
-        fileSizeBytes: (modelModel.fileSizeBytes || 0) + (supportModel.fileSizeBytes || 0),
+        name: `${baseName} (Model)`,
+        fileUrl: source.fileUrl,
+        fileSizeBytes: source.fileSizeBytes ? Math.round(source.fileSizeBytes * (modelTriCount / totalTris)) : undefined,
+        // The split geometry no longer matches the original file on disk, so
+        // clear sourcePath to prevent downstream consumers (e.g. island scanner)
+        // from sideloading stale data from the original file.
         sourcePath: null,
-        geometry: mergedGeometry,
+        geometry: modelGeom,
         transform: {
-          position: (() => {
-            const rotation = new THREE.Quaternion().setFromEuler(modelModel.transform.rotation);
-            const positionOffset = center.clone().sub(modelCenter);
-            positionOffset.multiply(modelModel.transform.scale).applyQuaternion(rotation);
-            return modelModel.transform.position.clone().add(positionOffset);
-          })(),
-          rotation: modelModel.transform.rotation.clone(),
-          scale: modelModel.transform.scale.clone(),
+          position: modelPosition,
+          rotation: source.transform.rotation.clone(),
+          scale: source.transform.scale.clone(),
         },
-        visible: modelModel.visible,
-        color: modelModel.color,
-        polygonCount: modelTriangleCount + supportTriangleCount,
-        autoLift: modelModel.autoLift,
-        liftRestoreMm: modelModel.liftRestoreMm,
-        isSupportGeometry: undefined,
+        visible: source.visible,
+        color: source.color,
+        polygonCount: modelTriCount,
+        autoLift: source.autoLift,
+        liftRestoreMm: source.liftRestoreMm,
+        isSupportGeometry: false,
+      };
+
+      const supportModel: LoadedModel = {
+        id: uuidv4(),
+        name: `${baseName} (Supports)`,
+        fileUrl: source.fileUrl,
+        fileSizeBytes: source.fileSizeBytes ? Math.round(source.fileSizeBytes * (supportTriCount / totalTris)) : undefined,
+        // The split geometry no longer matches the original file on disk.
+        sourcePath: null,
+        geometry: supportGeom,
+        transform: {
+          position: supportPosition,
+          rotation: source.transform.rotation.clone(),
+          scale: source.transform.scale.clone(),
+        },
+        visible: source.visible,
+        color: source.color,
+        polygonCount: supportTriCount,
+        autoLift: source.autoLift,
+        liftRestoreMm: source.liftRestoreMm,
+        isSupportGeometry: true,
       };
 
       const nextModels = [
-        ...modelsRef.current.filter((m) => m.id !== modelModel.id && m.id !== supportModel.id),
-        mergedModel,
+        ...modelsRef.current.filter((m) => m.id !== modelId),
+        modelModel,
+        supportModel,
       ];
 
       setModels(nextModels);
-      setActiveModelId(mergedModel.id);
-      setSelectedModelIds([mergedModel.id]);
+      setActiveModelId(modelModel.id);
+      setSelectedModelIds([modelModel.id, supportModel.id]);
 
       const after = captureSceneSnapshot(
         nextModels,
-        mergedModel.id,
-        [mergedModel.id],
+        modelModel.id,
+        [modelModel.id, supportModel.id],
         { includeSupportState: true },
       );
-      pushSceneSnapshotHistory(before, after, mergeSupportsLabel(mergedModel.name));
-    } catch (e) {
+      pushSceneSnapshotHistory(before, after, splitSupportsLabel(source.name));
+      });
+      if (outcome.ok) return outcome.value;
+      const e = outcome.error;
+      console.error(e);
+      emitSceneImportReport(reportSplitSupportsFailed(_), 'error');
+    }, () => {
+      setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
+    });
+  }, [_, pushSceneSnapshotHistory, setImportProgress, waitForUiYield, emitSceneImportReport]);
+
+  /** Re-combines split model and support geometries back into a single model,
+   *  transforming the supports to align with any model movement/rotation. */
+  const mergeSupports = useCallback(async () => {
+    setImportProgress({
+      active: true,
+      type: 'mesh',
+      label: importLabelMergingSupports(_),
+      detail: importDetailRecombiningGeometry(_),
+      progress: null,
+    });
+    await waitForUiYield();
+
+    return withCleanup(() => {
+      const outcome = attempt(() => {
+        const selectedIds = selectedModelIdsRef.current;
+        if (selectedIds.length !== 2) return;
+
+        const selectedModels = modelsRef.current.filter((m) => selectedIds.includes(m.id));
+        if (selectedModels.length !== 2) return;
+
+        const modelModel = selectedModels.find((m) => !m.isSupportGeometry)
+          || selectedModels.find((m) => m.id === activeModelIdRef.current)
+          || selectedModels[0];
+        const supportModel = selectedModels.find((m) => m.id !== modelModel.id)!;
+
+        // Model and Support might have different transformations.
+        // Compute matrix to transform support vertices into model local space.
+        const modelMatrix = new THREE.Matrix4().compose(
+          modelModel.transform.position,
+          new THREE.Quaternion().setFromEuler(modelModel.transform.rotation),
+          modelModel.transform.scale,
+        );
+        const supportMatrix = new THREE.Matrix4().compose(
+          supportModel.transform.position,
+          new THREE.Quaternion().setFromEuler(supportModel.transform.rotation),
+          supportModel.transform.scale,
+        );
+        const supportToModelMatrix = new THREE.Matrix4().copy(modelMatrix).invert().multiply(supportMatrix);
+
+        const modelGeom = modelModel.geometry.geometry;
+        const supportGeom = supportModel.geometry.geometry;
+
+        const modelPositions = modelGeom.getAttribute('position').array;
+        const supportPositions = supportGeom.getAttribute('position').array;
+
+        const modelCenter = modelModel.geometry.center;
+        const supportCenter = supportModel.geometry.center;
+
+        const tempV = new THREE.Vector3();
+        const mappedSupportPositions = new Float32Array(supportPositions.length);
+        for (let i = 0; i < supportPositions.length; i += 3) {
+          tempV.set(
+            supportPositions[i] - supportCenter.x,
+            supportPositions[i + 1] - supportCenter.y,
+            supportPositions[i + 2] - supportCenter.z,
+          );
+          tempV.applyMatrix4(supportToModelMatrix);
+          mappedSupportPositions[i] = tempV.x + modelCenter.x;
+          mappedSupportPositions[i + 1] = tempV.y + modelCenter.y;
+          mappedSupportPositions[i + 2] = tempV.z + modelCenter.z;
+        }
+
+        const combinedPositions = new Float32Array(modelPositions.length + mappedSupportPositions.length);
+        combinedPositions.set(modelPositions, 0);
+        combinedPositions.set(mappedSupportPositions, modelPositions.length);
+
+        const modelTriangleCount = modelPositions.length / 9;
+        const supportTriangleCount = mappedSupportPositions.length / 9;
+
+        const mergedGeometryObj = new THREE.BufferGeometry();
+        mergedGeometryObj.setAttribute('position', new THREE.BufferAttribute(combinedPositions, 3));
+        mergedGeometryObj.computeVertexNormals();
+        mergedGeometryObj.computeBoundingBox();
+
+        const bbox = mergedGeometryObj.boundingBox?.clone() ?? new THREE.Box3();
+        const center = bbox.getCenter(new THREE.Vector3());
+        const size = bbox.getSize(new THREE.Vector3());
+
+        const mergedGeometry: GeometryWithBounds = {
+          geometry: mergedGeometryObj,
+          bbox,
+          center,
+          size,
+          flatteningPlanes: modelModel.geometry.flatteningPlanes || [],
+          edgeGeometry: modelModel.geometry.edgeGeometry,
+        };
+
+        const supportGeo = new THREE.BufferGeometry();
+        supportGeo.setAttribute('position', new THREE.BufferAttribute(mappedSupportPositions, 3));
+        supportGeo.computeVertexNormals();
+
+        const modelGeo = new THREE.BufferGeometry();
+        modelGeo.setAttribute('position', new THREE.BufferAttribute(modelPositions, 3));
+
+        // Set the nativeRepairReport properties to preserve support triangle designation
+        mergedGeometry.meshDefects = {
+          hasDefects: false,
+          repairedFloats: 0,
+          totalVertices: combinedPositions.length / 3,
+          supportSectionGeometry: supportGeo,
+          modelSectionGeometry: modelGeo,
+          nativeRepairReport: {
+            version: 1,
+            source_path: null,
+            pre: {
+              triangle_count: modelTriangleCount + supportTriangleCount,
+              vertex_count: (modelTriangleCount + supportTriangleCount) * 3,
+              non_manifold_edges: 0,
+              non_manifold_vertices: 0,
+              boundary_edges: 0,
+              boundary_loops: 0,
+              inconsistent_edges: 0,
+              degenerate_triangles: 0,
+              duplicate_triangles: 0,
+              component_count: 0,
+              self_intersections: 0,
+              signed_volume: 0,
+              is_watertight: false,
+              timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
+            },
+            post: {
+              triangle_count: modelTriangleCount + supportTriangleCount,
+              vertex_count: (modelTriangleCount + supportTriangleCount) * 3,
+              non_manifold_edges: 0,
+              non_manifold_vertices: 0,
+              boundary_edges: 0,
+              boundary_loops: 0,
+              inconsistent_edges: 0,
+              degenerate_triangles: 0,
+              duplicate_triangles: 0,
+              component_count: 0,
+              self_intersections: 0,
+              signed_volume: 0,
+              is_watertight: false,
+              timings_ms: { topology_ms: 0, self_intersections_ms: 0, components_ms: 0, total_ms: 0 },
+            },
+            steps: [],
+            likely_support_geometry: false,
+            model_triangle_count: modelTriangleCount,
+            residual_issues: [],
+            fully_repaired: true,
+            rebuilt: false,
+            cancelled: false,
+            total_ms: 0,
+          },
+        };
+
+        const before = captureSceneSnapshot(
+          modelsRef.current,
+          activeModelIdRef.current,
+          selectedModelIdsRef.current,
+          { includeSupportState: true },
+        );
+
+        const baseName = modelModel.name.replace(/ \(Model\)$/i, '');
+        const mergedModel: LoadedModel = {
+          id: uuidv4(),
+          name: baseName,
+          fileUrl: modelModel.fileUrl,
+          fileSizeBytes: (modelModel.fileSizeBytes || 0) + (supportModel.fileSizeBytes || 0),
+          sourcePath: null,
+          geometry: mergedGeometry,
+          transform: {
+            position: (() => {
+              const rotation = new THREE.Quaternion().setFromEuler(modelModel.transform.rotation);
+              const positionOffset = center.clone().sub(modelCenter);
+              positionOffset.multiply(modelModel.transform.scale).applyQuaternion(rotation);
+              return modelModel.transform.position.clone().add(positionOffset);
+            })(),
+            rotation: modelModel.transform.rotation.clone(),
+            scale: modelModel.transform.scale.clone(),
+          },
+          visible: modelModel.visible,
+          color: modelModel.color,
+          polygonCount: modelTriangleCount + supportTriangleCount,
+          autoLift: modelModel.autoLift,
+          liftRestoreMm: modelModel.liftRestoreMm,
+          isSupportGeometry: undefined,
+        };
+
+        const nextModels = [
+          ...modelsRef.current.filter((m) => m.id !== modelModel.id && m.id !== supportModel.id),
+          mergedModel,
+        ];
+
+        setModels(nextModels);
+        setActiveModelId(mergedModel.id);
+        setSelectedModelIds([mergedModel.id]);
+
+        const after = captureSceneSnapshot(
+          nextModels,
+          mergedModel.id,
+          [mergedModel.id],
+          { includeSupportState: true },
+        );
+        pushSceneSnapshotHistory(before, after, mergeSupportsLabel(mergedModel.name));
+      });
+      if (outcome.ok) return outcome.value;
+      const e = outcome.error;
       console.error(e);
       emitSceneImportReport(reportMergeSupportsFailed(_), 'error');
-    } finally {
+    }, () => {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
-    }
+    });
   }, [_, pushSceneSnapshotHistory, setImportProgress, waitForUiYield, emitSceneImportReport]);
 
   const scanModelForSupportsInPlace = useCallback(async (modelId: string): Promise<boolean> => {
@@ -5426,47 +5529,50 @@ export function useSceneCollectionManager(options?: {
     });
     await waitForUiYield();
 
-    try {
-      const processed = await processGeometry(model.geometry.geometry, {
-        center: false,
-        nativeProcessingMode: 'classify-only',
-        assumeSupportGeometry: undefined,
-        _nativeModelTriangleCount: model.geometry.meshDefects?.nativeRepairReport?.model_triangle_count ?? undefined,
+    return withCleanupAsync(async () => {
+      const outcome = await attemptAsync(async () => {
+        const processed = await processGeometry(model.geometry.geometry, {
+          center: false,
+          nativeProcessingMode: 'classify-only',
+          assumeSupportGeometry: undefined,
+          _nativeModelTriangleCount: model.geometry.meshDefects?.nativeRepairReport?.model_triangle_count ?? undefined,
+        });
+        const polygonCount = processed.geometry.getAttribute('position')
+          ? countTriangles(processed.geometry)
+          : model.polygonCount;
+        const repairReport = processed.meshDefects?.nativeRepairReport ?? null;
+
+        setModels(prev => prev.map(m =>
+          m.id === modelId ? { ...m, geometry: processed, polygonCount, isSupportGeometry: undefined } : m
+        ));
+
+        if (repairReport) {
+          const reportEntry: MeshRepairReportEntry = {
+            id: modelId,
+            modelName: model.name,
+            report: repairReport,
+          };
+          setPendingMeshRepairReports([]);
+          clearSceneImportReport();
+          setMeshRepairReportPresentation('optimistic');
+          setMeshRepairReports([reportEntry]);
+        } else {
+          setPendingMeshRepairReports([]);
+          emitSceneImportReport(reportScanned(model.name, _), 'success');
+        }
+
+        return true;
       });
-      const polygonCount = processed.geometry.getAttribute('position')
-        ? countTriangles(processed.geometry)
-        : model.polygonCount;
-      const repairReport = processed.meshDefects?.nativeRepairReport ?? null;
-
-      setModels(prev => prev.map(m =>
-        m.id === modelId ? { ...m, geometry: processed, polygonCount, isSupportGeometry: undefined } : m
-      ));
-
-      if (repairReport) {
-        const reportEntry: MeshRepairReportEntry = {
-          id: modelId,
-          modelName: model.name,
-          report: repairReport,
-        };
-        setPendingMeshRepairReports([]);
-        clearSceneImportReport();
-        setMeshRepairReportPresentation('optimistic');
-        setMeshRepairReports([reportEntry]);
-      } else {
-        setPendingMeshRepairReports([]);
-        emitSceneImportReport(reportScanned(model.name, _), 'success');
-      }
-
-      return true;
-    } catch (err) {
+      if (outcome.ok) return outcome.value;
+      const err = outcome.error;
       console.error('[scanModelForSupportsInPlace] Scan failed:', err);
       setPendingMeshRepairReports([]);
       const message = err instanceof Error ? err.message : String(err);
       emitSceneImportReport(reportScanFailed(message, _), 'error', { durationMs: 6_000 });
       return false;
-    } finally {
+    }, () => {
       setImportProgress({ active: false, type: null, label: '', detail: '', progress: null });
-    }
+    });
   }, [_, clearSceneImportReport, emitSceneImportReport, setImportProgress, waitForUiYield]);
 
   const renameGroup = useCallback((groupId: string, nextName: string) => {
@@ -5796,7 +5902,7 @@ export function useSceneCollectionManager(options?: {
     schedulePostPaint(() => {
       beginSupportStateBatch();
       beginSupportStateBatch();
-      try {
+      withCleanup(() => {
         pasteModelSupportsFromClipboard(
           first.supportClipboard,
           id,
@@ -5804,10 +5910,10 @@ export function useSceneCollectionManager(options?: {
           pastedModel.transform,
           { recordHistory: false },
         );
-      } finally {
+      }, () => {
         endSupportStateBatch();
         endSupportStateBatch();
-      }
+      });
 
       const before = captureSceneSnapshot(beforeModels, beforeActiveModelId, beforeSelectedModelIds, {
         includeSupportState: true,
@@ -6292,7 +6398,7 @@ export function useSceneCollectionManager(options?: {
       schedulePostPaint(() => {
         beginSupportStateBatch();
         beginSupportStateBatch();
-        try {
+        withCleanup(() => {
           pasteModelSupports(
             pastedModels.flatMap((pastedModel, index) => {
               const sourceEntry = entries[index];
@@ -6306,10 +6412,10 @@ export function useSceneCollectionManager(options?: {
             }),
             { recordHistory: false },
           );
-        } finally {
+        }, () => {
           endSupportStateBatch();
           endSupportStateBatch();
-        }
+        });
 
         // The support state is only part of this step when a copied model brought some
         // with it: cloning it for a paste that carries none is the expensive half of
@@ -6334,7 +6440,7 @@ export function useSceneCollectionManager(options?: {
     }
 
     return createdIds;
-  }, [_, activeModelId, activePlateRect, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, footprintForTransform, liveFramesFor, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+  }, [_, activeModelId, activePlateRect, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, footprintForTransform, liveFramesFor, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings]);
 
   const duplicateModelWithTransforms = useCallback((
     sourceId: string,
@@ -6410,7 +6516,7 @@ export function useSceneCollectionManager(options?: {
     // never visually lag behind the moved source model during duplicate apply.
     beginSupportStateBatch();
     beginSupportStateBatch();
-    try {
+    withCleanup(() => {
       if (sourceTransform && !transformsEqual(source.transform, sourceTransform)) {
         transformSupportsForModel(sourceId, source.transform, sourceTransform);
       }
@@ -6465,10 +6571,10 @@ export function useSceneCollectionManager(options?: {
         });
         pushSceneSnapshotHistory(before, after, createdIds.length === 1 ? duplicateModelLabel(source.name) : duplicateModelsLabel(createdIds.length));
       }
-    } finally {
+    }, () => {
       endSupportStateBatch();
       endSupportStateBatch();
-    }
+    });
 
     return createdIds;
   }, [_, activeModelId, cloneGeometryWithBounds, models, pushSceneSnapshotHistory, selectedModelIds]);
@@ -6525,477 +6631,480 @@ export function useSceneCollectionManager(options?: {
 
     await waitForUiYield();
 
-    try {
-      const autoRepairScenes = shouldAutoRepairSceneImports(options);
-      const importResult = await pluginImport.handler(file, pluginImport.fileType);
+    return withCleanupAsync(async () => {
+      const outcome = await attemptAsync(async () => {
+        const autoRepairScenes = shouldAutoRepairSceneImports(options);
+        const importResult = await pluginImport.handler(file, pluginImport.fileType);
 
-      if (!importResult.success) {
-        throw new Error(importResult.error || `${pluginImport.fileType.displayName} import failed.`);
-      }
-
-      // Support both single-payload and array-payload plugins (e.g. multi-model LYS import).
-      const rawPayloads = Array.isArray(importResult.payload)
-        ? (importResult.payload as unknown[])
-        : [importResult.payload];
-
-      const normalizedPayloads = rawPayloads
-        .map((p) => normalizePluginSceneImportPayload(p))
-        .filter((p): p is PluginSceneImportPayload => p !== null);
-
-      if (normalizedPayloads.length === 0) {
-        throw new Error(`Plugin "${pluginImport.pluginId}" returned an unsupported scene payload.`);
-      }
-
-      // A scene whose models were hollowed before export carries the cavity as a
-      // second mesh, so the model alone slices filled. Ask before baking it in:
-      // the answer decides the geometry every stage below works on, so it is
-      // settled here, before any of it runs.
-      const hollowedPayloads = normalizedPayloads.filter(
-        (p) => readPayloadCavity(p) !== null,
-      );
-      let bakeImportedHollowing = true;
-      if (hollowedPayloads.length > 0 && !options?.suppressPlacementPrompt) {
-        const choice = await requestSceneImportHollowingChoice({
-          source: extension.slice(1).toUpperCase(),
-          fileName: file.name,
-          modelCount: normalizedPayloads.length,
-          hollowedModelCount: hollowedPayloads.length,
-        });
-        bakeImportedHollowing = choice === 'bake';
-      }
-
-      // Process all geometries sequentially
-      const processedItems: Array<{
-        normalized: PluginSceneImportPayload;
-        processed: GeometryWithBounds;
-      }> = [];
-      // Each baked model's shell as it was before the cavity joined it, read
-      // back below when the modifiers are stored.
-      const shellSnapshotByPayload = new Map<
-        PluginSceneImportPayload,
-        { sourcePositionsBase64: string; sourcePositionCount: number }
-      >();
-      for (const normalized of normalizedPayloads) {
-        let geometry = normalized.geometry;
-        // Bake the cavity in first, so classification and the BVH describe the
-        // hollow solid rather than the shell that encloses it.
-        if (bakeImportedHollowing) {
-          const cavity = readPayloadCavity(normalized);
-          if (cavity) {
-            const shellTris = (geometry.getAttribute('position')?.count ?? 0) / 3;
-            // The shell before the cavity joins it is what Remove Hollowing
-            // restores, and this is the last point it exists on its own.
-            try {
-              shellSnapshotByPayload.set(normalized, snapshotGeometryPositions(geometry));
-            } catch (error) {
-              console.warn('[SceneCollection] Could not snapshot the pre-hollow shell', error);
-            }
-            geometry = mergeCavityIntoShell(geometry, cavity);
-            console.log(
-              `[SceneCollection] Baked cavity into model: ${shellTris.toLocaleString()} + `
-              + `${(cavity.length / 9).toLocaleString()} = `
-              + `${((geometry.getAttribute('position')?.count ?? 0) / 3).toLocaleString()} triangles`,
-            );
-          }
+        if (!importResult.success) {
+          throw new Error(importResult.error || `${pluginImport.fileType.displayName} import failed.`);
         }
-        const processed = await processGeometry(geometry, {
-          center: false,
-          nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
-          skipClassification: skipsNativePassForModelOnly(
-            normalized.skipClassification === true,
-            autoRepairScenes,
-          ),
-          onNativeProcessingStage: (stage) => {
-            if (options?.suppressProgress) return;
 
-            if (stage === 'repairing') {
-              setImportProgress({
-                active: true,
-                type: 'scene',
-                label: importLabelFileType(pluginImport.fileType.displayName, _),
-                detail: normalizedPayloads.length > 1
-                  ? importDetailAutoRepairingMesh(processedItems.length + 1, normalizedPayloads.length, _)
-                  : importDetailAutoRepairingFile(file.name, _),
-                progress: null,
-              });
-              return;
+        // Support both single-payload and array-payload plugins (e.g. multi-model LYS import).
+        const rawPayloads = Array.isArray(importResult.payload)
+          ? (importResult.payload as unknown[])
+          : [importResult.payload];
+
+        const normalizedPayloads = rawPayloads
+          .map((p) => normalizePluginSceneImportPayload(p))
+          .filter((p): p is PluginSceneImportPayload => p !== null);
+
+        if (normalizedPayloads.length === 0) {
+          throw new Error(`Plugin "${pluginImport.pluginId}" returned an unsupported scene payload.`);
+        }
+
+        // A scene whose models were hollowed before export carries the cavity as a
+        // second mesh, so the model alone slices filled. Ask before baking it in:
+        // the answer decides the geometry every stage below works on, so it is
+        // settled here, before any of it runs.
+        const hollowedPayloads = normalizedPayloads.filter(
+          (p) => readPayloadCavity(p) !== null,
+        );
+        let bakeImportedHollowing = true;
+        if (hollowedPayloads.length > 0 && !options?.suppressPlacementPrompt) {
+          const choice = await requestSceneImportHollowingChoice({
+            source: extension.slice(1).toUpperCase(),
+            fileName: file.name,
+            modelCount: normalizedPayloads.length,
+            hollowedModelCount: hollowedPayloads.length,
+          });
+          bakeImportedHollowing = choice === 'bake';
+        }
+
+        // Process all geometries sequentially
+        const processedItems: Array<{
+          normalized: PluginSceneImportPayload;
+          processed: GeometryWithBounds;
+        }> = [];
+        // Each baked model's shell as it was before the cavity joined it, read
+        // back below when the modifiers are stored.
+        const shellSnapshotByPayload = new Map<
+          PluginSceneImportPayload,
+          { sourcePositionsBase64: string; sourcePositionCount: number }
+        >();
+        for (const normalized of normalizedPayloads) {
+          let geometry = normalized.geometry;
+          // Bake the cavity in first, so classification and the BVH describe the
+          // hollow solid rather than the shell that encloses it.
+          if (bakeImportedHollowing) {
+            const cavity = readPayloadCavity(normalized);
+            if (cavity) {
+              const shellTris = (geometry.getAttribute('position')?.count ?? 0) / 3;
+              // The shell before the cavity joins it is what Remove Hollowing
+              // restores, and this is the last point it exists on its own.
+              try {
+                shellSnapshotByPayload.set(normalized, snapshotGeometryPositions(geometry));
+              } catch (error) {
+                console.warn('[SceneCollection] Could not snapshot the pre-hollow shell', error);
+              }
+              geometry = mergeCavityIntoShell(geometry, cavity);
+              console.log(
+                `[SceneCollection] Baked cavity into model: ${shellTris.toLocaleString()} + `
+                + `${(cavity.length / 9).toLocaleString()} = `
+                + `${((geometry.getAttribute('position')?.count ?? 0) / 3).toLocaleString()} triangles`,
+              );
             }
+          }
+          const processed = await processGeometry(geometry, {
+            center: false,
+            nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
+            skipClassification: skipsNativePassForModelOnly(
+              normalized.skipClassification === true,
+              autoRepairScenes,
+            ),
+            onNativeProcessingStage: (stage) => {
+              if (options?.suppressProgress) return;
 
-            if (stage === 'analyzing') {
-              setImportProgress({
-                active: true,
-                type: 'scene',
-                label: importLabelFileType(pluginImport.fileType.displayName, _),
-                detail: normalizedPayloads.length > 1
-                  ? importDetailInspectingMesh(processedItems.length + 1, normalizedPayloads.length, _)
-                  : importDetailInspectingFile(file.name, _),
-                progress: null,
-              });
-              return;
-            }
+              if (stage === 'repairing') {
+                setImportProgress({
+                  active: true,
+                  type: 'scene',
+                  label: importLabelFileType(pluginImport.fileType.displayName, _),
+                  detail: normalizedPayloads.length > 1
+                    ? importDetailAutoRepairingMesh(processedItems.length + 1, normalizedPayloads.length, _)
+                    : importDetailAutoRepairingFile(file.name, _),
+                  progress: null,
+                });
+                return;
+              }
 
-            if (stage === 'classifying') {
-              setImportProgress({
-                active: true,
-                type: 'scene',
-                label: importLabelFileType(pluginImport.fileType.displayName, _),
-                detail: normalizedPayloads.length > 1
-                  ? importDetailClassifyingMesh(processedItems.length + 1, normalizedPayloads.length, _)
-                  : importDetailClassifyingFile(file.name, _),
-                progress: null,
-              });
-            }
-          },
-        });
-        processedItems.push({ normalized, processed });
-      }
+              if (stage === 'analyzing') {
+                setImportProgress({
+                  active: true,
+                  type: 'scene',
+                  label: importLabelFileType(pluginImport.fileType.displayName, _),
+                  detail: normalizedPayloads.length > 1
+                    ? importDetailInspectingMesh(processedItems.length + 1, normalizedPayloads.length, _)
+                    : importDetailInspectingFile(file.name, _),
+                  progress: null,
+                });
+                return;
+              }
 
-      // Determine if any model is off-plate (check all)
-      const sourceCandidates = processedItems.map(({ normalized, processed }) => ({
-        geometry: processed,
-        transform: {
-          position: normalized.transform.position.clone(),
-          rotation: normalized.transform.rotation.clone(),
-          scale: normalized.transform.scale.clone(),
-        },
-      }));
-      const offPlateCount = sourceCandidates.filter(
-        (c) => !isModelFootprintInsidePlate({ geometry: c.geometry, transform: c.transform }),
-      ).length;
+              if (stage === 'classifying') {
+                setImportProgress({
+                  active: true,
+                  type: 'scene',
+                  label: importLabelFileType(pluginImport.fileType.displayName, _),
+                  detail: normalizedPayloads.length > 1
+                    ? importDetailClassifyingMesh(processedItems.length + 1, normalizedPayloads.length, _)
+                    : importDetailClassifyingFile(file.name, _),
+                  progress: null,
+                });
+              }
+            },
+          });
+          processedItems.push({ normalized, processed });
+        }
 
-      // Preserve authored placement by default. Only auto-arrange if models are off-plate
-      // and the user explicitly chooses auto-arrange in the prompt.
-      let shouldAutoArrangeOnImport = false;
-      if (offPlateCount > 0 && !options?.suppressPlacementPrompt) {
-        const choice = await requestSceneImportPlacementChoice({
-          source: extension.slice(1).toUpperCase(),
-          fileName: file.name,
-          modelCount: normalizedPayloads.length,
-          offPlateModelCount: offPlateCount,
-        });
-        shouldAutoArrangeOnImport = choice === 'auto_arrange';
-      }
-
-      // Arranging waits for the supports: the raft is what stands on the plate, and
-      // only the store can measure it. Models land where the file put them first.
-
-      const newModels: LoadedModel[] = [];
-      const supportEntries: Array<{
-        model: LoadedModel;
-        sourceTransform: ModelTransform;
-        supportData: PluginSceneImportPayload['supportData'];
-      }> = [];
-
-      for (let i = 0; i < processedItems.length; i++) {
-        const { normalized, processed } = processedItems[i];
-        const { transform: importedTransform, modelId: importedModelId, supportData, meshModifiers } = normalized;
-
-        const originalPosition = importedTransform.position.clone();
-        const sourceTransform: ModelTransform = {
-          position: originalPosition.clone(),
-          rotation: importedTransform.rotation.clone(),
-          scale: importedTransform.scale.clone(),
-        };
-
-        // The file's own place, which the arrange pass revises once supports exist.
-        const finalPosition = originalPosition.clone();
-        const finalRotation = importedTransform.rotation;
-
-        // Prefer the source file's own object name; fall back to the imported
-        // filename (with an index when the container held several models).
-        const modelName = normalized.objName
-          ? sanitizeImportedModelDisplayName(normalized.objName)
-          : processedItems.length === 1
-            ? sanitizeImportedModelDisplayName(file.name)
-            : `${sanitizeImportedModelDisplayName(file.name)} (${i + 1})`;
-
-        const model: LoadedModel = {
-          id: importedModelId || uuidv4(),
-          name: modelName,
-          fileUrl: '',
-          fileSizeBytes: file.size,
+        // Determine if any model is off-plate (check all)
+        const sourceCandidates = processedItems.map(({ normalized, processed }) => ({
           geometry: processed,
           transform: {
-            position: finalPosition,
-            rotation: finalRotation,
-            scale: importedTransform.scale,
+            position: normalized.transform.position.clone(),
+            rotation: normalized.transform.rotation.clone(),
+            scale: normalized.transform.scale.clone(),
           },
-          visible: true,
-          color: '#a3a3a3',
-          polygonCount: countTriangles(processed.geometry),
-          meshModifiers: undefined,
-        };
+        }));
+        const offPlateCount = sourceCandidates.filter(
+          (c) => !isModelFootprintInsidePlate({ geometry: c.geometry, transform: c.transform }),
+        ).length;
 
-        // Store meshModifiers externally so model objects stay lightweight
-        if (meshModifiers) {
-          const stored = cloneMeshModifiersShallow(meshModifiers);
-          const hollowing = (stored as ModelMeshModifiers).hollowing;
-          if (hollowing?.enabled && hollowing.cavityPositionsBase64) {
-            // `bakedIntoGeometry` is what the hollowing panel trusts when it
-            // decides whether the cavity is already in the mesh, so it has to
-            // follow the choice rather than the file's own claim. Declining
-            // keeps the cavity for Interior View and leaves the panel able to
-            // bake it later.
-            // The shell snapshot rides along when the cavity was baked, so
-            // Remove Hollowing has a solid to put back.
-            const shellSnapshot = shellSnapshotByPayload.get(normalized);
-            (stored as ModelMeshModifiers).hollowing = {
-              ...hollowing,
-              bakedIntoGeometry: bakeImportedHollowing,
-              ...(shellSnapshot ?? {}),
-            };
-          }
-          storeModelMeshModifiers(model.id, stored);
+        // Preserve authored placement by default. Only auto-arrange if models are off-plate
+        // and the user explicitly chooses auto-arrange in the prompt.
+        let shouldAutoArrangeOnImport = false;
+        if (offPlateCount > 0 && !options?.suppressPlacementPrompt) {
+          const choice = await requestSceneImportPlacementChoice({
+            source: extension.slice(1).toUpperCase(),
+            fileName: file.name,
+            modelCount: normalizedPayloads.length,
+            offPlateModelCount: offPlateCount,
+          });
+          shouldAutoArrangeOnImport = choice === 'auto_arrange';
         }
 
-        newModels.push(model);
-        supportEntries.push({ model, sourceTransform, supportData });
-      }
+        // Arranging waits for the supports: the raft is what stands on the plate, and
+        // only the store can measure it. Models land where the file put them first.
 
-      if (newModels.length === 0) {
-        throw new Error(`Plugin "${pluginImport.pluginId}" returned no importable models.`);
-      }
+        const newModels: LoadedModel[] = [];
+        const supportEntries: Array<{
+          model: LoadedModel;
+          sourceTransform: ModelTransform;
+          supportData: PluginSceneImportPayload['supportData'];
+        }> = [];
 
-      setModels((prev) => [...prev, ...newModels]);
-      setActiveModelId(newModels[newModels.length - 1].id);
-      setSelectedModelIds(newModels.map((m) => m.id));
+        for (let i = 0; i < processedItems.length; i++) {
+          const { normalized, processed } = processedItems[i];
+          const { transform: importedTransform, modelId: importedModelId, supportData, meshModifiers } = normalized;
 
-      // A rough arrangement on the raft each model stands on, now that the supports
-      // are in the store. The Arrange tool is where a careful nesting is asked for.
-      const arrangeImportedModels = () => {
-        if (!shouldAutoArrangeOnImport || newModels.length === 0) return;
-
-        const bedWidth = view3dSettings.widthMm;
-        const bedDepth = view3dSettings.depthMm;
-        const { minX: localMinX, minY: localMinY } = plateLocalRect(view3dSettings);
-
-        /** A model's footprint at a given Z, grown to the raft standing beside it. */
-        const footprintAt = (model: LoadedModel, rotationZ: number, reach: { x: number; y: number }) => {
-          const mesh = computeProjectedFootprintSize(
-            model.geometry,
-            new THREE.Euler(
-              model.transform.rotation.x,
-              model.transform.rotation.y,
-              rotationZ,
-              model.transform.rotation.order,
-            ),
-            model.transform.scale,
-          );
-          return { width: mesh.width + reach.x, depth: mesh.depth + reach.y };
-        };
-
-        const byId = new Map(newModels.map((model) => [model.id, model]));
-        const turnOf = new Map<string, number>();
-        const items: ShelfItem[] = newModels.map((model) => {
-          const currentZ = model.transform.rotation.z;
-          const turnedZ = currentZ + (Math.PI / 2);
-          turnOf.set(model.id, turnedZ);
-          const bare = computeProjectedFootprintSize(
-            model.geometry, model.transform.rotation, model.transform.scale,
-          );
-          // Only what stands on the plate: the raft around the model's roots.
-          const raft = estimateRaftBoundsForModel(model.id);
-          const reach = raft
-            ? {
-              x: Math.max(0, (raft.maxX - raft.minX) - bare.width),
-              y: Math.max(0, (raft.maxY - raft.minY) - bare.depth),
-            }
-            : { x: 0, y: 0 };
-          const asIs = footprintAt(model, currentZ, reach);
-          // The raft turns with the model, so its reach swaps axes with it.
-          const turned = footprintAt(model, turnedZ, { x: reach.y, y: reach.x });
-          return {
-            id: model.id,
-            width: asIs.width,
-            depth: asIs.depth,
-            turnedWidth: turned.width,
-            turnedDepth: turned.depth,
+          const originalPosition = importedTransform.position.clone();
+          const sourceTransform: ModelTransform = {
+            position: originalPosition.clone(),
+            rotation: importedTransform.rotation.clone(),
+            scale: importedTransform.scale.clone(),
           };
-        });
 
-        // Planned in each bed's own millimetres, then resolved: dynamic ordering
-        // re-lays the grid as beds are added, so an offset read early goes stale.
-        type PlannedSeat = { id: string; x: number; y: number; rotationZ: number };
-        const plateLocalSeats: PlannedSeat[][] = [];
+          // The file's own place, which the arrange pass revises once supports exist.
+          const finalPosition = originalPosition.clone();
+          const finalRotation = importedTransform.rotation;
 
-        const planSeats = (placements: ReturnType<typeof shelfPack>['placed']): PlannedSeat[] => (
-          placements.flatMap((placement) => {
-            const model = byId.get(placement.id);
-            if (!model) return [];
-            return [{
-              id: placement.id,
-              x: placement.x,
-              y: placement.y,
-              rotationZ: placement.turned
-                ? turnOf.get(placement.id) ?? model.transform.rotation.z
-                : model.transform.rotation.z,
-            }];
-          })
-        );
+          // Prefer the source file's own object name; fall back to the imported
+          // filename (with an index when the container held several models).
+          const modelName = normalized.objName
+            ? sanitizeImportedModelDisplayName(normalized.objName)
+            : processedItems.length === 1
+              ? sanitizeImportedModelDisplayName(file.name)
+              : `${sanitizeImportedModelDisplayName(file.name)} (${i + 1})`;
 
-        const packBed = (pending: ShelfItem[]) => shelfPack(pending, {
-          widthMm: bedWidth,
-          depthMm: bedDepth,
-          spacingMm: IMPORT_ARRANGE_SPACING_MM,
-        });
+          const model: LoadedModel = {
+            id: importedModelId || uuidv4(),
+            name: modelName,
+            fileUrl: '',
+            fileSizeBytes: file.size,
+            geometry: processed,
+            transform: {
+              position: finalPosition,
+              rotation: finalRotation,
+              scale: importedTransform.scale,
+            },
+            visible: true,
+            color: '#a3a3a3',
+            polygonCount: countTriangles(processed.geometry),
+            meshModifiers: undefined,
+          };
 
-        let pending = items;
-        const existingPlateIds = platesRef.current.map((plate) => plate.id);
-
-        // The beds the scene already has, in order.
-        for (let i = 0; i < existingPlateIds.length; i += 1) {
-          if (pending.length === 0) break;
-          const result = packBed(pending);
-          plateLocalSeats[i] = planSeats(result.placed);
-          const spilled = new Set(result.spilled);
-          pending = pending.filter((entry) => spilled.has(entry.id));
-        }
-
-        // Then a bed for each spill, still only planned.
-        const newBedSeats: PlannedSeat[][] = [];
-        let guard = 0;
-        while (pending.length > 0 && guard < MAX_IMPORT_PLATES) {
-          guard += 1;
-          const result = packBed(pending);
-
-          if (result.placed.length === 0) {
-            // Too large for an empty bed in either pose: it takes one on its own,
-            // overhanging, rather than being left adrift off every plate.
-            const stranded = pending[0];
-            const model = byId.get(stranded.id);
-            newBedSeats.push([{
-              id: stranded.id,
-              x: bedWidth * 0.5,
-              y: bedDepth * 0.5,
-              rotationZ: model?.transform.rotation.z ?? 0,
-            }]);
-            pending = pending.slice(1);
-            continue;
-          }
-
-          newBedSeats.push(planSeats(result.placed));
-          const spilled = new Set(result.spilled);
-          pending = pending.filter((entry) => spilled.has(entry.id));
-        }
-
-        // Every bed at once, so the grid settles before any offset is read.
-        const reserved = newBedSeats.length > 0
-          ? addPlatesRef.current(newBedSeats.length)
-          : null;
-
-        const seats = new Map<string, { x: number; y: number; rotationZ: number }>();
-        const placeOnBed = (plateId: string, planned: PlannedSeat[] | undefined) => {
-          if (!planned || planned.length === 0) return;
-          const { dxMm, dyMm } = reserved
-            ? reserved.offsets.get(plateId) ?? plateOffsetForRef.current(plateId)
-            : plateOffsetForRef.current(plateId);
-          for (const seat of planned) {
-            seats.set(seat.id, {
-              x: localMinX + dxMm + seat.x,
-              y: localMinY + dyMm + seat.y,
-              rotationZ: seat.rotationZ,
-            });
-          }
-        };
-
-        existingPlateIds.forEach((plateId, index) => placeOnBed(plateId, plateLocalSeats[index]));
-        newBedSeats.forEach((planned, index) => {
-          const plate = reserved?.added[index];
-          if (plate) placeOnBed(plate.id, planned);
-        });
-
-        const moved = newModels.filter((model) => {
-          const seat = seats.get(model.id);
-          if (!seat) return false;
-          return Math.abs(seat.x - model.transform.position.x) > 1e-6
-            || Math.abs(seat.y - model.transform.position.y) > 1e-6
-            || Math.abs(seat.rotationZ - model.transform.rotation.z) > 1e-6;
-        });
-        if (moved.length === 0) return;
-
-        const afterById = new Map(moved.map((model) => {
-          const seat = seats.get(model.id)!;
-          return [model.id, {
-            position: new THREE.Vector3(seat.x, seat.y, model.transform.position.z),
-            rotation: new THREE.Euler(
-              model.transform.rotation.x,
-              model.transform.rotation.y,
-              seat.rotationZ,
-              model.transform.rotation.order,
-            ),
-            scale: model.transform.scale.clone(),
-          }];
-        }));
-
-        setModels((prev) => prev.map((model) => {
-          const after = afterById.get(model.id);
-          return after ? { ...model, transform: after } : model;
-        }));
-
-        // The supports follow their model, in one notify for the whole run.
-        beginSupportStateBatch();
-        try {
-          for (const model of moved) {
-            const after = afterById.get(model.id);
-            if (!after) continue;
-            const before = {
-              position: model.transform.position.clone(),
-              rotation: model.transform.rotation.clone(),
-              scale: model.transform.scale.clone(),
-            };
-            // The model object is the one `newModels` holds, so later reads see the move.
-            model.transform = after;
-            transformSupportsForModel(model.id, before, after);
-          }
-        } finally {
-          endSupportStateBatch();
-        }
-      };
-
-      // Load supports for all models in a single animation frame batch
-      const pendingSupports = supportEntries.filter((e) => !!e.supportData);
-      if (pendingSupports.length > 0) {
-        const applySupports = () => {
-          beginSupportStateBatch();
-          try {
-            for (const { model, sourceTransform, supportData } of pendingSupports) {
-              applyImportDefaultsToRaftState();
-              // Bind these supports to THIS model. The plugin already stamps a
-              // modelId, but nothing verified it matched the id the host assigned
-              // the model -- so pass the host id and let the store reconcile.
-              mergeFromImportFormat(supportData!, model.id);
-              if (!transformsEqual(sourceTransform, model.transform)) {
-                transformSupportsForModel(model.id, sourceTransform, model.transform);
-              }
+          // Store meshModifiers externally so model objects stay lightweight
+          if (meshModifiers) {
+            const stored = cloneMeshModifiersShallow(meshModifiers);
+            const hollowing = (stored as ModelMeshModifiers).hollowing;
+            if (hollowing?.enabled && hollowing.cavityPositionsBase64) {
+              // `bakedIntoGeometry` is what the hollowing panel trusts when it
+              // decides whether the cavity is already in the mesh, so it has to
+              // follow the choice rather than the file's own claim. Declining
+              // keeps the cavity for Interior View and leaves the panel able to
+              // bake it later.
+              // The shell snapshot rides along when the cavity was baked, so
+              // Remove Hollowing has a solid to put back.
+              const shellSnapshot = shellSnapshotByPayload.get(normalized);
+              (stored as ModelMeshModifiers).hollowing = {
+                ...hollowing,
+                bakedIntoGeometry: bakeImportedHollowing,
+                ...(shellSnapshot ?? {}),
+              };
             }
-          } finally {
-            endSupportStateBatch();
+            storeModelMeshModifiers(model.id, stored);
           }
-          arrangeImportedModels();
-        };
-        if (typeof window !== 'undefined') {
-          requestAnimationFrame(applySupports);
-        } else {
-          applySupports();
+
+          newModels.push(model);
+          supportEntries.push({ model, sourceTransform, supportData });
         }
-      } else {
-        arrangeImportedModels();
-      }
 
-      const totalSupportCount = supportEntries.reduce(
-        (sum, e) => sum + countSupportEntries(e.supportData ?? null),
-        0,
-      );
-      if (!options?.suppressReport) {
-        emitSceneImportReport(
-          reportImportedScene(extension.slice(1).toUpperCase(), newModels.length, totalSupportCount, 0, _),
-          'success',
+        if (newModels.length === 0) {
+          throw new Error(`Plugin "${pluginImport.pluginId}" returned no importable models.`);
+        }
+
+        setModels((prev) => [...prev, ...newModels]);
+        setActiveModelId(newModels[newModels.length - 1].id);
+        setSelectedModelIds(newModels.map((m) => m.id));
+
+        // A rough arrangement on the raft each model stands on, now that the supports
+        // are in the store. The Arrange tool is where a careful nesting is asked for.
+        const arrangeImportedModels = () => {
+          if (!shouldAutoArrangeOnImport || newModels.length === 0) return;
+
+          const bedWidth = view3dSettings.widthMm;
+          const bedDepth = view3dSettings.depthMm;
+          const { minX: localMinX, minY: localMinY } = plateLocalRect(view3dSettings);
+
+          /** A model's footprint at a given Z, grown to the raft standing beside it. */
+          const footprintAt = (model: LoadedModel, rotationZ: number, reach: { x: number; y: number }) => {
+            const mesh = computeProjectedFootprintSize(
+              model.geometry,
+              new THREE.Euler(
+                model.transform.rotation.x,
+                model.transform.rotation.y,
+                rotationZ,
+                model.transform.rotation.order,
+              ),
+              model.transform.scale,
+            );
+            return { width: mesh.width + reach.x, depth: mesh.depth + reach.y };
+          };
+
+          const byId = new Map(newModels.map((model) => [model.id, model]));
+          const turnOf = new Map<string, number>();
+          const items: ShelfItem[] = newModels.map((model) => {
+            const currentZ = model.transform.rotation.z;
+            const turnedZ = currentZ + (Math.PI / 2);
+            turnOf.set(model.id, turnedZ);
+            const bare = computeProjectedFootprintSize(
+              model.geometry, model.transform.rotation, model.transform.scale,
+            );
+            // Only what stands on the plate: the raft around the model's roots.
+            const raft = estimateRaftBoundsForModel(model.id);
+            const reach = raft
+              ? {
+                x: Math.max(0, (raft.maxX - raft.minX) - bare.width),
+                y: Math.max(0, (raft.maxY - raft.minY) - bare.depth),
+              }
+              : { x: 0, y: 0 };
+            const asIs = footprintAt(model, currentZ, reach);
+            // The raft turns with the model, so its reach swaps axes with it.
+            const turned = footprintAt(model, turnedZ, { x: reach.y, y: reach.x });
+            return {
+              id: model.id,
+              width: asIs.width,
+              depth: asIs.depth,
+              turnedWidth: turned.width,
+              turnedDepth: turned.depth,
+            };
+          });
+
+          // Planned in each bed's own millimetres, then resolved: dynamic ordering
+          // re-lays the grid as beds are added, so an offset read early goes stale.
+          type PlannedSeat = { id: string; x: number; y: number; rotationZ: number };
+          const plateLocalSeats: PlannedSeat[][] = [];
+
+          const planSeats = (placements: ReturnType<typeof shelfPack>['placed']): PlannedSeat[] => (
+            placements.flatMap((placement) => {
+              const model = byId.get(placement.id);
+              if (!model) return [];
+              return [{
+                id: placement.id,
+                x: placement.x,
+                y: placement.y,
+                rotationZ: placement.turned
+                  ? turnOf.get(placement.id) ?? model.transform.rotation.z
+                  : model.transform.rotation.z,
+              }];
+            })
+          );
+
+          const packBed = (pending: ShelfItem[]) => shelfPack(pending, {
+            widthMm: bedWidth,
+            depthMm: bedDepth,
+            spacingMm: IMPORT_ARRANGE_SPACING_MM,
+          });
+
+          let pending = items;
+          const existingPlateIds = platesRef.current.map((plate) => plate.id);
+
+          // The beds the scene already has, in order.
+          for (let i = 0; i < existingPlateIds.length; i += 1) {
+            if (pending.length === 0) break;
+            const result = packBed(pending);
+            plateLocalSeats[i] = planSeats(result.placed);
+            const spilled = new Set(result.spilled);
+            pending = pending.filter((entry) => spilled.has(entry.id));
+          }
+
+          // Then a bed for each spill, still only planned.
+          const newBedSeats: PlannedSeat[][] = [];
+          let guard = 0;
+          while (pending.length > 0 && guard < MAX_IMPORT_PLATES) {
+            guard += 1;
+            const result = packBed(pending);
+
+            if (result.placed.length === 0) {
+              // Too large for an empty bed in either pose: it takes one on its own,
+              // overhanging, rather than being left adrift off every plate.
+              const stranded = pending[0];
+              const model = byId.get(stranded.id);
+              newBedSeats.push([{
+                id: stranded.id,
+                x: bedWidth * 0.5,
+                y: bedDepth * 0.5,
+                rotationZ: model?.transform.rotation.z ?? 0,
+              }]);
+              pending = pending.slice(1);
+              continue;
+            }
+
+            newBedSeats.push(planSeats(result.placed));
+            const spilled = new Set(result.spilled);
+            pending = pending.filter((entry) => spilled.has(entry.id));
+          }
+
+          // Every bed at once, so the grid settles before any offset is read.
+          const reserved = newBedSeats.length > 0
+            ? addPlatesRef.current(newBedSeats.length)
+            : null;
+
+          const seats = new Map<string, { x: number; y: number; rotationZ: number }>();
+          const placeOnBed = (plateId: string, planned: PlannedSeat[] | undefined) => {
+            if (!planned || planned.length === 0) return;
+            const { dxMm, dyMm } = reserved
+              ? reserved.offsets.get(plateId) ?? plateOffsetForRef.current(plateId)
+              : plateOffsetForRef.current(plateId);
+            for (const seat of planned) {
+              seats.set(seat.id, {
+                x: localMinX + dxMm + seat.x,
+                y: localMinY + dyMm + seat.y,
+                rotationZ: seat.rotationZ,
+              });
+            }
+          };
+
+          existingPlateIds.forEach((plateId, index) => placeOnBed(plateId, plateLocalSeats[index]));
+          newBedSeats.forEach((planned, index) => {
+            const plate = reserved?.added[index];
+            if (plate) placeOnBed(plate.id, planned);
+          });
+
+          const moved = newModels.filter((model) => {
+            const seat = seats.get(model.id);
+            if (!seat) return false;
+            return Math.abs(seat.x - model.transform.position.x) > 1e-6
+              || Math.abs(seat.y - model.transform.position.y) > 1e-6
+              || Math.abs(seat.rotationZ - model.transform.rotation.z) > 1e-6;
+          });
+          if (moved.length === 0) return;
+
+          const afterById = new Map(moved.map((model) => {
+            const seat = seats.get(model.id)!;
+            return [model.id, {
+              position: new THREE.Vector3(seat.x, seat.y, model.transform.position.z),
+              rotation: new THREE.Euler(
+                model.transform.rotation.x,
+                model.transform.rotation.y,
+                seat.rotationZ,
+                model.transform.rotation.order,
+              ),
+              scale: model.transform.scale.clone(),
+            }];
+          }));
+
+          setModels((prev) => prev.map((model) => {
+            const after = afterById.get(model.id);
+            return after ? { ...model, transform: after } : model;
+          }));
+
+          // The supports follow their model, in one notify for the whole run.
+          beginSupportStateBatch();
+          return withCleanup(() => {
+            for (const model of moved) {
+              const after = afterById.get(model.id);
+              if (!after) continue;
+              const before = {
+                position: model.transform.position.clone(),
+                rotation: model.transform.rotation.clone(),
+                scale: model.transform.scale.clone(),
+              };
+              // The model object is the one `newModels` holds, so later reads see the move.
+              model.transform = after;
+              transformSupportsForModel(model.id, before, after);
+            }
+          }, () => {
+            endSupportStateBatch();
+          });
+        };
+
+        // Load supports for all models in a single animation frame batch
+        const pendingSupports = supportEntries.filter((e) => !!e.supportData);
+        if (pendingSupports.length > 0) {
+          const applySupports = () => {
+            beginSupportStateBatch();
+            withCleanup(() => {
+              for (const { model, sourceTransform, supportData } of pendingSupports) {
+                applyImportDefaultsToRaftState();
+                // Bind these supports to THIS model. The plugin already stamps a
+                // modelId, but nothing verified it matched the id the host assigned
+                // the model -- so pass the host id and let the store reconcile.
+                mergeFromImportFormat(supportData!, model.id);
+                if (!transformsEqual(sourceTransform, model.transform)) {
+                  transformSupportsForModel(model.id, sourceTransform, model.transform);
+                }
+              }
+            }, () => {
+              endSupportStateBatch();
+            });
+            arrangeImportedModels();
+          };
+          if (typeof window !== 'undefined') {
+            requestAnimationFrame(applySupports);
+          } else {
+            applySupports();
+          }
+        } else {
+          arrangeImportedModels();
+        }
+
+        const totalSupportCount = supportEntries.reduce(
+          (sum, e) => sum + countSupportEntries(e.supportData ?? null),
+          0,
         );
-      }
+        if (!options?.suppressReport) {
+          emitSceneImportReport(
+            reportImportedScene(extension.slice(1).toUpperCase(), newModels.length, totalSupportCount, 0, _),
+            'success',
+          );
+        }
 
-      console.log(`[SceneCollection] ${extension} import successful: ${newModels.map((m) => m.name).join(', ')}`);
-      return true;
-    } catch (err) {
+        console.log(`[SceneCollection] ${extension} import successful: ${newModels.map((m) => m.name).join(', ')}`);
+        return true;
+      });
+      if (outcome.ok) return outcome.value;
+      const err = outcome.error;
       console.error('[SceneCollection] Failed to process plugin scene geometry:', err);
       const msg = err instanceof Error ? err.message : String(err);
       if (!options?.suppressReport) {
@@ -7005,7 +7114,7 @@ export function useSceneCollectionManager(options?: {
         window.alert(alertSceneImportFailed(msg, _));
       }
       return false;
-    } finally {
+    }, () => {
       if (!options?.suppressProgress) {
         setImportProgress({
           active: false,
@@ -7015,8 +7124,8 @@ export function useSceneCollectionManager(options?: {
           progress: null,
         });
       }
-    }
-  }, [_, emitSceneImportReport, findFreeSpotCentersForModels, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestMissingPrinterPluginChoice, requestSceneImportHollowingChoice, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm, waitForUiYield]);
+    });
+  }, [_, emitSceneImportReport, findFreeSpotCentersForModels, getSceneExtension, isModelFootprintInsidePlate, processGeometry, requestMissingPrinterPluginChoice, requestSceneImportHollowingChoice, requestSceneImportPlacementChoice, scenePluginImportHandlersByExtension, setActiveModelId, setModels, setSelectedModelIds, shouldAutoRepairSceneImports, trackRecentOpenedFiles, view3dSettings, waitForUiYield]);
 
   const handleImportVoxlFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     if (!options?.suppressRecentTracking) {
@@ -7035,651 +7144,658 @@ export function useSceneCollectionManager(options?: {
 
     await waitForUiYield();
 
-    try {
-      const autoRepairScenes = shouldAutoRepairSceneImports(options);
-      // Peek at the first 6 bytes to detect the container. The binary container
-      // starts with "VOXL" magic (0x56 0x4F 0x58 0x4C) + uint16 version >= 2;
-      // anything else is either an obsolete V1 scene or not a VOXL file at all.
-      const headerBytes = new Uint8Array(await file.slice(0, 6).arrayBuffer());
-      const isV2 = isVoxlBinaryV2(headerBytes);
+    return withCleanupAsync(async () => {
+      const outcome = await attemptAsync(async () => {
+        const autoRepairScenes = shouldAutoRepairSceneImports(options);
+        // Peek at the first 6 bytes to detect the container. The binary container
+        // starts with "VOXL" magic (0x56 0x4F 0x58 0x4C) + uint16 version >= 2;
+        // anything else is either an obsolete V1 scene or not a VOXL file at all.
+        const headerBytes = new Uint8Array(await file.slice(0, 6).arrayBuffer());
+        const isV2 = isVoxlBinaryV2(headerBytes);
 
-      if (!isV2) {
-        const obsolete = detectObsoleteVoxlVersion(headerBytes);
-        if (obsolete) {
-          throw new VoxlObsoleteVersionError(obsolete);
-        }
-        throw new Error('Not a VOXL file: the VOXL binary header is missing.');
-      }
-
-      const importStarted = performance.now();
-      let committedAt = 0;
-      // The file's own path, when it has one: that is what lets the native loader
-      // read a mesh chunk by range instead of receiving its bytes. Same expression
-      // the sidecar resolution below uses.
-      const voxlPath = (file as File & { path?: string; filePath?: string }).path
-        || (file as File & { filePath?: string }).filePath
-        || options?.sourcePath
-        || undefined;
-      // With a path, the 13 mesh chunks (677 MB, ~2 s of inflate before any model
-      // work starts) stay where they are and the loader inflates each one itself.
-      // Without one — a zip entry, a synthesized file — nothing changes.
-      const parsed = await parseVoxlBinaryV2(new Uint8Array(await file.arrayBuffer()), {
-        deferMeshChunks: Boolean(voxlPath),
-      });
-      const parsedAt = performance.now();
-      const document: VoxlDocumentV1 = parsed.document;
-      const sceneMaterials: unknown[] = Array.isArray(document.materials) ? document.materials : [];
-
-      // Check the printer's plugin before inflating a single mesh: a scene owned by
-      // an uninstalled plugin can only keep geometry, and the answer decides whether
-      // this load is worth starting at all.
-      let skipPrinterMetadata = false;
-      const recordedPrinterEarly = document.meta?.printer;
-      if (recordedPrinterEarly) {
-        const installedEarly = findPrinterProfileForBundle(recordedPrinterEarly, getProfileStoreSnapshot());
-        const missing = installedEarly?.missingPlugin;
-        if (missing) {
-          const recordedName = typeof recordedPrinterEarly.printer.name === 'string'
-            ? recordedPrinterEarly.printer.name
-            : undefined;
-          const choice = await requestMissingPrinterPluginChoice({
-            pluginName: missing.name,
-            ...(recordedName ? { printerName: recordedName } : {}),
-          });
-          if (choice === 'manage') return false;
-          skipPrinterMetadata = true;
-        }
-      }
-      const bodyChunks = parsed.bodyChunks;
-      const resolvedMeshBytes: Map<string, Uint8Array> = parsed.meshBytes;
-      const resolvedOriginalMeshBytes = parsed.originalMeshBytes;
-      const originalMeshChunks = parsed.originalMeshChunks;
-      // sourceVersion is 3.1 only when the file actually carries modifier
-      // chunks; anything lower is treated as inline for format preservation.
-      lastLoadedVoxlFormatChunkedRef.current = parsed.sourceVersion >= 3.1;
-
-      // The file's plates, read once: the models below are stamped with the
-      // plate they stand on, and the scene adopts the list after they land.
-      const scenePlates = readScenePlates(document.scene);
-      const importedPlateIds = new Set(scenePlates.plates.map((plate) => plate.id));
-      const importedDefaultPlateId = scenePlates.plates[0]?.id;
-      /** A model's plate, when the file names one of its own; otherwise its first. */
-      const plateIdForImport = (raw?: string): string | undefined =>
-        raw && importedPlateIds.has(raw) ? raw : importedDefaultPlateId;
-
-      const existingIds = new Set(modelsRef.current.map((model) => model.id));
-      const idMap = new Map<string, string>();
-      const importedModels: LoadedModel[] = [];
-      let skippedModels = 0;
-
-      // Identical-geometry dedup: a scene with N copies of one mesh (e.g. a
-      // Fill-Plate bed) stores N identical payloads, and decode + SHA-256 +
-      // native repair per copy dominates load time. Build each UNIQUE mesh
-      // once (keyed by its content SHA) and share the result for duplicates
-      // via the existing cloneGeometryWithBounds({ shared: true }) — the same
-      // path duplicate/paste already use.
-      const builtGeometryByHash = new Map<string, GeometryWithBounds>();
-      let dedupHits = 0;
-
-      // Build every unique mesh, a couple at a time, before the placement loop.
-      // Placement stays in order below because it depends on what is already on the
-      // plate; building does not. Each build is a native round trip with serial
-      // phases (parse, classify) around a parallel one, so two in flight let
-      // one model's serial phase run during another's. The hash is computed here once
-      // per model and reused by the loop, so neither the content hash nor the
-      // integrity check is paid twice.
-      //
-      // The `classification` a `MODL` entry carries is **not** used. It is a boundary
-      // into the soup the file stores, and a file written before the mesh chunk's
-      // signature could see a reordered soup pairs it with a different order: the
-      // boundary then cuts a slab out of the model and paints it as support. A count
-      // check cannot tell those apart, so the loader classifies the payload it just
-      // built and the sections come from that answer. Cost: one classify per model on
-      // load — the same pass a fresh STL import pays, done natively inside the loader
-      // rather than as a second round trip.
-      const buildOptionsFor = (model: (typeof document.models)[number]): ProcessGeometryOptions => ({
-        nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
-        assumeSupportGeometry: model.isSupportGeometry,
-        skipClassification: model.isSupportGeometry,
-      });
-      const hashByModelId = new Map<string, string>();
-      const uniqueBuilds = new Map<
-        string,
-        {
-          bytes?: Uint8Array;
-          range?: VoxlMeshRange;
-          name: string;
-          model: (typeof document.models)[number];
-        }
-      >();
-      const meshRanges = parsed.meshRanges;
-      for (const [index, model] of document.models.entries()) {
-        const meshRef = model.mesh;
-        const bytes = resolvedMeshBytes.get(model.id);
-        const range = meshRanges?.get(model.id);
-        if (!meshRef || meshRef.mode !== 'embedded-chunk' || (!bytes && !range)) continue;
-        const declaredSha = typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0
-          ? meshRef.sha256.trim().toLowerCase()
-          : undefined;
-        // A deferred chunk has no bytes to hash. Its identity inside the file is its
-        // chunk anyway — a V3 duplicate points at the owner's chunk — so the chunk
-        // index is the dedup key, and it is stable for the whole parse.
-        const contentHash = declaredSha
-          ?? (range
-            ? `chunk:${typeof meshRef.chunkIndex === 'number' ? meshRef.chunkIndex : index}`
-            : await sha256Hex(bytes!));
-        hashByModelId.set(model.id, contentHash);
-        if (builtGeometryByHash.has(contentHash) || uniqueBuilds.has(contentHash)) continue;
-        uniqueBuilds.set(contentHash, {
-          ...(bytes ? { bytes } : { range: range! }),
-          name: meshRef.fileName?.trim() || `${model.name || 'model'}.stl`,
-          model,
-        });
-      }
-      if (uniqueBuilds.size > 0) {
-        let finished = 0;
-        const buildCount = uniqueBuilds.size;
-        // Every mesh's occlusion bake is left in flight rather than awaited per
-        // model: it is the GPU's work (0.4-1.2 s a model on the scene this was
-        // measured against) while the remaining meshes are still being parsed
-        // and classified, and running them one model at a time left the
-        // GPU idle for most of the load. They are all awaited below, before any
-        // model is placed, so each one's first frame still carries its occlusion
-        // — the pop-in that baking after the fact produced.
-        const pendingOcclusionBakes: Array<Promise<boolean>> = [];
-        await runWithConcurrency([...uniqueBuilds], VOXL_BUILD_CONCURRENCY, async ([hash, spec]) => {
-          try {
-            const options = {
-              ...buildOptionsFor(spec.model),
-              _deferOcclusionBake: (bake: Promise<boolean>) => pendingOcclusionBakes.push(bake),
-            };
-            const built = spec.range && voxlPath
-              ? await loadMeshGeometryFromRange(voxlPath, spec.range, spec.name, options)
-              : await loadMeshGeometry(spec.bytes!, spec.name, options);
-            builtGeometryByHash.set(hash, built);
-          } catch (error) {
-            // The loop below reports the model as skipped; one mesh that will not
-            // build is not worth failing the whole scene over.
-            console.error(`[SceneCollection] Failed building VOXL mesh "${spec.model.name}"`, error);
+        if (!isV2) {
+          const obsolete = detectObsoleteVoxlVersion(headerBytes);
+          if (obsolete) {
+            throw new VoxlObsoleteVersionError(obsolete);
           }
-          finished += 1;
+          throw new Error('Not a VOXL file: the VOXL binary header is missing.');
+        }
+
+        const importStarted = performance.now();
+        let committedAt = 0;
+        // The file's own path, when it has one: that is what lets the native loader
+        // read a mesh chunk by range instead of receiving its bytes. Same expression
+        // the sidecar resolution below uses.
+        const voxlPath = (file as File & { path?: string; filePath?: string }).path
+          || (file as File & { filePath?: string }).filePath
+          || options?.sourcePath
+          || undefined;
+        // With a path, the 13 mesh chunks (677 MB, ~2 s of inflate before any model
+        // work starts) stay where they are and the loader inflates each one itself.
+        // Without one — a zip entry, a synthesized file — nothing changes.
+        const parsed = await parseVoxlBinaryV2(new Uint8Array(await file.arrayBuffer()), {
+          deferMeshChunks: Boolean(voxlPath),
+        });
+        const parsedAt = performance.now();
+        const document: VoxlDocumentV1 = parsed.document;
+        const sceneMaterials: unknown[] = Array.isArray(document.materials) ? document.materials : [];
+
+        // Check the printer's plugin before inflating a single mesh: a scene owned by
+        // an uninstalled plugin can only keep geometry, and the answer decides whether
+        // this load is worth starting at all.
+        let skipPrinterMetadata = false;
+        const recordedPrinterEarly = document.meta?.printer;
+        if (recordedPrinterEarly) {
+          const installedEarly = findPrinterProfileForBundle(recordedPrinterEarly, getProfileStoreSnapshot());
+          const missing = installedEarly?.missingPlugin;
+          if (missing) {
+            const recordedName = typeof recordedPrinterEarly.printer.name === 'string'
+              ? recordedPrinterEarly.printer.name
+              : undefined;
+            const choice = await requestMissingPrinterPluginChoice({
+              pluginName: missing.name,
+              ...(recordedName ? { printerName: recordedName } : {}),
+            });
+            if (choice === 'manage') return false;
+            skipPrinterMetadata = true;
+          }
+        }
+        const bodyChunks = parsed.bodyChunks;
+        const resolvedMeshBytes: Map<string, Uint8Array> = parsed.meshBytes;
+        const resolvedOriginalMeshBytes = parsed.originalMeshBytes;
+        const originalMeshChunks = parsed.originalMeshChunks;
+        // sourceVersion is 3.1 only when the file actually carries modifier
+        // chunks; anything lower is treated as inline for format preservation.
+        lastLoadedVoxlFormatChunkedRef.current = parsed.sourceVersion >= 3.1;
+
+        // The file's plates, read once: the models below are stamped with the
+        // plate they stand on, and the scene adopts the list after they land.
+        const scenePlates = readScenePlates(document.scene);
+        const importedPlateIds = new Set(scenePlates.plates.map((plate) => plate.id));
+        const importedDefaultPlateId = scenePlates.plates[0]?.id;
+        /** A model's plate, when the file names one of its own; otherwise its first. */
+        const plateIdForImport = (raw?: string): string | undefined =>
+          raw && importedPlateIds.has(raw) ? raw : importedDefaultPlateId;
+
+        const existingIds = new Set(modelsRef.current.map((model) => model.id));
+        const idMap = new Map<string, string>();
+        const importedModels: LoadedModel[] = [];
+        let skippedModels = 0;
+
+        // Identical-geometry dedup: a scene with N copies of one mesh (e.g. a
+        // Fill-Plate bed) stores N identical payloads, and decode + SHA-256 +
+        // native repair per copy dominates load time. Build each UNIQUE mesh
+        // once (keyed by its content SHA) and share the result for duplicates
+        // via the existing cloneGeometryWithBounds({ shared: true }) — the same
+        // path duplicate/paste already use.
+        const builtGeometryByHash = new Map<string, GeometryWithBounds>();
+        let dedupHits = 0;
+
+        // Build every unique mesh, a couple at a time, before the placement loop.
+        // Placement stays in order below because it depends on what is already on the
+        // plate; building does not. Each build is a native round trip with serial
+        // phases (parse, classify) around a parallel one, so two in flight let
+        // one model's serial phase run during another's. The hash is computed here once
+        // per model and reused by the loop, so neither the content hash nor the
+        // integrity check is paid twice.
+        //
+        // The `classification` a `MODL` entry carries is **not** used. It is a boundary
+        // into the soup the file stores, and a file written before the mesh chunk's
+        // signature could see a reordered soup pairs it with a different order: the
+        // boundary then cuts a slab out of the model and paints it as support. A count
+        // check cannot tell those apart, so the loader classifies the payload it just
+        // built and the sections come from that answer. Cost: one classify per model on
+        // load — the same pass a fresh STL import pays, done natively inside the loader
+        // rather than as a second round trip.
+        const buildOptionsFor = (model: (typeof document.models)[number]): ProcessGeometryOptions => ({
+          nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
+          assumeSupportGeometry: model.isSupportGeometry,
+          skipClassification: model.isSupportGeometry,
+        });
+        const hashByModelId = new Map<string, string>();
+        const uniqueBuilds = new Map<
+          string,
+          {
+            bytes?: Uint8Array;
+            range?: VoxlMeshRange;
+            name: string;
+            model: (typeof document.models)[number];
+          }
+        >();
+        const meshRanges = parsed.meshRanges;
+        for (const [index, model] of document.models.entries()) {
+          const meshRef = model.mesh;
+          const bytes = resolvedMeshBytes.get(model.id);
+          const range = meshRanges?.get(model.id);
+          if (!meshRef || meshRef.mode !== 'embedded-chunk' || (!bytes && !range)) continue;
+          const declaredSha = typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0
+            ? meshRef.sha256.trim().toLowerCase()
+            : undefined;
+          // A deferred chunk has no bytes to hash. Its identity inside the file is its
+          // chunk anyway — a V3 duplicate points at the owner's chunk — so the chunk
+          // index is the dedup key, and it is stable for the whole parse.
+          const contentHash = declaredSha
+            ?? (range
+              ? `chunk:${typeof meshRef.chunkIndex === 'number' ? meshRef.chunkIndex : index}`
+              : await sha256Hex(bytes!));
+          hashByModelId.set(model.id, contentHash);
+          if (builtGeometryByHash.has(contentHash) || uniqueBuilds.has(contentHash)) continue;
+          uniqueBuilds.set(contentHash, {
+            ...(bytes ? { bytes } : { range: range! }),
+            name: meshRef.fileName?.trim() || `${model.name || 'model'}.stl`,
+            model,
+          });
+        }
+        if (uniqueBuilds.size > 0) {
+          let finished = 0;
+          const buildCount = uniqueBuilds.size;
+          // Every mesh's occlusion bake is left in flight rather than awaited per
+          // model: it is the GPU's work (0.4-1.2 s a model on the scene this was
+          // measured against) while the remaining meshes are still being parsed
+          // and classified, and running them one model at a time left the
+          // GPU idle for most of the load. They are all awaited below, before any
+          // model is placed, so each one's first frame still carries its occlusion
+          // — the pop-in that baking after the fact produced.
+          const pendingOcclusionBakes: Array<Promise<boolean>> = [];
+          await runWithConcurrency([...uniqueBuilds], VOXL_BUILD_CONCURRENCY, async ([hash, spec]) => {
+            const outcome = await attemptAsync(async () => {
+              const options = {
+                ...buildOptionsFor(spec.model),
+                _deferOcclusionBake: (bake: Promise<boolean>) => pendingOcclusionBakes.push(bake),
+              };
+              const built = spec.range && voxlPath
+                ? await loadMeshGeometryFromRange(voxlPath, spec.range, spec.name, options)
+                : await loadMeshGeometry(spec.bytes!, spec.name, options);
+              builtGeometryByHash.set(hash, built);
+            });
+            if (!outcome.ok) {
+              const error = outcome.error;
+              // The loop below reports the model as skipped; one mesh that will not
+              // build is not worth failing the whole scene over.
+              console.error(`[SceneCollection] Failed building VOXL mesh "${spec.model.name}"`, error);
+            }
+            finished += 1;
+            setImportProgress({
+              active: true,
+              type: 'scene',
+              label: importLabelVoxlScene(_),
+              detail: importDetailVoxlModel(finished, buildCount, spec.model.name, _),
+              progress: null,
+            });
+          });
+          await Promise.all(pendingOcclusionBakes);
+        }
+        const builtAt = performance.now();
+
+        for (let i = 0; i < document.models.length; i += 1) {
+          const model = document.models[i];
+          const meshRef = model.mesh;
+
+          if (!meshRef) {
+            console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": missing mesh descriptor.`);
+            skippedModels += 1;
+            continue;
+          }
+
           setImportProgress({
             active: true,
             type: 'scene',
             label: importLabelVoxlScene(_),
-            detail: importDetailVoxlModel(finished, buildCount, spec.model.name, _),
+            detail: importDetailVoxlModel(i + 1, document.models.length, model.name, _),
             progress: null,
           });
-        });
-        await Promise.all(pendingOcclusionBakes);
-      }
-      const builtAt = performance.now();
 
-      for (let i = 0; i < document.models.length; i += 1) {
-        const model = document.models[i];
-        const meshRef = model.mesh;
-
-        if (!meshRef) {
-          console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": missing mesh descriptor.`);
-          skippedModels += 1;
-          continue;
-        }
-
-        setImportProgress({
-          active: true,
-          type: 'scene',
-          label: importLabelVoxlScene(_),
-          detail: importDetailVoxlModel(i + 1, document.models.length, model.name, _),
-          progress: null,
-        });
-
-        if (meshRef.mode !== 'embedded-chunk') {
-          console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": mesh mode \"${meshRef.mode}\" is not importable without embedded mesh data.`);
-          skippedModels += 1;
-          continue;
-        }
-
-        // Mesh bytes arrive pre-decoded from the container's MESH chunks — unless
-        // the parse deferred them, in which case the location is what arrives and
-        // the native loader reads it.
-        const meshDataBytes = resolvedMeshBytes.get(model.id);
-        const meshRange = meshRanges?.get(model.id);
-        if (!meshDataBytes && !(meshRange && voxlPath)) {
-          console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": missing embedded mesh payload.`);
-          skippedModels += 1;
-          continue;
-        }
-
-        try {
-          const bytes = meshDataBytes;
-
-          // Dedup key: the file's own SHA when present, else the content hash
-          // (also the integrity value). Compute once; reused as the cache key.
-          const declaredSha =
-            typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0
-              ? meshRef.sha256.trim().toLowerCase()
-              : undefined;
-          // Computed by the build pass above; the fallback covers a model it skipped.
-          const contentHash = hashByModelId.get(model.id)
-            ?? declaredSha
-            ?? (bytes ? await sha256Hex(bytes) : `chunk:${typeof meshRef.chunkIndex === 'number' ? meshRef.chunkIndex : i}`);
-
-          const cached = builtGeometryByHash.get(contentHash);
-          let geometry: GeometryWithBounds;
-          if (cached) {
-            // Identical mesh already built — clone, skipping decode + native
-            // repair entirely (the expensive part). Integrity was verified on
-            // the first occurrence.
-            dedupHits += 1;
-            console.log(
-              `[SceneCollection] Geometry with hash ${contentHash} already processed — cloning it.`,
-            );
-            geometry = cloneGeometryWithBounds(cached, { shared: true });
-          } else {
-            // A deferred chunk has no bytes here to hash: its integrity is the
-            // container's own (the directory ranges are bounds-checked as the file
-            // is parsed) and the loader refuses a short read. The byte-source path
-            // below verifies the declared SHA as before.
-            if (declaredSha && bytes) {
-              const actual = await sha256Hex(bytes);
-              if (actual !== declaredSha) {
-                throw new Error('VOXL integrity check failed (SHA-256 mismatch).');
-              }
-            }
-            // The build pass above builds every unique mesh; reaching here means that
-            // build failed, and it already logged why.
-            throw new Error(`VOXL mesh for "${model.name}" did not build.`);
+          if (meshRef.mode !== 'embedded-chunk') {
+            console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": mesh mode \"${meshRef.mode}\" is not importable without embedded mesh data.`);
+            skippedModels += 1;
+            continue;
           }
 
-          let resolvedId = model.id;
-          if (!resolvedId || existingIds.has(resolvedId)) {
-            resolvedId = uuidv4();
+          // Mesh bytes arrive pre-decoded from the container's MESH chunks — unless
+          // the parse deferred them, in which case the location is what arrives and
+          // the native loader reads it.
+          const meshDataBytes = resolvedMeshBytes.get(model.id);
+          const meshRange = meshRanges?.get(model.id);
+          if (!meshDataBytes && !(meshRange && voxlPath)) {
+            console.warn(`[SceneCollection] Skipping VOXL model "${model.name}": missing embedded mesh payload.`);
+            skippedModels += 1;
+            continue;
           }
-          existingIds.add(resolvedId);
-          idMap.set(model.id, resolvedId);
 
-          const origMeshBytes = resolvedOriginalMeshBytes?.get(model.id);
-          const origMeshChunk = originalMeshChunks?.get(model.id);
+          const outcome = await attemptAsync(async () => {
+            const bytes = meshDataBytes;
 
-          if (origMeshChunk) {
-            void meshChunkStore.bake({
-              modelId: resolvedId,
-              slot: 'original',
-              signature: `original:${resolvedId}`,
-              precompressed: origMeshChunk,
-              encode: () => origMeshBytes || new Uint8Array(0),
-            });
-          } else if (origMeshBytes) {
-            void meshChunkStore.bake({
-              modelId: resolvedId,
-              slot: 'original',
-              signature: `original:${resolvedId}`,
-              encode: () => origMeshBytes,
-            });
-          } else {
-            const voxlFilePath = (file as File & { path?: string; filePath?: string }).path
-              || (file as File & { filePath?: string }).filePath
-              || options?.sourcePath;
-            const origRefToResolve = model.originalRef ?? (
-              typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
-                ? { mode: 'external-file' as const, fileName: model.sourcePath }
-                : undefined
-            );
-            const sidecarPath = resolveOriginalRefSidecar(origRefToResolve, voxlFilePath || undefined);
+            // Dedup key: the file's own SHA when present, else the content hash
+            // (also the integrity value). Compute once; reused as the cache key.
+            const declaredSha =
+              typeof meshRef.sha256 === 'string' && meshRef.sha256.trim().length > 0
+                ? meshRef.sha256.trim().toLowerCase()
+                : undefined;
+            // Computed by the build pass above; the fallback covers a model it skipped.
+            const contentHash = hashByModelId.get(model.id)
+              ?? declaredSha
+              ?? (bytes ? await sha256Hex(bytes) : `chunk:${typeof meshRef.chunkIndex === 'number' ? meshRef.chunkIndex : i}`);
 
-            if (sidecarPath) {
-              try {
-                const sidecarBytes = await readSidecarFileBytes(sidecarPath);
-                if (sidecarBytes) {
-                  void meshChunkStore.bake({
-                    modelId: resolvedId,
-                    slot: 'original',
-                    signature: `original:${resolvedId}`,
-                    encode: () => sidecarBytes,
-                  });
+            const cached = builtGeometryByHash.get(contentHash);
+            let geometry: GeometryWithBounds;
+            if (cached) {
+              // Identical mesh already built — clone, skipping decode + native
+              // repair entirely (the expensive part). Integrity was verified on
+              // the first occurrence.
+              dedupHits += 1;
+              console.log(
+                `[SceneCollection] Geometry with hash ${contentHash} already processed — cloning it.`,
+              );
+              geometry = cloneGeometryWithBounds(cached, { shared: true });
+            } else {
+              // A deferred chunk has no bytes here to hash: its integrity is the
+              // container's own (the directory ranges are bounds-checked as the file
+              // is parsed) and the loader refuses a short read. The byte-source path
+              // below verifies the declared SHA as before.
+              if (declaredSha && bytes) {
+                const actual = await sha256Hex(bytes);
+                if (actual !== declaredSha) {
+                  throw new Error('VOXL integrity check failed (SHA-256 mismatch).');
                 }
-              } catch (err) {
-                console.warn(`[SceneCollection] Unreadable sidecar file at "${sidecarPath}", falling back to preview:`, err);
+              }
+              // The build pass above builds every unique mesh; reaching here means that
+              // build failed, and it already logged why.
+              throw new Error(`VOXL mesh for "${model.name}" did not build.`);
+            }
+
+            let resolvedId = model.id;
+            if (!resolvedId || existingIds.has(resolvedId)) {
+              resolvedId = uuidv4();
+            }
+            existingIds.add(resolvedId);
+            idMap.set(model.id, resolvedId);
+
+            const origMeshBytes = resolvedOriginalMeshBytes?.get(model.id);
+            const origMeshChunk = originalMeshChunks?.get(model.id);
+
+            if (origMeshChunk) {
+              void meshChunkStore.bake({
+                modelId: resolvedId,
+                slot: 'original',
+                signature: `original:${resolvedId}`,
+                precompressed: origMeshChunk,
+                encode: () => origMeshBytes || new Uint8Array(0),
+              });
+            } else if (origMeshBytes) {
+              void meshChunkStore.bake({
+                modelId: resolvedId,
+                slot: 'original',
+                signature: `original:${resolvedId}`,
+                encode: () => origMeshBytes,
+              });
+            } else {
+              const voxlFilePath = (file as File & { path?: string; filePath?: string }).path
+                || (file as File & { filePath?: string }).filePath
+                || options?.sourcePath;
+              const origRefToResolve = model.originalRef ?? (
+                typeof model.sourcePath === 'string' && model.sourcePath.trim().length > 0
+                  ? { mode: 'external-file' as const, fileName: model.sourcePath }
+                  : undefined
+              );
+              const sidecarPath = resolveOriginalRefSidecar(origRefToResolve, voxlFilePath || undefined);
+
+              if (sidecarPath) {
+                try {
+                  const sidecarBytes = await readSidecarFileBytes(sidecarPath);
+                  if (sidecarBytes) {
+                    void meshChunkStore.bake({
+                      modelId: resolvedId,
+                      slot: 'original',
+                      signature: `original:${resolvedId}`,
+                      encode: () => sidecarBytes,
+                    });
+                  }
+                } catch (err) {
+                  console.warn(`[SceneCollection] Unreadable sidecar file at "${sidecarPath}", falling back to preview:`, err);
+                }
               }
             }
-          }
 
-          const decodedSplitBodies = bodyChunks?.has(model.id)
-            ? await decodeBodyChunk(bodyChunks.get(model.id) as Uint8Array, geometry.center)
-            : undefined;
-          const polygonCount = countTriangles(geometry.geometry);
-          const color = clampHexColor(model.color, DEFAULT_MESH_COLOR);
-          const importedPlateId = plateIdForImport(model.plateId);
-
-          importedModels.push({
-            id: resolvedId,
-            name: sanitizeImportedModelDisplayName(model.name),
-            fileUrl: '',
-            ...(importedPlateId ? { plateId: importedPlateId } : {}),
-            sourcePath: model.sourcePath ?? undefined,
-            originalRef: model.originalRef,
-            fileSizeBytes: model.fileSizeBytes,
-            geometry,
-            transform: {
-              position: new THREE.Vector3(model.transform.position.x, model.transform.position.y, model.transform.position.z),
-              rotation: eulerFromGlobalEuler(model.transform.rotation),
-              scale: new THREE.Vector3(model.transform.scale.x, model.transform.scale.y, model.transform.scale.z),
-            },
-            visible: model.visible,
-            color,
-            polygonCount,
-            meshModifiers: undefined,
-            autoLift: model.autoLift === true,
-            liftRestoreMm: typeof model.liftRestoreMm === 'number' ? model.liftRestoreMm : undefined,
-            isSupportGeometry: model.isSupportGeometry,
-            linkGroupId: model.linkGroupId,
-            // A project saved before models carried a material still has to name one
-            // on a multi-tank printer.
-            materialProfileId: model.materialProfileId ?? resolveMultiTankImportDefault()?.materialProfileId,
-            materialBaseColor: model.materialBaseColor,
-            ...(decodedSplitBodies ? { splitBodies: decodedSplitBodies } : {}),
-            ...(model.bodyMaterialProfileIds
-              ? { bodyMaterialProfileIds: model.bodyMaterialProfileIds.map((id) => id ?? undefined) }
-              : {}),
-            ...(model.bodyColors
-              ? { bodyColors: model.bodyColors.map((color) => color ?? undefined) }
-              : {}),
-          });
-
-          // Store meshModifiers externally so model objects stay lightweight
-          if (model.meshModifiers) {
-            storeModelMeshModifiers(resolvedId, cloneMeshModifiersShallow(model.meshModifiers));
-          }
-        } catch (error) {
-          console.error(`[SceneCollection] Failed importing embedded VOXL mesh for model "${model.name}"`, error);
-          skippedModels += 1;
-        }
-      }
-
-      if (dedupHits > 0) {
-        console.log(
-          `[SceneCollection] VOXL load: ${builtGeometryByHash.size} unique mesh(es) built, ` +
-          `${dedupHits} duplicate(s) reused (skipped decode + native repair).`,
-        );
-      }
-
-      const placedAt = performance.now();
-
-      const sourceTransformsByModelId = new Map<string, ModelTransform>();
-      for (const imported of importedModels) {
-        sourceTransformsByModelId.set(imported.id, cloneTransform(imported.transform));
-      }
-
-      // The file's models stand where its own printer's beds were laid out, and the cascade
-      // spaces beds by the build volume: on any other printer every bed but the first is
-      // somewhere else, so the models have to make the same move. A model centred on plate 2
-      // stays centred on plate 2. The file's supports follow their models, because the shift
-      // is the delta against the transforms captured above.
-      const recordedLayoutMm = document.meta?.printer?.printer.buildVolumeMm;
-      // The origin the file's positions are measured from. A file that does not say is read
-      // in the viewer's own, as it always was.
-      const fileOriginMode = readPlateOriginMode(document.extensions?.[VOXL_PLATE_ORIGIN_EXTENSION])
-        ?? view3dSettings.originMode;
-      if (recordedLayoutMm && scenePlates.plates.length > 1) {
-        const filePlates = scenePlates.plates.map((plate) => ({ id: plate.id, name: plate.name ?? '' }));
-        const shifted = modelsShiftedForRelaidPlates(filePlates, filePlates, importedModels, {
-          laidOut: {
-            widthMm: recordedLayoutMm.width,
-            depthMm: recordedLayoutMm.depth,
-            originMode: fileOriginMode,
-          },
-          // The grid the file's beds were laid out on, which is what its model positions
-          // are measured against. A file that does not say was written under the dynamic
-          // grid, the only one there was. Without this, opening a scene in the other
-          // ordering would leave every model standing where its bed no longer is.
-          wasOrdering: readPlateOrdering(document.extensions?.[VOXL_PLATE_ORDERING_EXTENSION])
-            ?? DYNAMIC_PLATE_ORDERING,
-        });
-        if (shifted !== importedModels) importedModels.splice(0, importedModels.length, ...shifted);
-      }
-
-      // Saved under the other origin, every position is measured from another point of the
-      // bed: every model moves by how far the middle of a bed moves between the two frames,
-      // on one plate or many, and its supports follow it through the same delta.
-      const originShift = originModeShift({
-        was: {
-          widthMm: recordedLayoutMm?.width ?? view3dSettings.widthMm,
-          depthMm: recordedLayoutMm?.depth ?? view3dSettings.depthMm,
-          originMode: fileOriginMode,
-        },
-        now: {
-          widthMm: view3dSettings.widthMm,
-          depthMm: view3dSettings.depthMm,
-          originMode: view3dSettings.originMode,
-        },
-      });
-      if (originShift.dxMm !== 0 || originShift.dyMm !== 0) {
-        const offset = new THREE.Vector3(originShift.dxMm, originShift.dyMm, 0);
-        importedModels.splice(0, importedModels.length, ...importedModels.map((model) => ({
-          ...model,
-          transform: { ...model.transform, position: model.transform.position.clone().add(offset) },
-        })));
-      }
-
-      // "Off-plate" means standing on none of the file's beds, not off the bed being worked
-      // on: reading the active one alone called every model on any other bed out of bounds,
-      // which in a multi-plate scene is the whole point of the file. A file that names no
-      // plates of its own leaves the beds already here in place, so those are the ones.
-      const bedRectsFor = (bedPlates: readonly { id: string }[]): Rect2D[] => computePlateFrames({
-        plates: bedPlates,
-        footprint: {
-          widthMm: view3dSettings.widthMm,
-          depthMm: view3dSettings.depthMm,
-          originMode: view3dSettings.originMode,
-        },
-        ordering: plateOrderingRef.current,
-      });
-      const bedRectsForImport = scenePlates.plates.length > 0
-        ? bedRectsFor(scenePlates.plates)
-        : bedRectsFor(platesRef.current);
-      const offPlateImportedModels = importedModels.filter(
-        (model) => !rectStandsOnAnyBed(modelFootprintRect(model), bedRectsForImport),
-      );
-      const shouldPromptForPlacement = offPlateImportedModels.length > 0 && !options?.suppressPlacementPrompt;
-
-      // Preserve authored placement by default. Only auto-arrange if models are off-plate
-      // and the user explicitly chooses auto-arrange in the prompt.
-      let shouldAutoArrangeOnImport = false;
-      if (shouldPromptForPlacement) {
-        const choice = await requestSceneImportPlacementChoice({
-          source: 'VOXL',
-          fileName: file.name,
-          modelCount: importedModels.length,
-          offPlateModelCount: offPlateImportedModels.length,
-        });
-        shouldAutoArrangeOnImport = choice === 'auto_arrange';
-      }
-
-      if (importedModels.length > 0) {
-        if (shouldAutoArrangeOnImport) {
-          const assignedCenters = findFreeSpotCentersForModels(importedModels, 5);
-          importedModels.forEach((model, index) => {
-            const center = assignedCenters[index];
-            if (!center) return;
-            model.transform.position.set(center.x, center.y, model.transform.position.z);
-          });
-        }
-
-        // A cached or older scene can carry a model whose size was never recorded —
-        // the writer used to store 0 for unknown, which reads back as "0 B". The
-        // document keeps the model's original path when it has one, so the size is
-        // one metadata call away. Desktop only: `readNativeFileSize` answers null
-        // elsewhere, which leaves the size unknown rather than wrong.
-        await Promise.all(importedModels.map(async (model) => {
-          if (typeof model.fileSizeBytes === 'number' && model.fileSizeBytes > 0) return;
-          const sourcePath = typeof model.sourcePath === 'string' ? model.sourcePath.trim() : '';
-          if (!sourcePath) return;
-          const size = await readNativeFileSize(sourcePath);
-          if (size != null && size > 0) model.fileSizeBytes = size;
-        }));
-
-        if (skipPrinterMetadata) {
-          for (const model of importedModels) {
-            const assigned = Boolean(
-              model.materialProfileId
-              || model.bodyMaterialProfileIds?.some(Boolean)
-              || model.bodyColors?.some(Boolean),
-            );
-            model.color = model.materialBaseColor ?? (assigned ? DEFAULT_MESH_COLOR : model.color);
-            model.materialProfileId = undefined;
-            model.materialBaseColor = undefined;
-            model.bodyMaterialProfileIds = undefined;
-            model.bodyColors = undefined;
-          }
-        }
-
-        setModels((prev) => [...prev, ...importedModels]);
-        committedAt = performance.now();
-
-        // Everything this file brought in is selected, so a freshly opened scene acts
-        // on all of it at once. The file's own selection is deliberately not restored:
-        // a saved scene carries one model's worth in most files, and honouring it left
-        // an import acting on a single model and looking like the rest were not there.
-        // The active model still follows the file, because that is the one the panels
-        // read, and falls back to the first imported model when the file names none.
-        const mappedActiveId = (document.scene.activeModelId && idMap.get(document.scene.activeModelId))
-          || importedModels[0]?.id
-          || null;
-
-        setActiveModelId(mappedActiveId);
-        setSelectedModelIds(importedModels.map((model) => model.id));
-
-        // The scene's plates: `plates` is canonical, the older `plateName` is the
-        // single-plate shorthand a file written before plates carries. A file with
-        // no plate list at all leaves this scene's plates as they were, since this
-        // path merges into the scene rather than replacing it.
-        if (scenePlates.plates.length > 0) {
-          setPlates(scenePlates.plates.map((plate) => ({ id: plate.id, name: plate.name ?? '' })));
-          setActivePlateId(scenePlates.activePlateId ?? scenePlates.plates[0].id);
-        } else if (scenePlates.legacyName) {
-          const legacyName = scenePlates.legacyName;
-          setPlates((prev) => prev.map((plate, index) => (index === 0 ? { ...plate, name: legacyName } : plate)));
-        }
-
-        // A scene built for another printer should not be dropped into this one without
-        // a word: its beds were spaced for the machine it names, and when that machine is
-        // the bigger the plates do not fit here at all. Read the store fresh rather than
-        // the memo, because this callback can run long after it was created.
-        const recordedPrinter = document.meta?.printer;
-        const recordedVolume = recordedPrinter?.printer.buildVolumeMm;
-        const currentPrinter = getActivePrinterProfile(getProfileStoreSnapshot());
-        if (recordedPrinter && recordedVolume && currentPrinter && !skipPrinterMetadata) {
-          const installed = findPrinterProfileForBundle(recordedPrinter, getProfileStoreSnapshot());
-          // Resolving to the profile selected now means the scene is already on its printer.
-          if (installed?.id !== currentPrinter.id) {
-            const recordedName = typeof recordedPrinter.printer.name === 'string' && recordedPrinter.printer.name.trim().length > 0
-              ? recordedPrinter.printer.name
+            const decodedSplitBodies = bodyChunks?.has(model.id)
+              ? await decodeBodyChunk(bodyChunks.get(model.id) as Uint8Array, geometry.center)
               : undefined;
-            const sceneUsesMultiTankMaterials = document.models.some((entry) => (
-              !!entry.materialProfileId || (entry.bodyMaterialProfileIds?.some((id) => !!id) ?? false)
-            ));
-            const requiredMaterialIds = new Set<string>();
-            for (const entry of document.models) {
-              if (entry.materialProfileId) requiredMaterialIds.add(entry.materialProfileId);
-              for (const id of entry.bodyMaterialProfileIds ?? []) {
-                if (id) requiredMaterialIds.add(id);
-              }
-            }
-            const recordedTankMaterials = recordedPrinter.printer.tankMaterials;
-            if (Array.isArray(recordedTankMaterials)) {
-              for (const id of recordedTankMaterials) {
-                if (typeof id === 'string' && id.length > 0) requiredMaterialIds.add(id);
-              }
-            }
-            const currentMaterialIds = new Set(
-              getMaterialProfilesForPrinter(currentPrinter.id, getProfileStoreSnapshot())
-                .map((material) => material.id),
-            );
-            const currentHasRequiredMaterials = [...requiredMaterialIds]
-              .every((id) => currentMaterialIds.has(id));
-            setPrinterMismatch({
-              bundle: recordedPrinter,
-              ...(sceneMaterials.length > 0 ? { materials: sceneMaterials } : {}),
-              sceneUsesMultiTankMaterials,
-              currentMaterialMode: currentPrinter.materialMode,
-              ...(recordedName ? { recordedName } : {}),
-              recordedBuildVolumeMm: { ...recordedVolume },
-              currentName: currentPrinter.name,
-              currentBuildVolumeMm: { ...currentPrinter.buildVolumeMm },
-              installedProfileId: installed?.id ?? null,
-              currentIsSmaller: buildVolumeIsSmaller(currentPrinter, recordedPrinter),
-              currentHasRequiredMaterials,
-              ...(installed?.missingPlugin ? { missingPlugin: installed.missingPlugin } : {}),
-              importedModelIds: importedModels.map((model) => model.id),
+            const polygonCount = countTriangles(geometry.geometry);
+            const color = clampHexColor(model.color, DEFAULT_MESH_COLOR);
+            const importedPlateId = plateIdForImport(model.plateId);
+
+            importedModels.push({
+              id: resolvedId,
+              name: sanitizeImportedModelDisplayName(model.name),
+              fileUrl: '',
+              ...(importedPlateId ? { plateId: importedPlateId } : {}),
+              sourcePath: model.sourcePath ?? undefined,
+              originalRef: model.originalRef,
+              fileSizeBytes: model.fileSizeBytes,
+              geometry,
+              transform: {
+                position: new THREE.Vector3(model.transform.position.x, model.transform.position.y, model.transform.position.z),
+                rotation: eulerFromGlobalEuler(model.transform.rotation),
+                scale: new THREE.Vector3(model.transform.scale.x, model.transform.scale.y, model.transform.scale.z),
+              },
+              visible: model.visible,
+              color,
+              polygonCount,
+              meshModifiers: undefined,
+              autoLift: model.autoLift === true,
+              liftRestoreMm: typeof model.liftRestoreMm === 'number' ? model.liftRestoreMm : undefined,
+              isSupportGeometry: model.isSupportGeometry,
+              linkGroupId: model.linkGroupId,
+              // A project saved before models carried a material still has to name one
+              // on a multi-tank printer.
+              materialProfileId: model.materialProfileId ?? resolveMultiTankImportDefault()?.materialProfileId,
+              materialBaseColor: model.materialBaseColor,
+              ...(decodedSplitBodies ? { splitBodies: decodedSplitBodies } : {}),
+              ...(model.bodyMaterialProfileIds
+                ? { bodyMaterialProfileIds: model.bodyMaterialProfileIds.map((id) => id ?? undefined) }
+                : {}),
+              ...(model.bodyColors
+                ? { bodyColors: model.bodyColors.map((color) => color ?? undefined) }
+                : {}),
             });
-          } else {
-            // The scene is already on its printer: adopt the materials and tank
-            // assignments it carries so its references resolve here.
-            const resolvedId = installed?.id ?? currentPrinter.id;
-            const remap = sceneMaterials.length > 0
-              ? importSceneMaterials(resolvedId, sceneMaterials)
-              : new Map<string, string>();
-            remapImportedMaterialReferences(importedModels.map((model) => model.id), remap);
-            applyBundleTankAssignments(resolvedId, recordedPrinter, remap);
+
+            // Store meshModifiers externally so model objects stay lightweight
+            if (model.meshModifiers) {
+              storeModelMeshModifiers(resolvedId, cloneMeshModifiersShallow(model.meshModifiers));
+            }
+          });
+          if (!outcome.ok) {
+            const error = outcome.error;
+            console.error(`[SceneCollection] Failed importing embedded VOXL mesh for model "${model.name}"`, error);
+            skippedModels += 1;
           }
-        } else if (currentPrinter && (sceneMaterials.length > 0 || recordedPrinter?.printer.tankMaterials)) {
-          const remap = sceneMaterials.length > 0
-            ? importSceneMaterials(currentPrinter.id, sceneMaterials)
-            : new Map<string, string>();
-          remapImportedMaterialReferences(importedModels.map((model) => model.id), remap);
-          if (recordedPrinter) applyBundleTankAssignments(currentPrinter.id, recordedPrinter, remap);
         }
-      }
 
-      if (voxlSupportsContainData(document)) {
-        const remappedSupports = remapModelIdsInPayload(document.supports, idMap);
-        applyImportDefaultsToRaftState();
-        mergeFromImportFormat(remappedSupports);
-
-        for (const imported of importedModels) {
-          const sourceTransform = sourceTransformsByModelId.get(imported.id);
-          if (!sourceTransform) continue;
-          if (transformsEqual(sourceTransform, imported.transform)) continue;
-          transformSupportsForModel(imported.id, sourceTransform, imported.transform);
-        }
-      }
-
-      const importedSupportCount = countSupportEntries(document.supports);
-      const importedModelCount = importedModels.length;
-
-      // Where a scene load went, in the app's own log next to the native timings:
-      // parse, the per-model build pass (native load + prep, with the bakes in
-      // flight), in-order placement, and the commit that hands the models to
-      // React. The frame that follows the commit — every geometry's upload and
-      // BVH reaching the GPU — is *after* this line, which is why the total here
-      // is not the user's wait.
-      const phaseTiming =
-        `[voxl] load: parse ${(parsedAt - importStarted).toFixed(0)}ms, ` +
-        `build ${(builtAt - parsedAt).toFixed(0)}ms, ` +
-        `place ${(placedAt - builtAt).toFixed(0)}ms, ` +
-        `commit ${(committedAt - placedAt).toFixed(0)}ms, ` +
-        `total ${(committedAt - importStarted).toFixed(0)}ms`;
-      console.log(phaseTiming);
-      void logToNativeFile('info', phaseTiming);
-
-      if (importedModelCount > 0) {
-        if (!options?.suppressReport) {
-          emitSceneImportReport(
-            reportImportedScene('VOXL', importedModelCount, importedSupportCount, skippedModels, _),
-            skippedModels > 0 ? 'warning' : 'success',
+        if (dedupHits > 0) {
+          console.log(
+            `[SceneCollection] VOXL load: ${builtGeometryByHash.size} unique mesh(es) built, ` +
+            `${dedupHits} duplicate(s) reused (skipped decode + native repair).`,
           );
         }
-      }
 
-      if (importedModels.length === 0) {
-        console.warn('[SceneCollection] VOXL import completed without importable meshes (expected embedded-chunk meshes).');
-        if (!options?.suppressReport) {
-          emitSceneImportReport(reportVoxlNoMeshes(_), 'warning');
+        const placedAt = performance.now();
+
+        const sourceTransformsByModelId = new Map<string, ModelTransform>();
+        for (const imported of importedModels) {
+          sourceTransformsByModelId.set(imported.id, cloneTransform(imported.transform));
         }
-        return false;
-      }
-      return true;
-    } catch (error) {
+
+        // The file's models stand where its own printer's beds were laid out, and the cascade
+        // spaces beds by the build volume: on any other printer every bed but the first is
+        // somewhere else, so the models have to make the same move. A model centred on plate 2
+        // stays centred on plate 2. The file's supports follow their models, because the shift
+        // is the delta against the transforms captured above.
+        const recordedLayoutMm = document.meta?.printer?.printer.buildVolumeMm;
+        // The origin the file's positions are measured from. A file that does not say is read
+        // in the viewer's own, as it always was.
+        const fileOriginMode = readPlateOriginMode(document.extensions?.[VOXL_PLATE_ORIGIN_EXTENSION])
+          ?? view3dSettings.originMode;
+        if (recordedLayoutMm && scenePlates.plates.length > 1) {
+          const filePlates = scenePlates.plates.map((plate) => ({ id: plate.id, name: plate.name ?? '' }));
+          const shifted = modelsShiftedForRelaidPlates(filePlates, filePlates, importedModels, {
+            laidOut: {
+              widthMm: recordedLayoutMm.width,
+              depthMm: recordedLayoutMm.depth,
+              originMode: fileOriginMode,
+            },
+            // The grid the file's beds were laid out on, which is what its model positions
+            // are measured against. A file that does not say was written under the dynamic
+            // grid, the only one there was. Without this, opening a scene in the other
+            // ordering would leave every model standing where its bed no longer is.
+            wasOrdering: readPlateOrdering(document.extensions?.[VOXL_PLATE_ORDERING_EXTENSION])
+              ?? DYNAMIC_PLATE_ORDERING,
+          });
+          if (shifted !== importedModels) importedModels.splice(0, importedModels.length, ...shifted);
+        }
+
+        // Saved under the other origin, every position is measured from another point of the
+        // bed: every model moves by how far the middle of a bed moves between the two frames,
+        // on one plate or many, and its supports follow it through the same delta.
+        const originShift = originModeShift({
+          was: {
+            widthMm: recordedLayoutMm?.width ?? view3dSettings.widthMm,
+            depthMm: recordedLayoutMm?.depth ?? view3dSettings.depthMm,
+            originMode: fileOriginMode,
+          },
+          now: {
+            widthMm: view3dSettings.widthMm,
+            depthMm: view3dSettings.depthMm,
+            originMode: view3dSettings.originMode,
+          },
+        });
+        if (originShift.dxMm !== 0 || originShift.dyMm !== 0) {
+          const offset = new THREE.Vector3(originShift.dxMm, originShift.dyMm, 0);
+          importedModels.splice(0, importedModels.length, ...importedModels.map((model) => ({
+            ...model,
+            transform: { ...model.transform, position: model.transform.position.clone().add(offset) },
+          })));
+        }
+
+        // "Off-plate" means standing on none of the file's beds, not off the bed being worked
+        // on: reading the active one alone called every model on any other bed out of bounds,
+        // which in a multi-plate scene is the whole point of the file. A file that names no
+        // plates of its own leaves the beds already here in place, so those are the ones.
+        const bedRectsFor = (bedPlates: readonly { id: string }[]): Rect2D[] => computePlateFrames({
+          plates: bedPlates,
+          footprint: {
+            widthMm: view3dSettings.widthMm,
+            depthMm: view3dSettings.depthMm,
+            originMode: view3dSettings.originMode,
+          },
+          ordering: plateOrderingRef.current,
+        });
+        const bedRectsForImport = scenePlates.plates.length > 0
+          ? bedRectsFor(scenePlates.plates)
+          : bedRectsFor(platesRef.current);
+        const offPlateImportedModels = importedModels.filter(
+          (model) => !rectStandsOnAnyBed(modelFootprintRect(model), bedRectsForImport),
+        );
+        const shouldPromptForPlacement = offPlateImportedModels.length > 0 && !options?.suppressPlacementPrompt;
+
+        // Preserve authored placement by default. Only auto-arrange if models are off-plate
+        // and the user explicitly chooses auto-arrange in the prompt.
+        let shouldAutoArrangeOnImport = false;
+        if (shouldPromptForPlacement) {
+          const choice = await requestSceneImportPlacementChoice({
+            source: 'VOXL',
+            fileName: file.name,
+            modelCount: importedModels.length,
+            offPlateModelCount: offPlateImportedModels.length,
+          });
+          shouldAutoArrangeOnImport = choice === 'auto_arrange';
+        }
+
+        if (importedModels.length > 0) {
+          if (shouldAutoArrangeOnImport) {
+            const assignedCenters = findFreeSpotCentersForModels(importedModels, 5);
+            importedModels.forEach((model, index) => {
+              const center = assignedCenters[index];
+              if (!center) return;
+              model.transform.position.set(center.x, center.y, model.transform.position.z);
+            });
+          }
+
+          // A cached or older scene can carry a model whose size was never recorded —
+          // the writer used to store 0 for unknown, which reads back as "0 B". The
+          // document keeps the model's original path when it has one, so the size is
+          // one metadata call away. Desktop only: `readNativeFileSize` answers null
+          // elsewhere, which leaves the size unknown rather than wrong.
+          await Promise.all(importedModels.map(async (model) => {
+            if (typeof model.fileSizeBytes === 'number' && model.fileSizeBytes > 0) return;
+            const sourcePath = typeof model.sourcePath === 'string' ? model.sourcePath.trim() : '';
+            if (!sourcePath) return;
+            const size = await readNativeFileSize(sourcePath);
+            if (size != null && size > 0) model.fileSizeBytes = size;
+          }));
+
+          if (skipPrinterMetadata) {
+            for (const model of importedModels) {
+              const assigned = Boolean(
+                model.materialProfileId
+                || model.bodyMaterialProfileIds?.some(Boolean)
+                || model.bodyColors?.some(Boolean),
+              );
+              model.color = model.materialBaseColor ?? (assigned ? DEFAULT_MESH_COLOR : model.color);
+              model.materialProfileId = undefined;
+              model.materialBaseColor = undefined;
+              model.bodyMaterialProfileIds = undefined;
+              model.bodyColors = undefined;
+            }
+          }
+
+          setModels((prev) => [...prev, ...importedModels]);
+          committedAt = performance.now();
+
+          // Everything this file brought in is selected, so a freshly opened scene acts
+          // on all of it at once. The file's own selection is deliberately not restored:
+          // a saved scene carries one model's worth in most files, and honouring it left
+          // an import acting on a single model and looking like the rest were not there.
+          // The active model still follows the file, because that is the one the panels
+          // read, and falls back to the first imported model when the file names none.
+          const mappedActiveId = (document.scene.activeModelId && idMap.get(document.scene.activeModelId))
+            || importedModels[0]?.id
+            || null;
+
+          setActiveModelId(mappedActiveId);
+          setSelectedModelIds(importedModels.map((model) => model.id));
+
+          // The scene's plates: `plates` is canonical, the older `plateName` is the
+          // single-plate shorthand a file written before plates carries. A file with
+          // no plate list at all leaves this scene's plates as they were, since this
+          // path merges into the scene rather than replacing it.
+          if (scenePlates.plates.length > 0) {
+            setPlates(scenePlates.plates.map((plate) => ({ id: plate.id, name: plate.name ?? '' })));
+            setActivePlateId(scenePlates.activePlateId ?? scenePlates.plates[0].id);
+          } else if (scenePlates.legacyName) {
+            const legacyName = scenePlates.legacyName;
+            setPlates((prev) => prev.map((plate, index) => (index === 0 ? { ...plate, name: legacyName } : plate)));
+          }
+
+          // A scene built for another printer should not be dropped into this one without
+          // a word: its beds were spaced for the machine it names, and when that machine is
+          // the bigger the plates do not fit here at all. Read the store fresh rather than
+          // the memo, because this callback can run long after it was created.
+          const recordedPrinter = document.meta?.printer;
+          const recordedVolume = recordedPrinter?.printer.buildVolumeMm;
+          const currentPrinter = getActivePrinterProfile(getProfileStoreSnapshot());
+          if (recordedPrinter && recordedVolume && currentPrinter && !skipPrinterMetadata) {
+            const installed = findPrinterProfileForBundle(recordedPrinter, getProfileStoreSnapshot());
+            // Resolving to the profile selected now means the scene is already on its printer.
+            if (installed?.id !== currentPrinter.id) {
+              const recordedName = typeof recordedPrinter.printer.name === 'string' && recordedPrinter.printer.name.trim().length > 0
+                ? recordedPrinter.printer.name
+                : undefined;
+              const sceneUsesMultiTankMaterials = document.models.some((entry) => (
+                !!entry.materialProfileId || (entry.bodyMaterialProfileIds?.some((id) => !!id) ?? false)
+              ));
+              const requiredMaterialIds = new Set<string>();
+              for (const entry of document.models) {
+                if (entry.materialProfileId) requiredMaterialIds.add(entry.materialProfileId);
+                for (const id of entry.bodyMaterialProfileIds ?? []) {
+                  if (id) requiredMaterialIds.add(id);
+                }
+              }
+              const recordedTankMaterials = recordedPrinter.printer.tankMaterials;
+              if (Array.isArray(recordedTankMaterials)) {
+                for (const id of recordedTankMaterials) {
+                  if (typeof id === 'string' && id.length > 0) requiredMaterialIds.add(id);
+                }
+              }
+              const currentMaterialIds = new Set(
+                getMaterialProfilesForPrinter(currentPrinter.id, getProfileStoreSnapshot())
+                  .map((material) => material.id),
+              );
+              const currentHasRequiredMaterials = [...requiredMaterialIds]
+                .every((id) => currentMaterialIds.has(id));
+              setPrinterMismatch({
+                bundle: recordedPrinter,
+                ...(sceneMaterials.length > 0 ? { materials: sceneMaterials } : {}),
+                sceneUsesMultiTankMaterials,
+                currentMaterialMode: currentPrinter.materialMode,
+                ...(recordedName ? { recordedName } : {}),
+                recordedBuildVolumeMm: { ...recordedVolume },
+                currentName: currentPrinter.name,
+                currentBuildVolumeMm: { ...currentPrinter.buildVolumeMm },
+                installedProfileId: installed?.id ?? null,
+                currentIsSmaller: buildVolumeIsSmaller(currentPrinter, recordedPrinter),
+                currentHasRequiredMaterials,
+                ...(installed?.missingPlugin ? { missingPlugin: installed.missingPlugin } : {}),
+                importedModelIds: importedModels.map((model) => model.id),
+              });
+            } else {
+              // The scene is already on its printer: adopt the materials and tank
+              // assignments it carries so its references resolve here.
+              const resolvedId = installed?.id ?? currentPrinter.id;
+              const remap = sceneMaterials.length > 0
+                ? importSceneMaterials(resolvedId, sceneMaterials)
+                : new Map<string, string>();
+              remapImportedMaterialReferences(importedModels.map((model) => model.id), remap);
+              applyBundleTankAssignments(resolvedId, recordedPrinter, remap);
+            }
+          } else if (currentPrinter && (sceneMaterials.length > 0 || recordedPrinter?.printer.tankMaterials)) {
+            const remap = sceneMaterials.length > 0
+              ? importSceneMaterials(currentPrinter.id, sceneMaterials)
+              : new Map<string, string>();
+            remapImportedMaterialReferences(importedModels.map((model) => model.id), remap);
+            if (recordedPrinter) applyBundleTankAssignments(currentPrinter.id, recordedPrinter, remap);
+          }
+        }
+
+        if (voxlSupportsContainData(document)) {
+          const remappedSupports = remapModelIdsInPayload(document.supports, idMap);
+          applyImportDefaultsToRaftState();
+          mergeFromImportFormat(remappedSupports);
+
+          for (const imported of importedModels) {
+            const sourceTransform = sourceTransformsByModelId.get(imported.id);
+            if (!sourceTransform) continue;
+            if (transformsEqual(sourceTransform, imported.transform)) continue;
+            transformSupportsForModel(imported.id, sourceTransform, imported.transform);
+          }
+        }
+
+        const importedSupportCount = countSupportEntries(document.supports);
+        const importedModelCount = importedModels.length;
+
+        // Where a scene load went, in the app's own log next to the native timings:
+        // parse, the per-model build pass (native load + prep, with the bakes in
+        // flight), in-order placement, and the commit that hands the models to
+        // React. The frame that follows the commit — every geometry's upload and
+        // BVH reaching the GPU — is *after* this line, which is why the total here
+        // is not the user's wait.
+        const phaseTiming =
+          `[voxl] load: parse ${(parsedAt - importStarted).toFixed(0)}ms, ` +
+          `build ${(builtAt - parsedAt).toFixed(0)}ms, ` +
+          `place ${(placedAt - builtAt).toFixed(0)}ms, ` +
+          `commit ${(committedAt - placedAt).toFixed(0)}ms, ` +
+          `total ${(committedAt - importStarted).toFixed(0)}ms`;
+        console.log(phaseTiming);
+        void logToNativeFile('info', phaseTiming);
+
+        if (importedModelCount > 0) {
+          if (!options?.suppressReport) {
+            emitSceneImportReport(
+              reportImportedScene('VOXL', importedModelCount, importedSupportCount, skippedModels, _),
+              skippedModels > 0 ? 'warning' : 'success',
+            );
+          }
+        }
+
+        if (importedModels.length === 0) {
+          console.warn('[SceneCollection] VOXL import completed without importable meshes (expected embedded-chunk meshes).');
+          if (!options?.suppressReport) {
+            emitSceneImportReport(reportVoxlNoMeshes(_), 'warning');
+          }
+          return false;
+        }
+        return true;
+      });
+      if (outcome.ok) return outcome.value;
+      const error = outcome.error;
       console.error('[SceneCollection] VOXL import failed:', error);
       if (error instanceof VoxlObsoleteVersionError) {
         // A V1 scene is refused outright: no shipped DragonFruit ever wrote one
@@ -7699,7 +7815,7 @@ export function useSceneCollectionManager(options?: {
         window.alert(alertSceneImportFailed(message, _));
       }
       return false;
-    } finally {
+    }, () => {
       if (!options?.suppressProgress) {
         setImportProgress({
           active: false,
@@ -7709,8 +7825,8 @@ export function useSceneCollectionManager(options?: {
           progress: null,
         });
       }
-    }
-  }, [_, applyBundleTankAssignments, cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, isModelFootprintInsidePlate, modelFootprintRect, remapImportedMaterialReferences, requestMissingPrinterPluginChoice, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm, waitForUiYield]);
+    });
+  }, [_, applyBundleTankAssignments, cloneGeometryWithBounds, emitSceneImportReport, findFreeSpotCentersForModels, isModelFootprintInsidePlate, modelFootprintRect, remapImportedMaterialReferences, requestMissingPrinterPluginChoice, requestSceneImportPlacementChoice, shouldAutoRepairSceneImports, trackRecentOpenedFiles, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm, waitForUiYield, modelsShiftedForRelaidPlates]);
 
   const importSceneFile = useCallback(async (file: File, options?: SceneImportRunOptions): Promise<boolean> => {
     const extension = getSceneExtension(file.name);
@@ -7903,7 +8019,7 @@ export function useSceneCollectionManager(options?: {
       console.error('[SceneCollection] Failed to import support JSON:', err);
       emitSceneImportReport(reportSupportJsonFailed(_), 'error');
     }
-  }, [emitSceneImportReport]);
+  }, [emitSceneImportReport, _]);
 
   const pluginImportPhase: 'idle' | 'awaiting_stl' | 'processing' = 'idle';
   const pluginImportError: string | null = null;
@@ -8208,7 +8324,7 @@ export function useSceneCollectionManager(options?: {
       emitSceneImportReport(_(msg`No source file to restore this model from.`), 'warning');
       return false;
     }
-    try {
+    const outcome = await attemptAsync(async () => {
       const positions = await loadMeshFromPath(sourcePath);
       if (!positions || positions.length === 0) {
         throw new Error('the file produced no geometry');
@@ -8230,11 +8346,12 @@ export function useSceneCollectionManager(options?: {
       setPendingMeshRepairReports([]);
       emitSceneImportReport(reportRestoredModel(model.name, _), 'success');
       return true;
-    } catch (error) {
-      console.error('[undoRepairsInPlace] Reload failed:', error);
-      emitSceneImportReport(_(msg`Could not restore the model.`), 'error');
-      return false;
-    }
+    });
+    if (outcome.ok) return outcome.value;
+    const error = outcome.error;
+    console.error('[undoRepairsInPlace] Reload failed:', error);
+    emitSceneImportReport(_(msg`Could not restore the model.`), 'error');
+    return false;
   }, [_, emitSceneImportReport, models, shouldAutoRepairSceneImports]);
 
   /**
@@ -8262,7 +8379,7 @@ export function useSceneCollectionManager(options?: {
         continue;
       }
       repairProgressSink?.onModelStart?.(modelId, index, modelIds.length);
-      try {
+      const outcome = await attemptAsync(async () => {
         const processed = await processGeometry(model.geometry.geometry, {
           center: false,
           nativeProcessingMode: 'repair',
@@ -8277,9 +8394,7 @@ export function useSceneCollectionManager(options?: {
         // is a partly repaired one. Applying it would replace the model with something
         // the caller did not ask for, so the model is left alone and the run ends here.
         if (processed.meshDefects?.nativeRepairReport?.cancelled) {
-          cancelled = true;
-          allRepaired = false;
-          break;
+          return 'cancelled' as const;
         }
 
         const polygonCount = processed.geometry.getAttribute('position')
@@ -8292,7 +8407,15 @@ export function useSceneCollectionManager(options?: {
         if (repairReport) {
           reportEntries.push({ id: modelId, modelName: model.name, report: repairReport });
         }
-      } catch (err) {
+        return 'repaired' as const;
+      });
+      if (outcome.ok && outcome.value === 'cancelled') {
+        cancelled = true;
+        allRepaired = false;
+        break;
+      }
+      if (!outcome.ok) {
+        const err = outcome.error;
         console.error('[repairModelsInPlace] Repair failed:', err);
         allRepaired = false;
         const message = err instanceof Error ? err.message : String(err);
@@ -8366,7 +8489,7 @@ export function useSceneCollectionManager(options?: {
     const model = modelsRef.current.find((entry) => entry.id === modelId);
     if (!model) return false;
 
-    try {
+    const outcome = await attemptAsync(async () => {
       const result = await tetSurfaceFromGeometry(model.geometry.geometry, options, progressSink);
       if (!result) {
         emitSceneImportReport(_(msg`Remesh needs the desktop app.`), 'warning');
@@ -8393,12 +8516,13 @@ export function useSceneCollectionManager(options?: {
         'success',
       );
       return true;
-    } catch (error) {
-      console.error('[tetSurfaceModelInPlace] Remesh failed:', error);
-      const message = error instanceof Error ? error.message : String(error);
-      emitSceneImportReport(_(msg`Remesh failed: ${message}`), 'error', { durationMs: 6_000 });
-      return false;
-    }
+    });
+    if (outcome.ok) return outcome.value;
+    const error = outcome.error;
+    console.error('[tetSurfaceModelInPlace] Remesh failed:', error);
+    const message = error instanceof Error ? error.message : String(error);
+    emitSceneImportReport(remeshFailedMessage(message, _), 'error', { durationMs: 6_000 });
+    return false;
   }, [_, emitSceneImportReport, fmt, replaceModelGeometry]);
 
   /**
@@ -8420,7 +8544,7 @@ export function useSceneCollectionManager(options?: {
     const model = modelsRef.current.find((entry) => entry.id === modelId);
     if (!model) return false;
 
-    try {
+    const outcome = await attemptAsync(async () => {
       const result = await solidRemeshFromGeometry(model.geometry.geometry, options, progressSink);
       if (!result) {
         emitSceneImportReport(_(msg`Shrink-Wrap needs the desktop app.`), 'warning');
@@ -8447,12 +8571,13 @@ export function useSceneCollectionManager(options?: {
         'success',
       );
       return true;
-    } catch (error) {
-      console.error('[solidRemeshModelInPlace] Shrink-Wrap failed:', error);
-      const message = error instanceof Error ? error.message : String(error);
-      emitSceneImportReport(_(msg`Shrink-Wrap failed: ${message}`), 'error', { durationMs: 6_000 });
-      return false;
-    }
+    });
+    if (outcome.ok) return outcome.value;
+    const error = outcome.error;
+    console.error('[solidRemeshModelInPlace] Shrink-Wrap failed:', error);
+    const message = error instanceof Error ? error.message : String(error);
+    emitSceneImportReport(shrinkWrapFailedMessage(message, _), 'error', { durationMs: 6_000 });
+    return false;
   }, [_, emitSceneImportReport, fmt, replaceModelGeometry]);
 
   // Cleanup on unmount
@@ -8505,7 +8630,8 @@ export function useSceneCollectionManager(options?: {
         sceneImportReportTimeoutRef.current = null;
       }
 
-      models.forEach(m => tryRevokeObjectUrl(m.fileUrl));
+      // The models as they stand at unmount, not the empty list of the first render.
+      modelsRef.current.forEach(m => tryRevokeObjectUrl(m.fileUrl));
 
       const tracked = trackedGeometriesRef.current;
       for (const geometry of tracked) {
@@ -8522,7 +8648,6 @@ export function useSceneCollectionManager(options?: {
       }
       tracked.clear();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Calculate global scene bounds for slicing/camera
@@ -8566,68 +8691,6 @@ export function useSceneCollectionManager(options?: {
 
   // ─── Plates ─────────────────────────────────────────────────────────────────
 
-  /**
-   * Where a plate sits in the world, from its place in the cascade. The first
-   * plate is the origin, so a single-plate scene is exactly where it always was.
-   */
-  const plateOffsetFor = useCallback((plateId: string): { dxMm: number; dyMm: number } => {
-    // From the refs, not `plateFrames`: a caller that has just added beds asks in the
-    // same tick, before the render that would refresh the memo.
-    const frame = plateFrameFor({ frames: liveFramesFor(platesRef.current), plateId });
-    return { dxMm: frame?.dxMm ?? 0, dyMm: frame?.dyMm ?? 0 };
-  }, [liveFramesFor]);
-
-  /**
-   * The batched bed insert and the offset lookup, for callers declared above them.
-   *
-   * A paste that overflows needs both, and it is defined earlier in this hook than they
-   * are; going through refs keeps the hook's declaration order intact instead of
-   * rearranging a thousand lines to satisfy it.
-   */
-  const addPlatesRef = useRef<(count: number) => {
-    plates: ScenePlate[];
-    added: ScenePlate[];
-    offsets: Map<string, { dxMm: number; dyMm: number }>;
-  }>(() => ({ plates: [], added: [], offsets: new Map() }));
-  const plateOffsetForRef = useRef(plateOffsetFor);
-  plateOffsetForRef.current = plateOffsetFor;
-
-  /**
-   * The models, moved with their beds when the grid is re-laid: `relaidPlateShifts` in
-   * plateLayout decides how far each one moves, and this applies it to the app's models.
-   * A model that stays put keeps its transform object, which is how the support shift
-   * knows to skip it.
-   */
-  const modelsShiftedForRelaidPlates = useCallback((
-    before: readonly ScenePlate[],
-    after: readonly ScenePlate[],
-    models: readonly LoadedModel[],
-    options?: PlateRelayoutOptions,
-  ): LoadedModel[] => {
-    const { widthMm, depthMm, originMode } = view3dSettings;
-    const shifts = relaidPlateShifts({
-      before,
-      after,
-      models,
-      footprint: { widthMm, depthMm, originMode },
-      ordering: plateOrderingRef.current,
-      laidOut: options?.laidOut,
-      wasOrdering: options?.wasOrdering,
-    });
-    if (shifts.size === 0) return models as LoadedModel[];
-
-    return models.map((model) => {
-      const shift = shifts.get(model.id);
-      if (!shift) return model;
-      return {
-        ...model,
-        transform: {
-          ...model.transform,
-          position: model.transform.position.clone().add(new THREE.Vector3(shift.dxMm, shift.dyMm, 0)),
-        },
-      };
-    });
-  }, [view3dSettings]);
 
   /**
    * Lay the beds out as `next` and move what stands on them: each model by how far its own
@@ -8664,12 +8727,6 @@ export function useSceneCollectionManager(options?: {
    * of the old printer sits off the side of the one it stands on, and reads as outside
    * its plate — which is what a smaller printer used to do to every bed but the first.
    */
-  const laidOutFootprintRef = useRef<{
-    printerId: string | null;
-    widthMm: number;
-    depthMm: number;
-  } | null>(null);
-
   useLayoutEffect(() => {
     const previous = laidOutFootprintRef.current;
     const current = {
@@ -8820,7 +8877,9 @@ export function useSceneCollectionManager(options?: {
 
     return { plates: settled, added: addedPlates, offsets };
   }, [liveFramesFor, relayPlates]);
-  addPlatesRef.current = addPlates;
+  useInsertionEffect(() => {
+    addPlatesRef.current = addPlates;
+  });
 
   /**
    * Add an empty plate after the last one, as its own history step. The plate being worked
@@ -8896,7 +8955,9 @@ export function useSceneCollectionManager(options?: {
     setPlates(next);
     pushSceneSnapshotHistory(before, snapshot(next), renamePlateLabel(index + 1));
   }, [pushSceneSnapshotHistory]);
-  renamePlateRef.current = renamePlate;
+  useInsertionEffect(() => {
+    renamePlateRef.current = renamePlate;
+  });
 
   /**
    * Delete a plate and the models standing on it. Any plate can go, the first one
