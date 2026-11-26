@@ -4,6 +4,7 @@ import type { SupportData } from '../../rendering/SupportBuilder';
 import type * as THREE from 'three';
 // Direct, not through the barrel: the barrel re-exports renderers and their
 // React hooks, which a server route cannot import.
+import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone/contactConeUtils';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk/ContactDiskInteraction';
 import { getSettings } from '../../Settings/state';
 import { inlineRootId } from '../../supportTypeRegistry';
@@ -105,38 +106,21 @@ export function buildStumpData(input: StumpBuildInput): StumpBuildResult {
         guessedSocketPos,
         mesh,
     );
-    const socketPos: Vec3 = {
-        x: authoredCone.pos.x + (authoredCone.surfaceNormal?.x ?? tipNormal.x) * (authoredCone.diskLengthOverride ?? 0) + authoredCone.normal.x * authoredCone.profile.lengthMm,
-        y: authoredCone.pos.y + (authoredCone.surfaceNormal?.y ?? tipNormal.y) * (authoredCone.diskLengthOverride ?? 0) + authoredCone.normal.y * authoredCone.profile.lengthMm,
-        z: authoredCone.pos.z + (authoredCone.surfaceNormal?.z ?? tipNormal.z) * (authoredCone.diskLengthOverride ?? 0) + authoredCone.normal.z * authoredCone.profile.lengthMm,
-    };
+    const socketPos = getFinalSocketPosition(authoredCone);
 
-    // Root and joint are positioned at the socket XY, vertical stack
+    // Root and joint are positioned at the computed cone socket
     const rootPos: Vec3 = { x: socketPos.x, y: socketPos.y, z: 0 };
-    const jointPos: Vec3 = { x: socketPos.x, y: socketPos.y, z: targetSocketZ };
+    const jointPos: Vec3 = { x: socketPos.x, y: socketPos.y, z: socketPos.z };
     const joint: Joint = {
         id: uuidv4(),
         pos: jointPos,
         diameter: STUMP_JOINT_DIAMETER_MM,
     };
 
-    const socketJoint: Joint = {
-        id: uuidv4(),
-        pos: socketPos,
-        diameter: STUMP_JOINT_DIAMETER_MM,
-    };
-
-    // Override profile: stretched length + body diameter matches joint
-    const stumpTipProfile: SupportTipProfile = {
-        ...tipProfile,
-        lengthMm: effectiveConeLength,
-        bodyDiameterMm: STUMP_JOINT_DIAMETER_MM - 0.1,
-    };
-
     const contactCone: ContactCone = {
         ...authoredCone,
         id: uuidv4(),
-        socketJointId: socketJoint.id,
+        socketJointId: joint.id,
     };
 
     const stumpId = uuidv4();

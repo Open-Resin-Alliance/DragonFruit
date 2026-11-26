@@ -8,6 +8,9 @@ import { buildContactOverride } from '../supportTypeRegistry';
 import { initializeBVH, accelerateGeometry } from '@/utils/bvh';
 import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
+import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
+import { buildStumpData } from '../SupportTypes/Stump/stumpBuilder';
+import type { Stump } from '../types';
 
 /**
  * A stump must not print through the model.
@@ -105,4 +108,78 @@ test('a stump on a model lifted well clear of the plate is placed', () => {
 
   const result = placeStumpOn(30);
   assert.equal(result?.refusal, undefined);
+});
+
+test('a stump aligns joint.pos and socketJointId with getFinalSocketPosition under wall standoff and short spans', () => {
+  resetStore();
+  const defaults = createDefaultSettings();
+  setSettings({
+    ...defaults,
+    tip: {
+      ...defaults.tip,
+      coneAngleMode: 'adaptive',
+      adaptiveConeAngleOffsetDeg: 30,
+      maxStandoffMm: 1.0,
+    },
+  });
+
+  try {
+    initializeBVH();
+    const wall = new THREE.BoxGeometry(1, 2, 1).translate(-0.85, 0, 2.2);
+    accelerateGeometry(wall);
+    const mesh = new THREE.Mesh(wall, new THREE.MeshBasicMaterial());
+    mesh.updateMatrixWorld(true);
+
+    const override = buildContactOverride('stump');
+    assert.ok(override, 'the stump registers a contact override');
+
+    const tipNormal = { x: Math.sin(Math.PI / 3), y: 0, z: -Math.cos(Math.PI / 3) };
+    const result = override({
+      tipPos: { x: 0, y: 0, z: 2.0 },
+      tipNormal,
+      modelId: 'model-a',
+      mesh,
+    });
+    assert.equal(result?.refusal, undefined);
+
+    const stump = result?.placed.entity as Stump;
+    const finalSocket = getFinalSocketPosition(stump.contactCone);
+    assert.ok((stump.contactCone.diskLengthOverride ?? 0) > 0.15,
+      `wall box triggers standoff backoff (got ${stump.contactCone.diskLengthOverride})`);
+    for (const axis of ['x', 'y', 'z'] as const) {
+      assert.ok(
+        Math.abs(stump.joint.pos[axis] - finalSocket[axis]) < 1e-9,
+        `stump.joint.pos.${axis} (${stump.joint.pos[axis]}) matches getFinalSocketPosition (${finalSocket[axis]})`,
+      );
+    }
+    assert.equal(stump.contactCone.socketJointId, stump.joint.id);
+  } finally {
+    setSettings(createDefaultSettings());
+    resetStore();
+  }
+});
+
+test('a short-span stump aligns joint.pos.z and socketJointId when socketPos.z shifts off 1.1', () => {
+  resetStore();
+  setSettings(createDefaultSettings());
+
+  try {
+    const shortSpan = buildStumpData({
+      tipPos: { x: 0, y: 0, z: 1.23 },
+      tipNormal: { x: 0, y: 0, z: -1 },
+      modelId: 'model-a',
+    }).stump;
+    const shortSocket = getFinalSocketPosition(shortSpan.contactCone);
+    assert.ok(Math.abs(shortSocket.z - 1.1) > 0.02, `socket.z shifted off 1.1 (got ${shortSocket.z})`);
+    for (const axis of ['x', 'y', 'z'] as const) {
+      assert.ok(
+        Math.abs(shortSpan.joint.pos[axis] - shortSocket[axis]) < 1e-9,
+        `short stump joint.pos.${axis} (${shortSpan.joint.pos[axis]}) matches getFinalSocketPosition (${shortSocket[axis]})`,
+      );
+    }
+    assert.equal(shortSpan.contactCone.socketJointId, shortSpan.joint.id);
+  } finally {
+    setSettings(createDefaultSettings());
+    resetStore();
+  }
 });

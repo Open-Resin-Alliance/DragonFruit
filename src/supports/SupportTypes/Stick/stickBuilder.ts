@@ -160,6 +160,11 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     );
     coneAxisB.set(finalClampedAxisB.x, finalClampedAxisB.y, finalClampedAxisB.z);
 
+    diskThicknessA = calculateDiskThickness(toVec3(surfaceNormalA), toVec3(coneAxisA), tipProfile);
+    diskThicknessB = calculateDiskThickness(toVec3(surfaceNormalB), toVec3(coneAxisB), tipProfile);
+    coneStartA.set(aPos.x, aPos.y, aPos.z).addScaledVector(surfaceNormalA, diskThicknessA);
+    coneStartB.set(bPos.x, bPos.y, bPos.z).addScaledVector(surfaceNormalB, diskThicknessB);
+
     const coneLengthA = clampConeLengthToFreeGap(coneStartA, coneAxisA, tipProfile.lengthMm, mesh);
     const coneLengthB = clampConeLengthToFreeGap(coneStartB, coneAxisB, tipProfile.lengthMm, mesh);
     const profileA: SupportTipProfile = coneLengthA === tipProfile.lengthMm
