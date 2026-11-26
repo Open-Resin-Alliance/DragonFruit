@@ -3,6 +3,7 @@
 mod mesh_minima;
 mod mesh_repair;
 mod hollow_source;
+mod organic_cut_source;
 mod mesh_store;
 mod mesh_store_ipc;
 mod mesh_refine;
@@ -4772,17 +4773,11 @@ fn main() {
             mesh_repair::mesh_hollow_session_apply,
             mesh_repair::mesh_hollow_session_select_removed_voxels,
             mesh_repair::mesh_punch_staged,
-            mesh_repair::mesh_organic_cut_staged,
-            mesh_repair::mesh_organic_cut_capture_staged_source,
-            mesh_repair::mesh_organic_cut_from_captured_source,
-            mesh_repair::mesh_organic_cut_read_part,
-            mesh_repair::mesh_organic_cut_geodesic_loop,
-            mesh_repair::mesh_organic_cut_geodesic_loop_bytes,
-            mesh_repair::mesh_organic_cut_read_geodesic,
-            mesh_repair::mesh_organic_cut_membrane_preview,
-            mesh_repair::mesh_organic_cut_plane_tenon_preview,
-            mesh_repair::mesh_organic_cut_read_membrane,
-            mesh_repair::mesh_organic_cut_read_tenon,
+            mesh_repair::mesh_organic_cut_session_open,
+            mesh_repair::mesh_organic_cut_session_apply,
+            mesh_repair::mesh_organic_cut_session_geodesic_loop,
+            mesh_repair::mesh_organic_cut_session_membrane_preview,
+            mesh_repair::mesh_organic_cut_session_plane_tenon_preview,
             mesh_repair::mesh_repair_read_positions,
             mesh_store_ipc::mesh_store_put,
             mesh_store_ipc::mesh_store_read,

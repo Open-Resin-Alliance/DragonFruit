@@ -37,7 +37,7 @@ use dragonfruit_mesh_repair::{
     Vec3,
 };
 // The organic cut feature now lives in its own crate.
-use dragonfruit_organic_cut::{organic_cut, GeodesicSolver, OrganicCutOptions};
+use dragonfruit_organic_cut::{organic_cut, OrganicCutOptions};
 use rayon::prelude::*;
 use serde::Deserialize;
 use tauri::ipc::Response;
@@ -45,51 +45,11 @@ use tauri::Emitter;
 
 use crate::hollow_source::HollowSource;
 use crate::mesh_store;
+use crate::organic_cut_source::OrganicCutSource;
 use crate::{
     staged_mesh, staged_mesh_file_appender, staged_mesh_file_path, staged_mesh_stats,
     StageMeshStats,
 };
-
-/// Captured source mesh for repeated non-mutating organic-cut runs.
-static ORGANIC_CUT_SOURCE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-/// All parts of the most recent organic cut (LE f32 soup each), in order — read
-/// back by index via `mesh_organic_cut_read_part`. A multi-loop cut that frees
-/// several pieces has >2 entries.
-static ORGANIC_CUT_PARTS_BYTES: OnceLock<Mutex<Vec<Vec<u8>>>> = OnceLock::new();
-/// Most recent geodesic loop polyline (LE f32 positions, 3 per point).
-static ORGANIC_CUT_GEODESIC_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-/// Cached geodesic solver (mesh + topology + vertex graph) for the captured
-/// source. Built once per source so dragging a waypoint re-queries the loop
-/// without rebuilding the O(mesh) graphs each call. Cleared on (re)capture.
-static ORGANIC_CUT_GEODESIC_SOLVER: OnceLock<Mutex<Option<Arc<GeodesicSolver>>>> = OnceLock::new();
-/// Most recent contour-cut membrane preview (LE f32 triangle soup, 9 per tri).
-static ORGANIC_CUT_MEMBRANE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-/// Most recent registration-tenon preview (LE f32 triangle soup, tenon + mortise).
-static ORGANIC_CUT_TENON_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-
-fn organic_cut_source_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    ORGANIC_CUT_SOURCE_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn organic_cut_parts_bytes() -> &'static Mutex<Vec<Vec<u8>>> {
-    ORGANIC_CUT_PARTS_BYTES.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-fn organic_cut_geodesic_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    ORGANIC_CUT_GEODESIC_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn organic_cut_geodesic_solver() -> &'static Mutex<Option<Arc<GeodesicSolver>>> {
-    ORGANIC_CUT_GEODESIC_SOLVER.get_or_init(|| Mutex::new(None))
-}
-
-fn organic_cut_membrane_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    ORGANIC_CUT_MEMBRANE_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn organic_cut_tenon_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    ORGANIC_CUT_TENON_BYTES.get_or_init(|| Mutex::new(None))
-}
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -981,15 +941,17 @@ pub async fn mesh_punch_staged(options_json: String, mesh_id: String) -> Result<
 // --- organic cut ---------------------------------------------------------
 
 /// Writes the EXACT inputs of an organic cut to disk when `DF_CUT_DUMP` names a
-/// directory: the staged mesh as raw LE f32 soup (`cut-<n>.bin`) and the options
-/// JSON (`cut-<n>.json`), numbered so a session keeps every attempt. The pair is
-/// a complete, lossless replay of the cut — feed it to the `cut_replay` binary in
-/// `dragonfruit-organic-cut` to reproduce a bad cut outside the app. Off unless
-/// the variable is set; a write failure only warns (never breaks the cut).
-fn dump_organic_cut_inputs(bytes: &[u8], options_json: &str) {
+/// directory: the session's parsed mesh as raw LE f32 soup (`cut-<n>.bin`) and the
+/// options JSON (`cut-<n>.json`), numbered so a session keeps every attempt. The
+/// pair is a complete replay of the cut, since the cut runs on that parsed mesh —
+/// feed it to the `cut_replay` binary in `dragonfruit-organic-cut` to reproduce a
+/// bad cut outside the app. Off unless the variable is set; a write failure only
+/// warns (never breaks the cut).
+fn dump_organic_cut_inputs(mesh: &IndexedMesh, options_json: &str) {
     let Some(dir) = std::env::var_os("DF_CUT_DUMP") else {
         return;
     };
+    let bytes = soup_bytes(mesh);
     let dir = PathBuf::from(dir);
     if let Err(e) = std::fs::create_dir_all(&dir) {
         eprintln!("[cut] dump dir {}: {e}", dir.display());
@@ -998,7 +960,7 @@ fn dump_organic_cut_inputs(bytes: &[u8], options_json: &str) {
     let n = (0u32..)
         .find(|n| !dir.join(format!("cut-{n}.bin")).exists())
         .unwrap_or(0);
-    if let Err(e) = std::fs::write(dir.join(format!("cut-{n}.bin")), bytes)
+    if let Err(e) = std::fs::write(dir.join(format!("cut-{n}.bin")), &bytes)
         .and_then(|()| std::fs::write(dir.join(format!("cut-{n}.json")), options_json))
     {
         eprintln!("[cut] dump cut-{n}: {e}");
@@ -1011,235 +973,119 @@ fn dump_organic_cut_inputs(bytes: &[u8], options_json: &str) {
     );
 }
 
-/// Applies an organic cut to the current staged mesh, replacing the staged buffer
-/// with the first part and stashing ALL parts for read-back (via
-/// `mesh_organic_cut_read_part`). A multi-loop cut can produce more than two parts.
+/// Opens an organic cut session on a stored mesh: parses it once and returns the session's id,
+/// owned by the mesh's owner. The session keeps its own copy, so the mesh can be dropped as soon
+/// as this returns. The geodesic solver is built on the first seam and kept.
 #[tauri::command]
-pub async fn mesh_organic_cut_staged(options_json: String) -> Result<String, String> {
-    let options = parse_organic_cut_options(&options_json);
-    let bytes = read_staging_bytes()?;
-    dump_organic_cut_inputs(&bytes, &options_json);
-    let (parts, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
-        let outcome = organic_cut(mesh, &options);
-        Ok::<_, String>((outcome.parts, outcome.report))
+pub async fn mesh_organic_cut_session_open(mesh_id: String) -> Result<String, String> {
+    let store = mesh_store::global();
+    let input = store.get_soup(&mesh_id)?;
+    let owner = store.owner_of(&mesh_id)?;
+    let source = tauri::async_runtime::spawn_blocking(move || {
+        let bytes = input.soup_bytes().expect("get_soup returned a soup");
+        io::staged::load_positions_le(bytes)
+            .map(OrganicCutSource::new)
+            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| format!("organic cut task panicked: {e}"))??;
-
-    let parts_soup: Vec<Vec<u8>> = parts
-        .iter()
-        .map(|p| bytemuck::cast_slice::<f32, u8>(&p.to_triangle_soup()).to_vec())
-        .collect();
-    *organic_cut_parts_bytes()
-        .lock()
-        .map_err(|e| format!("organic cut parts lock poisoned: {e}"))? = parts_soup;
-
-    // Keep the staged buffer pointed at the first part so existing read paths stay
-    // valid (no-op cut → no parts → leave the staged mesh as-is).
-    if let Some(first) = parts.first() {
-        replace_staging_with_mesh(first)?;
-    }
-    serde_json::to_string(&report).map_err(|e| format!("serialize organic cut report: {e}"))
+    .map_err(|e| format!("organic cut session open task panicked: {e}"))??;
+    Ok(store.put(
+        owner,
+        mesh_store::Entry::Session(mesh_store::Session::OrganicCut(Arc::new(source))),
+    ))
 }
 
-/// Captures the current staged mesh bytes as the source for repeated
-/// non-mutating organic-cut runs.
-#[tauri::command]
-pub async fn mesh_organic_cut_capture_staged_source() -> Result<(), String> {
-    let bytes = read_staging_bytes()?;
-    *organic_cut_source_bytes()
-        .lock()
-        .map_err(|e| format!("organic cut source lock poisoned: {e}"))? = Some(bytes);
-    organic_cut_parts_bytes()
-        .lock()
-        .map_err(|e| format!("organic cut parts lock poisoned: {e}"))?
-        .clear();
-    // Invalidate the cached geodesic solver — it belongs to the previous source.
-    // The next geodesic call rebuilds it lazily for the new mesh.
-    *organic_cut_geodesic_solver()
-        .lock()
-        .map_err(|e| format!("organic cut solver lock poisoned: {e}"))? = None;
-    Ok(())
-}
-
-/// Runs an organic cut against the captured source mesh without mutating the
-/// regular staged mesh buffer. Stashes ALL parts for read-back (via
-/// `mesh_organic_cut_read_part`, driven by the report's `partCount`).
-#[tauri::command]
-pub async fn mesh_organic_cut_from_captured_source(options_json: String) -> Result<String, String> {
-    let options = parse_organic_cut_options(&options_json);
-    let source_bytes = organic_cut_source_bytes()
-        .lock()
-        .map_err(|e| format!("organic cut source lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No captured organic cut source — call mesh_organic_cut_capture_staged_source first"
-                .to_string()
-        })?;
-    dump_organic_cut_inputs(&source_bytes, &options_json);
-
-    let (parts_soup, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&source_bytes).map_err(|e| e.to_string())?;
-        let outcome = organic_cut(mesh, &options);
-        let parts: Vec<Vec<u8>> = outcome
-            .parts
-            .iter()
-            .map(|p| bytemuck::cast_slice::<f32, u8>(&p.to_triangle_soup()).to_vec())
-            .collect();
-        Ok::<_, String>((parts, outcome.report))
-    })
-    .await
-    .map_err(|e| format!("organic cut task panicked: {e}"))??;
-
-    *organic_cut_parts_bytes()
-        .lock()
-        .map_err(|e| format!("organic cut parts lock poisoned: {e}"))? = parts_soup;
-
-    serde_json::to_string(&report).map_err(|e| format!("serialize organic cut report: {e}"))
-}
-
-/// Returns the most recent organic-cut part at `index` as raw LE f32 soup bytes.
-/// Indices run `0..report.partCount`; a multi-loop cut that frees several pieces
-/// exposes each as its own part. Out-of-range indices error.
-#[tauri::command]
-pub async fn mesh_organic_cut_read_part(index: usize) -> Result<Response, String> {
-    let bytes = organic_cut_parts_bytes()
-        .lock()
-        .map_err(|e| format!("organic cut parts lock poisoned: {e}"))?
-        .get(index)
-        .cloned()
-        .ok_or_else(|| format!("No organic cut part at index {index} — run a cut first"))?;
-    Ok(Response::new(bytes))
-}
-
-/// Computes a surface-following (Stage-1 edge-path) loop through the given
-/// waypoints against the captured organic-cut source mesh, and stores the
-/// resulting polyline for read-back. Returns the point count as JSON.
+/// Cuts a session's mesh. The session is left as it was, so the next cut starts from the same
+/// mesh.
 ///
-/// The frontend sends `{ points: [{position:[x,y,z]}...], close: bool }` in the
-/// model's local space (same space as the cut). The returned polyline is LE f32
-/// (3 floats per point) and can be rendered directly as the on-surface seam.
+/// Returns the report JSON with `partIds`: one stored soup per part, largest first, owned by the
+/// session's owner and each the caller's to read or drop. A multi-loop cut can free more than two
+/// parts; a cut that refused (`engine: "noop"`) has none.
 #[tauri::command]
-pub async fn mesh_organic_cut_geodesic_loop(request_json: String) -> Result<String, String> {
-    let req = parse_geodesic_request(&request_json);
-    if req.points.len() < 2 {
-        // Not enough points yet — clear any stale polyline and report 0.
-        *organic_cut_geodesic_bytes()
-            .lock()
-            .map_err(|e| format!("geodesic lock poisoned: {e}"))? = None;
-        return Ok("{\"pointCount\":0}".to_string());
-    }
+pub async fn mesh_organic_cut_session_apply(
+    session_id: String,
+    options_json: String,
+) -> Result<String, String> {
+    let options = parse_organic_cut_options(&options_json);
+    let store = mesh_store::global();
+    let source = store.organic_cut_source(&session_id)?;
+    let owner = store.owner_of(&session_id)?;
+    let (parts, report) = tauri::async_runtime::spawn_blocking(move || {
+        dump_organic_cut_inputs(source.mesh(), &options_json);
+        let outcome = organic_cut(source.mesh().clone(), &options);
+        let parts: Vec<Vec<u8>> = outcome.parts.iter().map(soup_bytes).collect();
+        (parts, outcome.report)
+    })
+    .await
+    .map_err(|e| format!("organic cut task panicked: {e}"))?;
 
-    let (bytes, count) = compute_geodesic_loop_bytes(&req).await?;
-    *organic_cut_geodesic_bytes()
-        .lock()
-        .map_err(|e| format!("geodesic lock poisoned: {e}"))? = Some(bytes);
-    Ok(format!("{{\"pointCount\":{count}}}"))
+    let part_ids: Vec<String> = parts
+        .into_iter()
+        .map(|part| store.put(owner.clone(), mesh_store::Entry::Soup(part)))
+        .collect();
+    let mut value = serde_json::to_value(&report).map_err(|e| format!("serialize report: {e}"))?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("partIds".into(), serde_json::json!(part_ids));
+    }
+    serde_json::to_string(&value).map_err(|e| format!("serialize report: {e}"))
 }
 
-/// Single-round-trip geodesic: computes the loop and returns the raw LE f32
-/// polyline bytes DIRECTLY as the response body, skipping the separate
-/// stash + read-back command pair. This is the hot path used while dragging a
-/// waypoint — one IPC hop per frame instead of two. Returns an empty body for
-/// <2 points. (Also stashes the bytes so a later `read_geodesic` still works.)
+/// Computes a surface-following loop through the given waypoints on a session's mesh, and
+/// returns the polyline's raw LE f32 bytes (three per point) as the response body. This is the
+/// hot path while a waypoint is dragged: one IPC hop per frame, against the solver the session
+/// keeps. Returns an empty body for fewer than two points.
+///
+/// The request is `{ points: [{position:[x,y,z]}...], close, smoothing }` in the space the
+/// session's mesh was stored in.
 #[tauri::command]
-pub async fn mesh_organic_cut_geodesic_loop_bytes(request_json: String) -> Result<Response, String> {
+pub async fn mesh_organic_cut_session_geodesic_loop(
+    session_id: String,
+    request_json: String,
+) -> Result<Response, String> {
     let req = parse_geodesic_request(&request_json);
+    let source = mesh_store::global().organic_cut_source(&session_id)?;
     if req.points.len() < 2 {
-        *organic_cut_geodesic_bytes()
-            .lock()
-            .map_err(|e| format!("geodesic lock poisoned: {e}"))? = None;
         return Ok(Response::new(Vec::new()));
     }
-
-    let (bytes, _count) = compute_geodesic_loop_bytes(&req).await?;
-    *organic_cut_geodesic_bytes()
-        .lock()
-        .map_err(|e| format!("geodesic lock poisoned: {e}"))? = Some(bytes.clone());
-    Ok(Response::new(bytes))
-}
-
-/// Fetches the cached geodesic solver, building it once from the captured source
-/// if absent. Building (parse + topology + vertex graph) is O(mesh) and dominates
-/// a single query, so caching it makes dragging a waypoint cheap — each query is
-/// then only Dijkstra + path straightening.
-async fn geodesic_solver_or_build() -> Result<Arc<GeodesicSolver>, String> {
-    let cached = organic_cut_geodesic_solver()
-        .lock()
-        .map_err(|e| format!("organic cut solver lock poisoned: {e}"))?
-        .clone();
-    if let Some(s) = cached {
-        return Ok(s);
-    }
-    let source_bytes = organic_cut_source_bytes()
-        .lock()
-        .map_err(|e| format!("organic cut source lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No captured source — call mesh_organic_cut_capture_staged_source first".to_string()
-        })?;
-    let built = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&source_bytes).map_err(|e| e.to_string())?;
-        Ok::<_, String>(Arc::new(GeodesicSolver::build(mesh)))
-    })
-    .await
-    .map_err(|e| format!("geodesic solver build panicked: {e}"))??;
-    *organic_cut_geodesic_solver()
-        .lock()
-        .map_err(|e| format!("organic cut solver lock poisoned: {e}"))? = Some(built.clone());
-    Ok(built)
-}
-
-/// Computes the geodesic loop for a request against the cached solver, returning
-/// the flat LE f32 polyline bytes plus the point count. Shared by the JSON and
-/// raw-bytes command variants. Caller must have validated `points.len() >= 2`.
-async fn compute_geodesic_loop_bytes(req: &GeodesicRequestDto) -> Result<(Vec<u8>, usize), String> {
-    let solver = geodesic_solver_or_build().await?;
     let waypoints: Vec<Vec3> = req
         .points
         .iter()
         .map(|p| Vec3::new(p.position[0], p.position[1], p.position[2]))
         .collect();
-    let close = req.close;
-    let smoothing = req.smoothing;
+    let (close, smoothing) = (req.close, req.smoothing);
 
-    tauri::async_runtime::spawn_blocking(move || {
-        let loop_pts = solver
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        let loop_pts = source
+            .solver()
             .surface_loop_smoothed(&waypoints, close, smoothing)
             .ok_or_else(|| "geodesic loop could not be computed".to_string())?;
         let flat: Vec<f32> = loop_pts.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
-        let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&flat).to_vec();
-        Ok::<_, String>((bytes, loop_pts.len()))
+        Ok::<_, String>(bytemuck::cast_slice::<f32, u8>(&flat).to_vec())
     })
     .await
-    .map_err(|e| format!("geodesic task panicked: {e}"))?
-}
-
-/// Returns the most recent geodesic loop polyline as raw LE f32 bytes.
-#[tauri::command]
-pub async fn mesh_organic_cut_read_geodesic() -> Result<Response, String> {
-    let bytes = organic_cut_geodesic_bytes()
-        .lock()
-        .map_err(|e| format!("geodesic lock poisoned: {e}"))?
-        .clone()
-        .unwrap_or_default();
+    .map_err(|e| format!("geodesic task panicked: {e}"))??;
     Ok(Response::new(bytes))
 }
 
-/// Builds the contour-cut MEMBRANE for the given loop and stashes it as a
-/// triangle soup for previewing. Uses the same loop the cut would (the dense
-/// geodesic points the frontend passes here), so what's rendered IS the cutter
-/// surface. Returns `{"triangleCount":N}`; read the bytes via
-/// `mesh_organic_cut_read_membrane`.
+/// Builds the contour cut's cutter for the given loop on a session's mesh, and, when asked, the
+/// registration tenon the cut would place. Uses the loop the cut would (the dense geodesic the
+/// frontend passes), so what is drawn IS the cutter.
+///
+/// Returns the preview report JSON (see [`tenon_preview_report`]) with `membraneId` (the cutter,
+/// a triangle soup) and, when a tenon was built, `tenonId` (tenon followed by mortise). Each is
+/// stored under the session's owner, only when it has triangles, and is the caller's to read or
+/// drop. Fewer than three points build nothing and return no ids.
 #[tauri::command]
-pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<String, String> {
+pub async fn mesh_organic_cut_session_membrane_preview(
+    session_id: String,
+    request_json: String,
+) -> Result<String, String> {
     let req = parse_geodesic_request(&request_json);
+    let store = mesh_store::global();
+    let source = store.organic_cut_source(&session_id)?;
+    let owner = store.owner_of(&session_id)?;
     if req.points.len() < 3 {
-        *organic_cut_membrane_bytes()
-            .lock()
-            .map_err(|e| format!("membrane lock poisoned: {e}"))? = None;
-        return Ok("{\"triangleCount\":0}".to_string());
+        return report_json_with_ids(&tenon_preview_report(0, None), Vec::new());
     }
 
     let loop_pts: Vec<Vec3> = req
@@ -1255,147 +1101,11 @@ pub async fn mesh_organic_cut_membrane_preview(request_json: String) -> Result<S
     let thickness_mm = dragonfruit_organic_cut::membrane::DEFAULT_CUTTER_THICKNESS_MM;
     let joint_clearance_mm = req.joint_clearance_mm.max(0.0);
     let generate_tenon = req.generate_tenon;
-    let tenon_width_mm = req.tenon_width_mm;
-    let tenon_depth_mm = req.tenon_depth_mm;
     let tenon_shape = dragonfruit_organic_cut::TenonShape::from_str_or_default(&req.tenon_shape);
-    let tenon_fillet_mm = req.tenon_fillet_mm;
-    let tenon_tolerance_mm = req.tenon_tolerance_mm;
-    let tenon_at: dragonfruit_organic_cut::TenonAnchor = req
-        .tenon_anchor
-        .map(|p| Vec3::new(p[0], p[1], p[2]));
-    let tenon_swap_sides = req.tenon_swap_sides;
-    let tenon_tilt = dragonfruit_organic_cut::TenonTilt::new(req.tenon_tilt_rad, req.tenon_roll_rad);
-
-    // Use the captured cut SOURCE mesh so the preview can apply the real loop
-    // offset (needs surface normals) and show the REAL cutter slab — exactly what
-    // cuts. Falls back to the bare-membrane preview if no source is captured yet.
-    let source_bytes = organic_cut_source_bytes()
-        .lock()
-        .map_err(|e| format!("organic cut source lock poisoned: {e}"))?
-        .clone();
-
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        // The tenon preview needs the real source mesh (to probe wall clearance);
-        // it's only available once the source is captured. Returns (soup, kind,
-        // detail) — empty soup when no tenon (too thin / degenerate / no source).
-        let mut tenon_soup: Vec<f32> = Vec::new();
-        // How many of tenon_soup's triangles are the TENON (the rest are the mortise),
-        // so the frontend can colour the two apart.
-        let mut tenon_tris = 0usize;
-        let mut tenon_kind = "none".to_string();
-        let mut tenon_detail = String::new();
-        // Whether the previewed tenon can actually be placed. A tenon that can't is
-        // still built and still framed — drawn in the won't-fit colour, with its
-        // gizmo — so `false` means "show it in red and refuse the cut", not "no
-        // tenon". Defaults true so a cut with no tenon requested never blocks.
-        let mut tenon_fits = true;
-        // Placement frame for the aim/roll gizmo (anchor, axis, u, v, tip), in
-        // model-local coords. None when no tenon is previewed.
-        let mut tenon_frame: Option<dragonfruit_organic_cut::TenonFrameInfo> = None;
-
-        let soup = if let Some(bytes) = source_bytes {
-            let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
-            if generate_tenon {
-                if let Some(preview) =
-                    dragonfruit_organic_cut::build_tenon_preview_soup(
-                        &mesh,
-                        &loop_pts,
-                        membrane_smoothing,
-                        density,
-                        tenon_shape,
-                        tenon_swap_sides,
-                        tenon_tilt,
-                        tenon_width_mm,
-                        tenon_depth_mm,
-                        tenon_fillet_mm,
-                        // Same sum the cut spends, so the previewed fit is the real one.
-                        tenon_tolerance_mm + joint_clearance_mm,
-                        tenon_at,
-                    )
-                {
-                    tenon_tris = preview.tenon_triangles;
-                    tenon_soup = preview.soup;
-                    tenon_kind = preview.kind.as_str().to_string();
-                    tenon_fits = preview.fits;
-                    tenon_detail = preview.detail;
-                    tenon_frame = preview.frame;
-                }
-            }
-            dragonfruit_organic_cut::membrane::build_cutter_preview_soup(
-                &mesh,
-                &loop_pts,
-                thickness_mm,
-                membrane_smoothing,
-                density,
-            )
-            .ok_or_else(|| "cutter could not be built from the loop".to_string())?
-        } else {
-            // No captured source yet → bare membrane on the raw loop (no offset).
-            dragonfruit_organic_cut::membrane::build_membrane_preview_soup_full(
-                &loop_pts,
-                membrane_smoothing,
-                density,
-            )
-            .ok_or_else(|| "membrane could not be built from the loop".to_string())?
-        };
-        let tri_count = soup.len() / 9;
-        let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
-        let tenon_bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&tenon_soup).to_vec();
-        let joint_tris = tenon_soup.len() / 9;
-        Ok::<_, String>((bytes, tri_count, tenon_bytes, joint_tris, tenon_tris, tenon_kind, tenon_fits, tenon_detail, tenon_frame))
-    })
-    .await
-    .map_err(|e| format!("membrane preview task panicked: {e}"))??;
-
-    let (bytes, tri_count, tenon_bytes, joint_tris, tenon_tris, tenon_kind, tenon_fits, tenon_detail, tenon_frame) = result;
-    *organic_cut_membrane_bytes()
-        .lock()
-        .map_err(|e| format!("membrane lock poisoned: {e}"))? = Some(bytes);
-    *organic_cut_tenon_bytes()
-        .lock()
-        .map_err(|e| format!("tenon lock poisoned: {e}"))? = Some(tenon_bytes);
-    // tenon_detail is plain ASCII status text; escape quotes/backslashes for JSON.
-    let tenon_detail_json = json_escape(&tenon_detail);
-    // The gizmo frame (anchor/axis/u/v/tip, model-local) so the frontend can place
-    // the aim + roll handles exactly on the previewed tenon. `null` when no tenon.
-    let tenon_frame_json = match tenon_frame {
-        Some(f) => format!(
-            "{{\"anchor\":[{},{},{}],\"axis\":[{},{},{}],\"u\":[{},{},{}],\"v\":[{},{},{}],\"tip\":[{},{},{}],\"depth\":{},\"maxTiltRad\":{},\"halfDiagMm\":{}}}",
-            f.anchor.x, f.anchor.y, f.anchor.z,
-            f.axis.x, f.axis.y, f.axis.z,
-            f.u.x, f.u.y, f.u.z,
-            f.v.x, f.v.y, f.v.z,
-            f.tip.x, f.tip.y, f.tip.z,
-            f.depth,
-            f.max_tilt,
-            f.half_diag,
-        ),
-        None => "null".to_string(),
-    };
-    Ok(format!(
-        "{{\"triangleCount\":{tri_count},\"jointTriangleCount\":{joint_tris},\"tenonTriangleCount\":{tenon_tris},\"tenonKind\":\"{tenon_kind}\",\"tenonFits\":{tenon_fits},\"tenonDetail\":\"{tenon_detail_json}\",\"tenonFrame\":{tenon_frame_json}}}"
-    ))
-}
-
-/// Preview the registration tenon a FLAT cut would place, framed on the cut plane.
-///
-/// The contour preview builds a membrane from the loop and frames the tenon on it;
-/// a flat cut has no membrane, so this takes the plane the frontend previewed and
-/// frames the tenon on the cross-section it carves. Same ladder and same build as
-/// the cut, so the preview is what lands. Writes the soup where
-/// `mesh_organic_cut_read_tenon` picks it up, and reports the same JSON shape as the
-/// membrane preview (with no membrane of its own: `triangleCount` is 0).
-#[tauri::command]
-pub async fn mesh_organic_cut_plane_tenon_preview(request_json: String) -> Result<String, String> {
-    let req = parse_geodesic_request(&request_json);
-    let normal = Vec3::new(req.plane_normal[0], req.plane_normal[1], req.plane_normal[2]);
-    let offset = req.plane_offset;
-    let generate_tenon = req.generate_tenon;
-    let tenon_shape = dragonfruit_organic_cut::TenonShape::from_str_or_default(&req.tenon_shape);
-    let tenon_tilt = dragonfruit_organic_cut::TenonTilt::new(req.tenon_tilt_rad, req.tenon_roll_rad);
-    let tenon_at: dragonfruit_organic_cut::TenonAnchor = req
-        .tenon_anchor
-        .map(|p| Vec3::new(p[0], p[1], p[2]));
+    let tenon_at: dragonfruit_organic_cut::TenonAnchor =
+        req.tenon_anchor.map(|p| Vec3::new(p[0], p[1], p[2]));
+    let tenon_tilt =
+        dragonfruit_organic_cut::TenonTilt::new(req.tenon_tilt_rad, req.tenon_roll_rad);
     let (tenon_width_mm, tenon_depth_mm, tenon_fillet_mm, tenon_tolerance_mm, tenon_swap_sides) = (
         req.tenon_width_mm,
         req.tenon_depth_mm,
@@ -1404,25 +1114,100 @@ pub async fn mesh_organic_cut_plane_tenon_preview(request_json: String) -> Resul
         req.tenon_swap_sides,
     );
 
-    let source_bytes = organic_cut_source_bytes()
-        .lock()
-        .map_err(|e| format!("organic cut source lock poisoned: {e}"))?
-        .clone();
-    let Some(bytes) = source_bytes else {
-        return Ok(NO_TENON_PREVIEW_JSON.to_string());
-    };
-    if !generate_tenon || normal.length() < 1e-6 {
-        return Ok(NO_TENON_PREVIEW_JSON.to_string());
-    }
-
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
-        let Some(frame) = dragonfruit_organic_cut::frame_from_plane(&mesh, normal, offset, tenon_at)
-        else {
-            return Ok::<_, String>(None);
+    let (membrane, tenon) = tauri::async_runtime::spawn_blocking(move || {
+        let mesh = source.mesh();
+        // The tenon preview probes the real mesh for wall clearance. `None` when no
+        // tenon was asked for or none can be framed (too thin, degenerate).
+        let tenon = if generate_tenon {
+            dragonfruit_organic_cut::build_tenon_preview_soup(
+                mesh,
+                &loop_pts,
+                membrane_smoothing,
+                density,
+                tenon_shape,
+                tenon_swap_sides,
+                tenon_tilt,
+                tenon_width_mm,
+                tenon_depth_mm,
+                tenon_fillet_mm,
+                // Same sum the cut spends, so the previewed fit is the real one.
+                tenon_tolerance_mm + joint_clearance_mm,
+                tenon_at,
+            )
+        } else {
+            None
         };
-        let preview = dragonfruit_organic_cut::build_tenon_preview_at_frame(
-            &mesh,
+        // The real loop offset needs the surface normals, which is why the cutter is
+        // built on the mesh rather than on the bare loop.
+        let membrane = dragonfruit_organic_cut::membrane::build_cutter_preview_soup(
+            mesh,
+            &loop_pts,
+            thickness_mm,
+            membrane_smoothing,
+            density,
+        )
+        .ok_or_else(|| "cutter could not be built from the loop".to_string())?;
+        Ok::<_, String>((membrane, tenon))
+    })
+    .await
+    .map_err(|e| format!("membrane preview task panicked: {e}"))??;
+
+    let report = tenon_preview_report(membrane.len() / 9, tenon.as_ref());
+    let mut ids = Vec::new();
+    if !membrane.is_empty() {
+        ids.push((
+            "membraneId",
+            store.put(owner.clone(), mesh_store::Entry::Soup(f32_bytes(&membrane))),
+        ));
+    }
+    ids.extend(store_tenon_soup(store, owner, tenon));
+    report_json_with_ids(&report, ids)
+}
+
+/// Previews the registration tenon a FLAT cut would place on a session's mesh, framed on the
+/// cut plane.
+///
+/// The contour preview builds a membrane from the loop and frames the tenon on it; a flat cut
+/// has no membrane, so this takes the plane the frontend previewed and frames the tenon on the
+/// cross-section it carves. Same ladder and same build as the cut, so the preview is what lands.
+/// Returns the same report as the membrane preview, with no membrane: `triangleCount` is 0 and
+/// only `tenonId` can appear.
+#[tauri::command]
+pub async fn mesh_organic_cut_session_plane_tenon_preview(
+    session_id: String,
+    request_json: String,
+) -> Result<String, String> {
+    let req = parse_geodesic_request(&request_json);
+    let store = mesh_store::global();
+    let source = store.organic_cut_source(&session_id)?;
+    let owner = store.owner_of(&session_id)?;
+    let normal = Vec3::new(
+        req.plane_normal[0],
+        req.plane_normal[1],
+        req.plane_normal[2],
+    );
+    if !req.generate_tenon || normal.length() < 1e-6 {
+        return report_json_with_ids(&tenon_preview_report(0, None), Vec::new());
+    }
+    let offset = req.plane_offset;
+    let tenon_shape = dragonfruit_organic_cut::TenonShape::from_str_or_default(&req.tenon_shape);
+    let tenon_tilt =
+        dragonfruit_organic_cut::TenonTilt::new(req.tenon_tilt_rad, req.tenon_roll_rad);
+    let tenon_at: dragonfruit_organic_cut::TenonAnchor =
+        req.tenon_anchor.map(|p| Vec3::new(p[0], p[1], p[2]));
+    let (tenon_width_mm, tenon_depth_mm, tenon_fillet_mm, tenon_tolerance_mm, tenon_swap_sides) = (
+        req.tenon_width_mm,
+        req.tenon_depth_mm,
+        req.tenon_fillet_mm,
+        req.tenon_tolerance_mm,
+        req.tenon_swap_sides,
+    );
+
+    let tenon = tauri::async_runtime::spawn_blocking(move || {
+        let mesh = source.mesh();
+        let frame = dragonfruit_organic_cut::frame_from_plane(mesh, normal, offset, tenon_at)?;
+        Some(dragonfruit_organic_cut::build_tenon_preview_at_frame(
+            mesh,
             frame,
             tenon_shape,
             tenon_swap_sides,
@@ -1431,78 +1216,76 @@ pub async fn mesh_organic_cut_plane_tenon_preview(request_json: String) -> Resul
             tenon_depth_mm,
             tenon_fillet_mm,
             tenon_tolerance_mm,
-        );
-        Ok(Some((
-            preview.soup,
-            preview.tenon_triangles,
-            preview.kind.as_str().to_string(),
-            preview.fits,
-            preview.detail,
-            preview.frame,
-        )))
+        ))
     })
     .await
-    .map_err(|e| format!("plane tenon preview task panicked: {e}"))??;
+    .map_err(|e| format!("plane tenon preview task panicked: {e}"))?;
 
-    let Some((tenon_soup, tenon_tris, tenon_kind, tenon_fits, tenon_detail, tenon_frame)) = result else {
-        return Ok(NO_TENON_PREVIEW_JSON.to_string());
+    let report = tenon_preview_report(0, tenon.as_ref());
+    report_json_with_ids(
+        &report,
+        store_tenon_soup(store, owner, tenon).into_iter().collect(),
+    )
+}
+
+/// What a cut preview reports besides its ids: the cutter's triangle count and, for the tenon,
+/// how many triangles the whole soup has (`jointTriangleCount`) and how many of those are the
+/// tenon (the rest are the mortise), which shape was placed, whether it fits where it sits, why
+/// not, and its placement frame for the aim and roll gizmo (`null` without a tenon).
+fn tenon_preview_report(
+    membrane_triangles: usize,
+    tenon: Option<&dragonfruit_organic_cut::TenonPreview>,
+) -> serde_json::Value {
+    let Some(tenon) = tenon else {
+        return serde_json::json!({
+            "triangleCount": membrane_triangles,
+            "jointTriangleCount": 0,
+            "tenonTriangleCount": 0,
+            "tenonKind": "none",
+            "tenonFits": true,
+            "tenonDetail": "",
+            "tenonFrame": null,
+        });
     };
-    let joint_tris = tenon_soup.len() / 9;
-    *organic_cut_tenon_bytes()
-        .lock()
-        .map_err(|e| format!("tenon lock poisoned: {e}"))? =
-        Some(bytemuck::cast_slice::<f32, u8>(&tenon_soup).to_vec());
-    let tenon_detail_json = json_escape(&tenon_detail);
-    let tenon_frame_json = match tenon_frame {
-        Some(f) => format!(
-            "{{\"anchor\":[{},{},{}],\"axis\":[{},{},{}],\"u\":[{},{},{}],\"v\":[{},{},{}],\"tip\":[{},{},{}],\"depth\":{},\"maxTiltRad\":{},\"halfDiagMm\":{}}}",
-            f.anchor.x, f.anchor.y, f.anchor.z,
-            f.axis.x, f.axis.y, f.axis.z,
-            f.u.x, f.u.y, f.u.z,
-            f.v.x, f.v.y, f.v.z,
-            f.tip.x, f.tip.y, f.tip.z,
-            f.depth,
-            f.max_tilt,
-            f.half_diag,
-        ),
-        None => "null".to_string(),
-    };
-    Ok(format!(
-        "{{\"triangleCount\":0,\"jointTriangleCount\":{joint_tris},\"tenonTriangleCount\":{tenon_tris},\"tenonKind\":\"{tenon_kind}\",\"tenonFits\":{tenon_fits},\"tenonDetail\":\"{tenon_detail_json}\",\"tenonFrame\":{tenon_frame_json}}}"
+    let xyz = |v: Vec3| [v.x, v.y, v.z];
+    let frame = tenon.frame.as_ref().map(|f| {
+        serde_json::json!({
+            "anchor": xyz(f.anchor),
+            "axis": xyz(f.axis),
+            "u": xyz(f.u),
+            "v": xyz(f.v),
+            "tip": xyz(f.tip),
+            "depth": f.depth,
+            "maxTiltRad": f.max_tilt,
+            "halfDiagMm": f.half_diag,
+        })
+    });
+    serde_json::json!({
+        "triangleCount": membrane_triangles,
+        "jointTriangleCount": tenon.soup.len() / 9,
+        "tenonTriangleCount": tenon.tenon_triangles,
+        "tenonKind": tenon.kind.as_str(),
+        "tenonFits": tenon.fits,
+        "tenonDetail": tenon.detail,
+        "tenonFrame": frame,
+    })
+}
+
+/// Stores a previewed tenon's soup and names it `tenonId`; nothing for no tenon or an empty one.
+fn store_tenon_soup(
+    store: &mesh_store::MeshStore,
+    owner: mesh_store::Owner,
+    tenon: Option<dragonfruit_organic_cut::TenonPreview>,
+) -> Option<(&'static str, String)> {
+    let tenon = tenon.filter(|tenon| !tenon.soup.is_empty())?;
+    Some((
+        "tenonId",
+        store.put(owner, mesh_store::Entry::Soup(f32_bytes(&tenon.soup))),
     ))
 }
 
-/// The empty answer for a tenon preview: no tenon, no frame, no membrane.
-const NO_TENON_PREVIEW_JSON: &str =
-    "{\"triangleCount\":0,\"jointTriangleCount\":0,\"tenonTriangleCount\":0,\"tenonKind\":\"none\",\"tenonFits\":true,\"tenonDetail\":\"\",\"tenonFrame\":null}";
-
-/// Returns the most recent registration-tenon preview as raw LE f32 triangle-soup
-/// bytes (tenon followed by mortise). Empty when no tenon was previewed.
-#[tauri::command]
-pub async fn mesh_organic_cut_read_tenon() -> Result<Response, String> {
-    let bytes = organic_cut_tenon_bytes()
-        .lock()
-        .map_err(|e| format!("tenon lock poisoned: {e}"))?
-        .clone()
-        .unwrap_or_default();
-    Ok(Response::new(bytes))
-}
-
-/// Minimal JSON string-body escaper for the short ASCII status messages we embed
-/// in hand-built response objects (quotes + backslashes only).
-fn json_escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// Returns the most recent membrane preview as raw LE f32 triangle-soup bytes.
-#[tauri::command]
-pub async fn mesh_organic_cut_read_membrane() -> Result<Response, String> {
-    let bytes = organic_cut_membrane_bytes()
-        .lock()
-        .map_err(|e| format!("membrane lock poisoned: {e}"))?
-        .clone()
-        .unwrap_or_default();
-    Ok(Response::new(bytes))
+fn f32_bytes(floats: &[f32]) -> Vec<u8> {
+    bytemuck::cast_slice::<f32, u8>(floats).to_vec()
 }
 
 /// Returns the current staged positions buffer as raw little-endian bytes.
@@ -3386,6 +3169,221 @@ mod store_isolation_tests {
 
     /// The same two callers, at the same time and many times over, through ids: each analysis
     /// sees its own mesh, and each classify result chains into an analysis of that result.
+    /// A flat cut through the middle of the 10 mm test meshes.
+    const MID_PLANE_CUT: &str = r#"{"cut":{"mode":"plane","plane":{"normal":[0,0,1],"offset":5}}}"#;
+
+    /// Four waypoints around the cube's sides at mid-height.
+    fn cube_belt() -> String {
+        r#"{"points":[{"position":[5,0,5]},{"position":[10,5,5]},{"position":[5,10,5]},{"position":[0,5,5]}],"close":true}"#
+            .to_string()
+    }
+
+    fn open_organic_cut_session(owner: &Owner, bytes: Vec<u8>) -> String {
+        let store = mesh_store::global();
+        let mesh_id = store.put(owner.clone(), Entry::Soup(bytes));
+        let session_id =
+            tauri::async_runtime::block_on(mesh_organic_cut_session_open(mesh_id.clone()))
+                .expect("session opened");
+        // The session keeps its own copy: the mesh it was opened from can go at once.
+        store.drop_ids(&[mesh_id]);
+        session_id
+    }
+
+    fn raw(response: Response) -> Vec<u8> {
+        use tauri::ipc::IpcResponse;
+        match response.body().unwrap() {
+            tauri::ipc::InvokeResponseBody::Raw(bytes) => bytes,
+            _ => panic!("expected a raw body"),
+        }
+    }
+
+    fn f32s(bytes: &[u8]) -> Vec<f32> {
+        bytes
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect()
+    }
+
+    /// Cuts on two sessions, run at the same time and many times over: each cuts its own
+    /// session's mesh, leaves the session as it was, and returns its parts as ids owned by the
+    /// session's owner.
+    #[test]
+    fn organic_cut_sessions_on_two_meshes_never_see_each_other() {
+        let owner = Owner::Frontend("organic-cut-session-test".to_string());
+        let sessions = [
+            (open_organic_cut_session(&owner, tetrahedron()), 4u64),
+            (open_organic_cut_session(&owner, cube()), 12u64),
+        ];
+
+        let runs: Vec<_> = (0..8)
+            .map(|i| {
+                let (session_id, expected) = sessions[i % 2].clone();
+                let owner = owner.clone();
+                std::thread::spawn(move || {
+                    let store = mesh_store::global();
+                    let report_json = tauri::async_runtime::block_on(
+                        mesh_organic_cut_session_apply(session_id, MID_PLANE_CUT.to_string()),
+                    )
+                    .expect("cut ran");
+                    let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+                    assert_eq!(
+                        report["sourceTriangleCount"].as_u64(),
+                        Some(expected),
+                        "run {i} cut another session's mesh"
+                    );
+                    let part_ids: Vec<String> = report["partIds"]
+                        .as_array()
+                        .unwrap_or_else(|| panic!("run {i}: no partIds in {report_json}"))
+                        .iter()
+                        .map(|id| id.as_str().unwrap().to_string())
+                        .collect();
+                    assert_eq!(part_ids.len() as u64, report["partCount"].as_u64().unwrap());
+                    assert_eq!(part_ids.len(), 2, "run {i}: {report_json}");
+                    for id in &part_ids {
+                        assert_eq!(store.owner_of(id).unwrap(), owner);
+                        assert!(!store.get_soup(id).unwrap().soup_bytes().unwrap().is_empty());
+                    }
+                    store.drop_ids(&part_ids);
+                })
+            })
+            .collect();
+        for run in runs {
+            run.join().expect("a run panicked");
+        }
+
+        let store = mesh_store::global();
+        for (session_id, _) in &sessions {
+            assert!(
+                store.organic_cut_source(session_id).is_ok(),
+                "a cut leaves its session in place"
+            );
+        }
+        store.drop_ids(&sessions.map(|(id, _)| id));
+    }
+
+    /// The seam is walked on the session's own mesh: every point of a belt around the cube's
+    /// sides lies on those sides, at the waypoints' height.
+    #[test]
+    fn an_organic_cut_seam_follows_its_session_mesh() {
+        let owner = Owner::Frontend("organic-cut-seam-test".to_string());
+        let session_id = open_organic_cut_session(&owner, cube());
+
+        for _ in 0..2 {
+            let response = tauri::async_runtime::block_on(mesh_organic_cut_session_geodesic_loop(
+                session_id.clone(),
+                cube_belt(),
+            ))
+            .expect("seam walked");
+            let floats = f32s(&raw(response));
+            assert!(floats.len() >= 12, "a belt has at least its four waypoints");
+            for point in floats.chunks_exact(3) {
+                let on_a_side = [point[0], point[1]]
+                    .iter()
+                    .any(|c| c.abs() < 1e-3 || (c - 10.0).abs() < 1e-3);
+                assert!(on_a_side, "{point:?} is off the cube's sides");
+                assert!((point[2] - 5.0).abs() < 1e-3, "{point:?} left mid-height");
+            }
+        }
+
+        let short = tauri::async_runtime::block_on(mesh_organic_cut_session_geodesic_loop(
+            session_id.clone(),
+            r#"{"points":[{"position":[5,0,5]}]}"#.to_string(),
+        ))
+        .expect("one point is not an error");
+        assert!(raw(short).is_empty());
+        mesh_store::global().drop_ids(&[session_id]);
+    }
+
+    /// The previews return their soups by id, and only the ones they built.
+    #[test]
+    fn organic_cut_previews_return_their_soups_by_id() {
+        let store = mesh_store::global();
+        let owner = Owner::Frontend("organic-cut-preview-test".to_string());
+        let session_id = open_organic_cut_session(&owner, cube());
+
+        let report_json = tauri::async_runtime::block_on(
+            mesh_organic_cut_session_membrane_preview(session_id.clone(), cube_belt()),
+        )
+        .expect("membrane preview ran");
+        let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+        let membrane_id = report["membraneId"].as_str().expect("a membrane id");
+        assert_eq!(store.owner_of(membrane_id).unwrap(), owner);
+        let membrane = store.read_bytes(membrane_id).unwrap();
+        assert!(!membrane.is_empty());
+        assert_eq!(
+            report["triangleCount"].as_u64(),
+            Some(membrane.len() as u64 / 36)
+        );
+        assert!(report.get("tenonId").is_none(), "no tenon was asked for");
+        store.drop_ids(&[membrane_id]);
+
+        let too_few = tauri::async_runtime::block_on(mesh_organic_cut_session_membrane_preview(
+            session_id.clone(),
+            r#"{"points":[{"position":[5,0,5]},{"position":[10,5,5]}]}"#.to_string(),
+        ))
+        .expect("two points is not an error");
+        let too_few: serde_json::Value = serde_json::from_str(&too_few).unwrap();
+        assert_eq!(too_few["triangleCount"].as_u64(), Some(0));
+        assert!(too_few.get("membraneId").is_none());
+
+        let tenon_request = r#"{"planeNormal":[0,0,1],"planeOffset":5,"generateTenon":true}"#;
+        let report_json = tauri::async_runtime::block_on(
+            mesh_organic_cut_session_plane_tenon_preview(session_id.clone(), tenon_request.into()),
+        )
+        .expect("plane tenon preview ran");
+        let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+        assert_eq!(report["triangleCount"].as_u64(), Some(0));
+        assert!(report.get("membraneId").is_none());
+        let joint_triangles = report["jointTriangleCount"].as_u64().unwrap();
+        let tenon_id = report["tenonId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a 2 mm tenon fits a 10 mm cube: {report_json}"));
+        assert_eq!(store.owner_of(tenon_id).unwrap(), owner);
+        assert_eq!(
+            store.read_bytes(tenon_id).unwrap().len() as u64 / 36,
+            joint_triangles
+        );
+        assert!(report["tenonFrame"].is_object());
+        store.drop_ids(&[tenon_id]);
+
+        let no_tenon =
+            tauri::async_runtime::block_on(mesh_organic_cut_session_plane_tenon_preview(
+                session_id.clone(),
+                r#"{"planeNormal":[0,0,1],"planeOffset":5}"#.to_string(),
+            ))
+            .expect("a preview without a tenon is not an error");
+        assert!(!no_tenon.contains("tenonId"), "{no_tenon}");
+        store.drop_ids(&[session_id]);
+    }
+
+    #[test]
+    fn an_organic_cut_session_command_on_the_wrong_id_says_why() {
+        let store = mesh_store::global();
+        let owner = Owner::Frontend("organic-cut-session-errors".to_string());
+        let mesh_id = store.put(owner.clone(), Entry::Soup(cube()));
+
+        let err = tauri::async_runtime::block_on(mesh_organic_cut_session_apply(
+            mesh_id.clone(),
+            MID_PLANE_CUT.to_string(),
+        ))
+        .unwrap_err();
+        assert!(err.starts_with("mesh-store/wrong_kind:"), "{err}");
+
+        let session_id = open_organic_cut_session(&owner, cube());
+        let err = tauri::async_runtime::block_on(mesh_organic_cut_session_open(session_id.clone()))
+            .unwrap_err();
+        assert!(err.starts_with("mesh-store/wrong_kind:"), "{err}");
+
+        store.drop_ids(&[mesh_id, session_id.clone()]);
+        let err = tauri::async_runtime::block_on(mesh_organic_cut_session_geodesic_loop(
+            session_id,
+            cube_belt(),
+        ))
+        .err()
+        .expect("a dropped session fails");
+        assert!(err.starts_with("mesh-store/unknown:"), "{err}");
+    }
+
     #[test]
     fn store_ids_keep_concurrent_passes_on_their_own_meshes() {
         let client = "store-isolation-test".to_string();

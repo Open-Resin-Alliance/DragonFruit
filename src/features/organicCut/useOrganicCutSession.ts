@@ -26,12 +26,11 @@ import {
   computeGeodesicLoop,
   computeMembranePreview,
   computePlaneTenonPreview,
-  cutFromCapturedSource,
-  isCutSourceStaged,
+  cutFromSource,
+  openCutSource,
   partToGeometry,
-  stageCutSource,
 } from './meshOrganicCut';
-import type { TenonPreviewKind, MembranePreviewResult } from './meshOrganicCut';
+import type { CutSource, TenonPreviewKind, MembranePreviewResult } from './meshOrganicCut';
 import { IDENTITY_CUT_SCALE, type CutScale } from './cutSpace';
 import { cutPlaneFromPoints } from './cutPlane';
 import { snapPointsToFeatureEdges } from './snapToEdges';
@@ -1083,16 +1082,13 @@ export function useOrganicCutSession({
     setPlaneCurves(null);
     let cancelled = false;
     void (async () => {
-      // Skip the staging await on the hot path: if the source is already staged
-      // for this geometry (always true after the first call / during a drag), go
-      // straight to the single-hop geodesic call.
-      if (!isCutSourceStaged(activeGeometryKey, activeGeometry, cutScale)) {
-        const staged = await stageCutSource(activeGeometry, activeGeometryKey, cutScale);
-        if (cancelled || !staged) return;
-      }
+      // The session is open after the first call (always, during a drag), so this
+      // resolves at once and the geodesic is the only round-trip.
+      const source = await openCutSource(activeGeometry, activeGeometryKey, cutScale);
+      if (cancelled || !source) return;
       // Close the loop only once there are enough points to form one.
       const close = loop.length >= 3;
-      const poly = await computeGeodesicLoop(loop, close, panelState.smoothing);
+      const poly = await computeGeodesicLoop(source, loop, close, panelState.smoothing);
       if (cancelled) return;
       setGeodesicPolyline(poly);
       // Cache the dense seam into the active loop slot — for rendering this loop
@@ -1131,7 +1127,7 @@ export function useOrganicCutSession({
     // Contour previews the cutter membrane with or without a tenon; the flat cut has
     // no membrane of its own (the seam is drawn locally), so it only has something
     // to ask for when a tenon is wanted.
-    const request = ((): (() => Promise<MembranePreviewResult>) | null => {
+    const request = ((): ((source: CutSource) => Promise<MembranePreviewResult>) | null => {
       if (!toolActive || isDraggingPoint || isDraggingTenon || !activeGeometry || !activeGeometryKey) return null;
       const ps = panelState;
       if (cutMode === 'contour') {
@@ -1141,8 +1137,9 @@ export function useOrganicCutSession({
           geodesicPolyline && geodesicPolyline.length >= 9
             ? geodesicPolylineToLoopPoints(geodesicPolyline)
             : loop;
-        return () =>
+        return (source) =>
           computeMembranePreview(
+            source,
             previewLoop,
             ps.membraneSmoothing,
             ps.density,
@@ -1162,8 +1159,9 @@ export function useOrganicCutSession({
       if (!ps.generateTenon || loop.length < MIN_LOOP_POINTS) return null;
       const plane = cutPlaneFromPoints(loop);
       if (!plane) return null;
-      return () =>
+      return (source) =>
         computePlaneTenonPreview(
+          source,
           [plane.normal.x, plane.normal.y, plane.normal.z],
           plane.offset,
           ps.generateTenon,
@@ -1224,9 +1222,9 @@ export function useOrganicCutSession({
     let cancelled = false;
     const timer = setTimeout(() => {
       void (async () => {
-        const staged = await stageCutSource(geometry, geometryKey, cutScale);
-        if (cancelled || !staged) return;
-        const result = await request();
+        const source = await openCutSource(geometry, geometryKey, cutScale);
+        if (cancelled || !source) return;
+        const result = await request(source);
         if (cancelled) return;
         setPreviewCache(cacheKey, geometry, result);
         // Every field, every time: the flat cut reports a null membrane, which is
@@ -1465,8 +1463,8 @@ export function useOrganicCutSession({
     setCutLeakPoints([]);
     void (async () => {
       try {
-        const staged = await stageCutSource(geom, geomKey, cutScaleRef.current);
-        if (!staged) {
+        const source = await openCutSource(geom, geomKey, cutScaleRef.current);
+        if (!source) {
           // Not in the Tauri runtime (e.g. browser dev) — nothing to do.
           return;
         }
@@ -1495,7 +1493,7 @@ export function useOrganicCutSession({
               // the bare waypoints — four waypoints spanned by a membrane is a flat
               // quad metres away from the surface the user drew on, and it cuts
               // exactly like that.
-              const poly = await computeGeodesicLoop(l.points, l.points.length >= 3, ps.smoothing);
+              const poly = await computeGeodesicLoop(source, l.points, l.points.length >= 3, ps.smoothing);
               if (cancelled) return;
               if (poly && poly.length >= MIN_CONTOUR_POINTS * 3) {
                 pts = geodesicPolylineToLoopPoints(poly);
@@ -1567,7 +1565,7 @@ export function useOrganicCutSession({
             tenonRollRad: ps.tenonRollRad,
           };
         }
-        const result = await cutFromCapturedSource({ cut: cutSpec });
+        const result = await cutFromSource(source, { cut: cutSpec });
         if (cancelled || !result) return;
         setLastResult(result);
         // A cut that refused says why, on screen. `noop` is the engine's way of

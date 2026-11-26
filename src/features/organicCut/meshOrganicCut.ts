@@ -1,21 +1,26 @@
 /**
  * Organic Cut — frontend ↔ Rust bridge.
  *
- * Shares the staging/read primitives in src/utils/tauriMeshBridge.ts with the
- * hollow, punch and repair bridges: stage the geometry as a binary triangle
- * soup, capture it as a non-mutating source, run a preview/apply, then read raw
- * little-endian f32 positions back. The shape
- * difference is that an organic cut returns N parts (≥2 — a multi-loop cut frees
- * several pieces) rather than one modified mesh: the report carries `partCount` and
- * each part is read back by index via `mesh_organic_cut_read_part`.
+ * Every call runs on an organic cut session in the native mesh store
+ * (`src/utils/nativeMeshStore.ts`). The session is opened once per source geometry and keeps
+ * the parsed mesh and its geodesic solver, so a seam, a preview or the cut itself names the
+ * session's id instead of sending the mesh again. Every soup a command returns comes back as
+ * an id, read once and dropped here. An organic cut returns N parts (≥2 — a multi-loop cut
+ * frees several pieces) rather than one modified mesh, so its report carries `partIds`. See
+ * `docs/dev/native-mesh-store.md`.
  */
 import * as THREE from 'three';
 import {
-  type TauriInvoke,
+  asNativeMeshStoreError,
+  dropNativeMeshes,
+  putNativeSoup,
+  readNativeMesh,
+} from '@/utils/nativeMeshStore';
+import {
+  type TauriCoreModule,
   decodeF32,
   expandGeometryToTriangleSoup,
   loadTauriCore,
-  stageGeometryToStagedMesh,
 } from '@/utils/tauriMeshBridge';
 import type { TenonPreviewFrame, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutReport, OrganicCutResult } from './types';
 import {
@@ -31,161 +36,167 @@ import {
   vectorToCutSpace,
 } from './cutSpace';
 
-let stagedCutSourceKey: string | null = null;
-// The geometry OBJECT last staged. Tracked alongside the tenon so that if a model's
-// geometry is replaced under the SAME id (e.g. a cut then undo restores the
-// original geometry reference), we detect the change and re-stage instead of
-// reusing the stale captured source.
-let stagedCutSourceGeometry: THREE.BufferGeometry | null = null;
-// The model's scale the staged source was built at. Everything sent to Rust after the
-// staging is scaled by it and everything read back is unscaled — see `cutSpace.ts`.
-let stagedCutScale: CutScale = IDENTITY_CUT_SCALE;
-
-type OrganicCutReadCommand =
-  | 'mesh_organic_cut_read_geodesic'
-  | 'mesh_organic_cut_read_membrane'
-  | 'mesh_organic_cut_read_tenon';
-
-async function readPositionsFromCommand(
-  invoke: TauriInvoke,
-  command: OrganicCutReadCommand,
-): Promise<Float32Array> {
-  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>(command);
-  return decodeF32(bytes, command);
+/**
+ * An open organic cut session: its id in the store, and the model's scale its mesh was stored
+ * at. Everything sent to the session is scaled by it and everything read back is unscaled —
+ * see `cutSpace.ts`.
+ */
+export interface CutSource {
+  readonly id: string;
+  readonly scale: CutScale;
 }
 
-/** Read the cut part at `index` (model-local triangle soup). */
-async function readPartAtIndex(invoke: TauriInvoke, index: number): Promise<Float32Array> {
-  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>('mesh_organic_cut_read_part', { index });
-  return pointsFromCutSpace(decodeF32(bytes, `mesh_organic_cut_read_part[${index}]`), stagedCutScale);
+interface OpenCutSource {
+  sourceKey: string;
+  // The geometry OBJECT the session was opened on. A model's geometry can be replaced under
+  // the SAME key (a cut then undo restores the original geometry reference), and that has to
+  // open a new session rather than reuse the stale one.
+  geometry: THREE.BufferGeometry;
+  scale: CutScale;
+  source: Promise<CutSource>;
 }
 
-/** Stage `geometry` with the model's scale applied, so Rust works in printed millimetres. */
-async function stageScaledGeometry(invoke: TauriInvoke, geometry: THREE.BufferGeometry, scale: CutScale): Promise<void> {
-  if (isIdentityCutScale(scale)) {
-    await stageGeometryToStagedMesh(invoke, geometry);
-    return;
-  }
+let openSource: OpenCutSource | null = null;
+
+/** `geometry` as a triangle soup at the model's scale, so Rust works in printed millimetres. */
+function scaledSoup(geometry: THREE.BufferGeometry, scale: CutScale): Float32Array {
   const soup = expandGeometryToTriangleSoup(geometry);
+  if (isIdentityCutScale(scale)) return soup;
   for (let i = 0; i < soup.length; i += 3) {
     soup[i] *= scale[0];
     soup[i + 1] *= scale[1];
     soup[i + 2] *= scale[2];
   }
-  await invoke('stage_mesh_binary_set', new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength), {
-    headers: { 'Content-Type': 'application/octet-stream' },
-  });
-}
-
-/** Read all `count` parts the cut produced (in order, largest first). */
-async function readAllParts(invoke: TauriInvoke, count: number): Promise<Float32Array[]> {
-  if (count <= 0) return [];
-  return Promise.all(Array.from({ length: count }, (_, i) => readPartAtIndex(invoke, i)));
+  return soup;
 }
 
 /**
- * Captures the given geometry as the non-mutating cut source for repeated
- * previews. Tenoned so re-staging the same geometry is a cheap no-op.
+ * The open session for this source: the one already open when the key, the geometry object
+ * and the scale all match, otherwise a new one, and the previous session is dropped.
+ *
+ * `scale` is the model's scale on the plate. The cut's sizes — the tenon, its fit, the joint
+ * clearance, the room a tenon has to grow — are printed millimetres, so the session holds the
+ * mesh at the size it prints, not at the size it was modelled. Returns null outside the Tauri
+ * runtime.
  */
-/**
- * True if the given source tenon is already staged + captured, so callers on a hot
- * path (e.g. the per-frame geodesic during a waypoint drag) can skip the
- * `stageCutSource` await entirely.
- */
-export function isCutSourceStaged(
-  sourceKey: string,
-  geometry?: THREE.BufferGeometry,
-  scale: CutScale = IDENTITY_CUT_SCALE,
-): boolean {
-  if (stagedCutSourceKey !== sourceKey) return false;
-  // Same tenon but a different geometry object → the mesh was replaced (cut/undo);
-  // treat as not staged so callers re-stage the current geometry.
-  if (geometry && stagedCutSourceGeometry !== geometry) return false;
-  // Rescaled on the plate since: the staged mesh is the wrong size.
-  return sameCutScale(stagedCutScale, scale);
-}
-
-/**
- * `scale` is the model's scale on the plate. The cut's sizes — the tenon, its fit, the
- * joint clearance, the room a tenon has to grow — are printed millimetres, so the
- * source is staged at the size it prints, not at the size it was modelled.
- */
-export async function stageCutSource(
+export async function openCutSource(
   geometry: THREE.BufferGeometry,
   sourceKey: string,
   scale: CutScale = IDENTITY_CUT_SCALE,
-): Promise<boolean> {
+): Promise<CutSource | null> {
   const core = await loadTauriCore();
-  if (!core) return false;
+  if (!core) return null;
 
-  // Re-stage if the tenon, the geometry object (same id can carry new geometry after a
-  // cut/undo) or the model's scale changed.
-  if (isCutSourceStaged(sourceKey, geometry, scale)) {
-    return true;
+  if (
+    openSource?.sourceKey === sourceKey
+    && openSource.geometry === geometry
+    && sameCutScale(openSource.scale, scale)
+  ) {
+    return openSource.source;
   }
 
-  await stageScaledGeometry(core.invoke, geometry, scale);
-  await core.invoke('mesh_organic_cut_capture_staged_source');
-  stagedCutSourceKey = sourceKey;
-  stagedCutSourceGeometry = geometry;
-  stagedCutScale = scale;
-  return true;
+  const previous = openSource;
+  const source = (async (): Promise<CutSource> => {
+    const meshId = await putNativeSoup(core, scaledSoup(geometry, scale));
+    try {
+      const id = await core.invoke<string>('mesh_organic_cut_session_open', { meshId });
+      return { id, scale };
+    } catch (error) {
+      throw asNativeMeshStoreError(error) ?? error;
+    } finally {
+      // The session keeps its own copy of the mesh.
+      await dropNativeMeshes(core, [meshId]).catch(() => undefined);
+    }
+  })();
+  const opened: OpenCutSource = { sourceKey, geometry, scale, source };
+  openSource = opened;
+  // A session that failed to open is not kept: the next call tries again.
+  source.catch(() => {
+    if (openSource === opened) openSource = null;
+  });
+  if (previous) {
+    void previous.source
+      .then(({ id }) => dropNativeMeshes(core, [id]))
+      .catch(() => undefined);
+  }
+  return source;
 }
 
 /**
- * Runs an organic cut against the previously captured source without mutating
- * the staged mesh buffer. Returns ALL parts + a report. A multi-loop cut that
- * frees several pieces returns >2 parts (one per piece).
+ * Runs a command on a session. When the store no longer has the session (released to stay in
+ * its budget, or dropped), it is forgotten, so the next `openCutSource` opens a new one; the
+ * error still reaches the caller.
  */
-export async function cutFromCapturedSource(
+async function invokeOnSource<T>(
+  core: TauriCoreModule,
+  source: CutSource,
+  command: string,
+  args: Record<string, unknown>,
+): Promise<T> {
+  try {
+    return await core.invoke<T>(command, { sessionId: source.id, ...args });
+  } catch (error) {
+    const storeError = asNativeMeshStoreError(error);
+    if (storeError && storeError.message.includes(`'${source.id}'`) && openSource) {
+      const open = openSource;
+      if ((await open.source.catch(() => null))?.id === source.id && openSource === open) {
+        openSource = null;
+      }
+    }
+    throw storeError ?? error;
+  }
+}
+
+/**
+ * Reads every stored soup a command returned, unscaled, and drops them all, including any a
+ * failed read left behind.
+ */
+async function takeSoups(
+  core: TauriCoreModule,
+  ids: readonly string[],
+  scale: CutScale,
+): Promise<Float32Array[]> {
+  try {
+    const soups = await Promise.all(ids.map((id) => readNativeMesh(core, id, { release: true })));
+    return soups.map((soup) => pointsFromCutSpace(soup, scale));
+  } finally {
+    // Ids already read with `release` are gone; dropping them again is a no-op.
+    await dropNativeMeshes(core, [...ids]).catch(() => undefined);
+  }
+}
+
+/**
+ * Runs an organic cut on an open session, which stays as it was. Returns ALL parts + a report.
+ * A multi-loop cut that frees several pieces returns >2 parts (one per piece). Returns null
+ * outside the Tauri runtime.
+ */
+export async function cutFromSource(
+  source: CutSource,
   options: OrganicCutOptions,
 ): Promise<OrganicCutResult | null> {
   const core = await loadTauriCore();
   if (!core) return null;
 
-  const optionsJson = JSON.stringify({ ...options, cut: specToCutSpace(options.cut, stagedCutScale) });
-  const reportJson = await core.invoke<string>('mesh_organic_cut_from_captured_source', { optionsJson });
-  const report = reportFromCutSpace(JSON.parse(reportJson) as OrganicCutReport);
-  const parts = await readAllParts(core.invoke, report.partCount ?? 0);
-  return { report, parts };
+  const optionsJson = JSON.stringify({ ...options, cut: specToCutSpace(options.cut, source.scale) });
+  const reportJson = await invokeOnSource<string>(core, source, 'mesh_organic_cut_session_apply', { optionsJson });
+  const { partIds = [], ...raw } = JSON.parse(reportJson) as OrganicCutReport & { partIds?: string[] };
+  const parts = await takeSoups(core, partIds, source.scale);
+  return { report: reportFromCutSpace(raw, source.scale), parts };
 }
 
-function reportFromCutSpace(report: OrganicCutReport): OrganicCutReport {
+function reportFromCutSpace(report: OrganicCutReport, scale: CutScale): OrganicCutReport {
   if (!report.leakPoints?.length) return report;
-  const flat = pointsFromCutSpace(new Float32Array(report.leakPoints.flat()), stagedCutScale);
+  const flat = pointsFromCutSpace(new Float32Array(report.leakPoints.flat()), scale);
   return { ...report, leakPoints: report.leakPoints.map((_, i) => [flat[i * 3], flat[i * 3 + 1], flat[i * 3 + 2]]) };
 }
 
 /**
- * One-shot: stage the geometry and run the cut, returning all parts.
- * Convenience for the non-preview "Apply" path.
- */
-export async function cutFromGeometry(
-  geometry: THREE.BufferGeometry,
-  options: OrganicCutOptions,
-): Promise<OrganicCutResult | null> {
-  const core = await loadTauriCore();
-  if (!core) return null;
-
-  await stageGeometryToStagedMesh(core.invoke, geometry);
-  stagedCutSourceKey = null;
-  stagedCutSourceGeometry = null;
-  stagedCutScale = IDENTITY_CUT_SCALE;
-
-  const optionsJson = JSON.stringify(options);
-  const reportJson = await core.invoke<string>('mesh_organic_cut_staged', { optionsJson });
-  const report = JSON.parse(reportJson) as OrganicCutReport;
-  const parts = await readAllParts(core.invoke, report.partCount ?? 0);
-  return { report, parts };
-}
-
-/**
- * Computes a surface-following (Stage-1 edge-path) loop polyline through the
- * given waypoints, against the captured cut source. Requires that the source has
- * already been staged + captured (via stageCutSource). Returns the polyline as a
- * flat Float32Array (3 per point), or null outside Tauri / on failure.
+ * Computes a surface-following loop polyline through the given waypoints on an open session.
+ * Returns the polyline as a flat Float32Array (3 per point), or null outside Tauri / on
+ * failure.
  */
 export async function computeGeodesicLoop(
+  source: CutSource,
   loopPoints: OrganicCutLoopPoint[],
   close: boolean,
   smoothing = 0.5,
@@ -195,29 +206,22 @@ export async function computeGeodesicLoop(
   if (loopPoints.length < 2) return null;
 
   const requestJson = JSON.stringify({
-    points: loopPoints.map((p) => ({ position: vectorToCutSpace(p.position, stagedCutScale) })),
+    points: loopPoints.map((p) => ({ position: vectorToCutSpace(p.position, source.scale) })),
     close,
     smoothing,
   });
   try {
-    // Single IPC round-trip: the command computes the loop AND returns the raw
-    // LE f32 polyline bytes as the response body (no separate read-back call).
-    // This is the hot path while dragging a waypoint — one hop per frame.
-    const bytes = await core.invoke<ArrayBuffer | Uint8Array | number[]>(
-      'mesh_organic_cut_geodesic_loop_bytes',
+    // Single IPC round-trip: the polyline's raw LE f32 bytes are the response body. This is
+    // the hot path while dragging a waypoint — one hop per frame.
+    const bytes = await invokeOnSource<ArrayBuffer | Uint8Array | number[]>(
+      core,
+      source,
+      'mesh_organic_cut_session_geodesic_loop',
       { requestJson },
     );
-    let u8: Uint8Array;
-    if (bytes instanceof ArrayBuffer) u8 = new Uint8Array(bytes);
-    else if (bytes instanceof Uint8Array) u8 = bytes;
-    else if (Array.isArray(bytes)) u8 = new Uint8Array(bytes);
-    else return null;
-    if (u8.byteLength < 24) return null; // < 2 points (3 floats each = 24 bytes)
-    // Copy into an aligned buffer before viewing as f32 (the IPC buffer may be a
-    // non-zero byteOffset view, which Float32Array can't wrap directly).
-    const copy = new Uint8Array(u8.byteLength);
-    copy.set(u8);
-    return pointsFromCutSpace(new Float32Array(copy.buffer), stagedCutScale);
+    const points = decodeF32(bytes, 'mesh_organic_cut_session_geodesic_loop');
+    if (points.length < 6) return null; // < 2 points
+    return pointsFromCutSpace(points, source.scale);
   } catch {
     return null;
   }
@@ -259,14 +263,58 @@ export interface MembranePreviewResult {
   tenonFrame: TenonPreviewFrame | null;
 }
 
+const EMPTY_PREVIEW: MembranePreviewResult = {
+  membrane: null,
+  tenonPreview: null,
+  tenonTriangleCount: 0,
+  tenonKind: 'none',
+  tenonFits: true,
+  tenonDetail: '',
+  tenonFrame: null,
+};
+
+/** What a preview command reports: its counts and tenon details, and the ids of its soups. */
+interface PreviewReport {
+  triangleCount: number;
+  jointTriangleCount?: number;
+  tenonTriangleCount?: number;
+  tenonKind?: TenonPreviewKind;
+  tenonFits?: boolean;
+  tenonDetail?: string;
+  tenonFrame?: TenonPreviewFrame | null;
+  membraneId?: string;
+  tenonId?: string;
+}
+
+/** Collects a preview command's result: reads its soups, drops them, and unscales it all. */
+async function collectPreview(
+  core: TauriCoreModule,
+  source: CutSource,
+  reportJson: string,
+): Promise<MembranePreviewResult> {
+  const report = JSON.parse(reportJson) as PreviewReport;
+  const ids = [report.membraneId, report.tenonId].filter((id): id is string => !!id);
+  const soups = await takeSoups(core, ids, source.scale);
+  const soupFor = (id: string | undefined) => (id ? soups[ids.indexOf(id)] : null);
+  return {
+    membrane: soupFor(report.membraneId),
+    tenonPreview: soupFor(report.tenonId),
+    tenonTriangleCount: report.tenonTriangleCount ?? 0,
+    tenonKind: report.tenonKind ?? 'none',
+    tenonFits: report.tenonFits ?? true,
+    tenonDetail: report.tenonDetail ?? '',
+    tenonFrame: report.tenonFrame ? frameFromCutSpace(report.tenonFrame, source.scale) : null,
+  };
+}
+
 /**
- * Builds the contour-cut MEMBRANE (and, when `generateTenon`, the registration tenon)
- * for the given loop, returning each as a flat triangle soup (9 floats per
- * triangle, model-local) for previewing in the scene. Requires the source already
- * staged + captured. Returns a result with null soups outside Tauri / on failure /
- * <3 points.
+ * Builds the contour-cut MEMBRANE (and, when `generateTenon`, the registration tenon) for the
+ * given loop on an open session, returning each as a flat triangle soup (9 floats per
+ * triangle, model-local) for previewing in the scene. Returns a result with null soups
+ * outside Tauri / on failure / <3 points.
  */
 export async function computeMembranePreview(
+  source: CutSource,
   loopPoints: OrganicCutLoopPoint[],
   membraneSmoothing = 0.5,
   density = 1.0,
@@ -282,21 +330,12 @@ export async function computeMembranePreview(
   tenonTiltRad = 0.0,
   tenonRollRad = 0.0,
 ): Promise<MembranePreviewResult> {
-  const empty: MembranePreviewResult = {
-    membrane: null,
-    tenonPreview: null,
-    tenonTriangleCount: 0,
-    tenonKind: 'none',
-    tenonFits: true,
-    tenonDetail: '',
-    tenonFrame: null,
-  };
   const core = await loadTauriCore();
-  if (!core) return empty;
-  if (loopPoints.length < 3) return empty;
+  if (!core) return { ...EMPTY_PREVIEW };
+  if (loopPoints.length < 3) return { ...EMPTY_PREVIEW };
 
   const requestJson = JSON.stringify({
-    points: loopPoints.map((p) => ({ position: loopPointToCutSpace(p, stagedCutScale).position })),
+    points: loopPoints.map((p) => ({ position: loopPointToCutSpace(p, source.scale).position })),
     close: true,
     membraneSmoothing,
     density,
@@ -308,39 +347,21 @@ export async function computeMembranePreview(
     tenonFilletMm,
     tenonToleranceMm,
     tenonSwapSides,
-    tenonAnchor: tenonAnchor && vectorToCutSpace(tenonAnchor, stagedCutScale),
+    tenonAnchor: tenonAnchor && vectorToCutSpace(tenonAnchor, source.scale),
     tenonTiltRad,
     tenonRollRad,
   });
   try {
-    const reportJson = await core.invoke<string>('mesh_organic_cut_membrane_preview', { requestJson });
-    const report = JSON.parse(reportJson) as {
-      triangleCount: number;
-      jointTriangleCount?: number;
-      tenonTriangleCount?: number;
-      tenonKind?: TenonPreviewKind;
-      tenonFits?: boolean;
-      tenonDetail?: string;
-      tenonFrame?: TenonPreviewFrame | null;
-    };
-    const membrane = report.triangleCount
-      ? pointsFromCutSpace(await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_membrane'), stagedCutScale)
-      : null;
-    const tenonPreview = report.jointTriangleCount
-      ? pointsFromCutSpace(await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_tenon'), stagedCutScale)
-      : null;
-    return {
-      membrane,
-      tenonPreview,
-      tenonTriangleCount: report.tenonTriangleCount ?? 0,
-      tenonKind: report.tenonKind ?? 'none',
-      tenonFits: report.tenonFits ?? true,
-      tenonDetail: report.tenonDetail ?? '',
-      tenonFrame: report.tenonFrame ? frameFromCutSpace(report.tenonFrame, stagedCutScale) : null,
-    };
+    const reportJson = await invokeOnSource<string>(
+      core,
+      source,
+      'mesh_organic_cut_session_membrane_preview',
+      { requestJson },
+    );
+    return await collectPreview(core, source, reportJson);
   } catch (err) {
     console.error('[organicCut] membrane preview command failed', err);
-    return empty;
+    return { ...EMPTY_PREVIEW };
   }
 }
 
@@ -353,6 +374,7 @@ export async function computeMembranePreview(
  * carves. Returns the same shape, with a null membrane.
  */
 export async function computePlaneTenonPreview(
+  source: CutSource,
   planeNormal: [number, number, number],
   planeOffset: number,
   generateTenon: boolean,
@@ -364,19 +386,10 @@ export async function computePlaneTenonPreview(
   tenonSwapSides = false,
   tenonAnchor: [number, number, number] | null = null,
 ): Promise<MembranePreviewResult> {
-  const empty: MembranePreviewResult = {
-    membrane: null,
-    tenonPreview: null,
-    tenonTriangleCount: 0,
-    tenonKind: 'none',
-    tenonFits: true,
-    tenonDetail: '',
-    tenonFrame: null,
-  };
   const core = await loadTauriCore();
-  if (!core) return empty;
+  if (!core) return { ...EMPTY_PREVIEW };
 
-  const plane = planeToCutSpace({ normal: planeNormal, offset: planeOffset }, stagedCutScale);
+  const plane = planeToCutSpace({ normal: planeNormal, offset: planeOffset }, source.scale);
   const requestJson = JSON.stringify({
     planeNormal: plane.normal,
     planeOffset: plane.offset,
@@ -387,33 +400,19 @@ export async function computePlaneTenonPreview(
     tenonFilletMm,
     tenonToleranceMm,
     tenonSwapSides,
-    tenonAnchor: tenonAnchor && vectorToCutSpace(tenonAnchor, stagedCutScale),
+    tenonAnchor: tenonAnchor && vectorToCutSpace(tenonAnchor, source.scale),
   });
   try {
-    const reportJson = await core.invoke<string>('mesh_organic_cut_plane_tenon_preview', { requestJson });
-    const report = JSON.parse(reportJson) as {
-      jointTriangleCount?: number;
-      tenonTriangleCount?: number;
-      tenonKind?: TenonPreviewKind;
-      tenonFits?: boolean;
-      tenonDetail?: string;
-      tenonFrame?: TenonPreviewFrame | null;
-    };
-    const tenonPreview = report.jointTriangleCount
-      ? pointsFromCutSpace(await readPositionsFromCommand(core.invoke, 'mesh_organic_cut_read_tenon'), stagedCutScale)
-      : null;
-    return {
-      membrane: null,
-      tenonPreview,
-      tenonTriangleCount: report.tenonTriangleCount ?? 0,
-      tenonKind: report.tenonKind ?? 'none',
-      tenonFits: report.tenonFits ?? true,
-      tenonDetail: report.tenonDetail ?? '',
-      tenonFrame: report.tenonFrame ? frameFromCutSpace(report.tenonFrame, stagedCutScale) : null,
-    };
+    const reportJson = await invokeOnSource<string>(
+      core,
+      source,
+      'mesh_organic_cut_session_plane_tenon_preview',
+      { requestJson },
+    );
+    return await collectPreview(core, source, reportJson);
   } catch (err) {
     console.error('[organicCut] plane tenon preview command failed', err);
-    return empty;
+    return { ...EMPTY_PREVIEW };
   }
 }
 

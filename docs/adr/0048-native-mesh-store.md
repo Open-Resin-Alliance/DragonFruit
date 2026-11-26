@@ -78,7 +78,7 @@ the sideloaded plugin runtime (slots by id).
   input to one pass, and results are released as they are read.
 - The staging slot, its file form and the 18 session slots stay until their families
   move; they are deleted as each one does. Hollowing's ten went first, then hole punching's
-  two.
+  two, then the organic cut's six.
 
 ## Alternatives considered
 

@@ -12,8 +12,7 @@ that use it can run at the same time on different meshes, which the staging regi
 `stage_mesh_binary_set` writes one process-wide slot, and the next command that reads staging
 reads whatever is there. Two passes in flight on two meshes read each other's mesh and nothing
 errors, so the frontend had to queue every pass. The register stays for the families not yet
-migrated (organic cut, islands, shrink-wrap, slicing); new code should not add
-callers to it.
+migrated (islands, shrink-wrap, slicing); new code should not add callers to it.
 
 ## Public surface
 
@@ -22,13 +21,14 @@ callers to it.
 - `MeshStore` with `put`, `get`, `take`, `owner_of`, `drop_ids`, `drop_other_frontend_clients`
   and `stats`; `mesh_store::global()` is the process's store.
 - Readers that check the kind: `get_soup`, `read_bytes` and `take_bytes` (a soup or a buffer),
-  and `hollow_source`.
+  `hollow_source` and `organic_cut_source`.
 - `Entry`: what an entry holds, a closed enum.
   - `Entry::Soup`: a little-endian `f32` triangle soup, nine floats per triangle.
   - `Entry::Buffer`: an output that is not a mesh, as raw little-endian bytes. The command
     that returns its id says what is in it.
   - `Entry::Session`: what a long-lived operation keeps between calls.
-    `Session::Hollow` holds a `HollowSource` (`hollow_source.rs`).
+    `Session::Hollow` holds a `HollowSource` (`hollow_source.rs`), and `Session::OrganicCut`
+    an `OrganicCutSource` (`organic_cut_source.rs`).
 - `Owner`: who an entry belongs to. `Owner::Frontend` is one page load.
 - `StoreError`, whose string form starts with `mesh-store/<code>:`:
   - `Expired`: released to stay inside the budget.
@@ -81,6 +81,21 @@ and punches it again by id on every change.
 | --- | --- | --- |
 | `mesh_punch_staged(optionsJson, meshId)` | `meshId`, left in the store as it was | `meshId`, owned by the input's owner |
 
+**Organic cut** runs on a session only. Every call the cut tool makes, from the seam to the
+cut itself, names the session, and every soup it returns belongs to the session's owner.
+
+| Command | Input | Result |
+| --- | --- | --- |
+| `mesh_organic_cut_session_open(meshId)` | `meshId` | the session's id |
+| `mesh_organic_cut_session_geodesic_loop(sessionId, requestJson)` | `sessionId` | the seam's points (`f32`, three per point), directly |
+| `mesh_organic_cut_session_membrane_preview(sessionId, requestJson)` | `sessionId` | `membraneId`, and `tenonId` when a tenon was built |
+| `mesh_organic_cut_session_plane_tenon_preview(sessionId, requestJson)` | `sessionId` | `tenonId` when a tenon was built |
+| `mesh_organic_cut_session_apply(sessionId, optionsJson)` | `sessionId`, left as it was | `partIds`, one soup per part, largest first |
+
+The seam comes back in the response because it is asked for on every frame of a waypoint drag,
+and a second round trip to read it would double that. A cut that refused (`engine: "noop"`)
+returns no parts.
+
 **TypeScript** (`src/utils/nativeMeshStore.ts`) is the only frontend module that calls the
 primitives:
 
@@ -88,8 +103,10 @@ primitives:
   afterwards, whether the pass succeeds or not.
 - `takeResultPositions(core, commandResult, command)` reads a command's result and drops it.
 - `openNativeMeshClient(core)` returns this page load's client id, opening it on first use.
-- `putNativeMesh`, `readNativeMesh`, `readNativeBuffer`, `dropNativeMeshes`,
-  `nativeMeshStoreStats` for the cases the two helpers above do not cover.
+- `putNativeMesh`, `putNativeSoup`, `readNativeMesh`, `readNativeBuffer`, `dropNativeMeshes`,
+  `nativeMeshStoreStats` for the cases the two helpers above do not cover. `putNativeSoup`
+  takes a soup the caller has already changed, such as the organic cut's, scaled to printed
+  size.
 - `NativeMeshStoreError` with `code` `expired`, `unknown` or `wrong_kind`, and
   `asNativeMeshStoreError` to recognise one in a rejected command.
 
@@ -110,12 +127,21 @@ a session:
 - `punchStoredSource(sourceId, options)` punches it and collects the result;
   `punchFromGeometry` punches a geometry once, inside `withNativeMesh`.
 
+`src/features/organicCut/meshOrganicCut.ts` holds the organic cut session:
+
+- `openCutSource(geometry, sourceKey, scale)` returns the open session as a `CutSource` (its id
+  and the scale its mesh was stored at), or opens a new one and drops the previous. A new
+  geometry object under the same key, or a new scale, opens a new session.
+- `computeGeodesicLoop`, `computeMembranePreview`, `computePlaneTenonPreview` and
+  `cutFromSource` take the `CutSource`, scale what they send by it and unscale what they read.
+
 ## Sessions
 
 A session is an entry that keeps an operation's expensive state between calls. Hollowing
 opens one per source geometry: the session parses the mesh once and keeps the voxel grid it
 builds, and the grid is rebuilt only when the resolution or the rotation changes. Changing the
-shell, the infill or the blockers reuses it.
+shell, the infill or the blockers reuses it. The organic cut opens one the same way and keeps
+the geodesic solver it builds for the first seam, so dragging a waypoint only walks the graph.
 
 - **A session keeps its own copy of the source.** Once it is open, the mesh it was opened from
   can be dropped; `openHollowSession` drops it straight away. Nothing pins a stored entry: a
@@ -124,10 +150,12 @@ shell, the infill or the blockers reuses it.
 - **A session is dropped like any id.** `openHollowSession` drops the previous session when
   the source changes. Commands already running on the old one hold their own reference and
   finish; a command sent with its id afterwards fails with `unknown`.
-- **The budget counts the parsed source, not the grid.** The grid is built on first use and
-  its size depends on the resolution, so `HollowSource::byte_len` leaves it out for now.
+- **The budget counts the parsed source, not the grid or the solver.** Both are built on
+  first use and their size depends on the settings or the mesh, so `HollowSource::byte_len`
+  and `OrganicCutSource::byte_len` leave them out for now.
 - **Two sessions never see each other's mesh.** `hollow_sessions_on_two_meshes_never_see_each_other`
-  in `mesh_repair.rs` previews two sessions from several threads at once.
+  and `organic_cut_sessions_on_two_meshes_never_see_each_other` in `mesh_repair.rs` run two
+  sessions from several threads at once.
 
 ## Usage
 

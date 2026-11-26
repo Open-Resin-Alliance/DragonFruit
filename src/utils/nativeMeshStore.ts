@@ -82,12 +82,19 @@ export function openNativeMeshClient(core: TauriCoreModule): Promise<string> {
 }
 
 /** Puts a geometry into the store as a triangle soup and returns its id. */
-export async function putNativeMesh(
+export function putNativeMesh(
   core: TauriCoreModule,
   geometry: THREE.BufferGeometry,
 ): Promise<string> {
+  return putNativeSoup(core, expandGeometryToTriangleSoup(geometry));
+}
+
+/**
+ * Puts a triangle soup (nine floats per triangle) into the store and returns its id, for a
+ * caller that has to change the positions first, such as scaling them to printed size.
+ */
+export async function putNativeSoup(core: TauriCoreModule, soup: Float32Array): Promise<string> {
   const client = await openNativeMeshClient(core);
-  const soup = expandGeometryToTriangleSoup(geometry);
   const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
   return core.invoke<string>('mesh_store_put', bytes, {
     headers: {

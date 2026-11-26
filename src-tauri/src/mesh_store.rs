@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use serde::Serialize;
 
 use crate::hollow_source::HollowSource;
+use crate::organic_cut_source::OrganicCutSource;
 
 /// What an entry holds. A closed set: a reader asks for the kind it needs, and an id that
 /// holds another kind fails with `wrong_kind`.
@@ -39,6 +40,8 @@ pub enum Entry {
 pub enum Session {
     /// A hollowing source: the parsed mesh and the voxel grid last built from it.
     Hollow(Arc<HollowSource>),
+    /// An organic cut source: the parsed mesh and the geodesic solver built from it.
+    OrganicCut(Arc<OrganicCutSource>),
 }
 
 /// An entry's kind, for `wrong_kind` errors and for readers that accept more than one.
@@ -47,6 +50,7 @@ pub enum EntryKind {
     Soup,
     Buffer,
     HollowSession,
+    OrganicCutSession,
 }
 
 impl EntryKind {
@@ -55,6 +59,7 @@ impl EntryKind {
             EntryKind::Soup => "triangle soup",
             EntryKind::Buffer => "buffer",
             EntryKind::HollowSession => "hollow session",
+            EntryKind::OrganicCutSession => "organic cut session",
         }
     }
 }
@@ -65,6 +70,7 @@ impl Entry {
             Entry::Soup(_) => EntryKind::Soup,
             Entry::Buffer(_) => EntryKind::Buffer,
             Entry::Session(Session::Hollow(_)) => EntryKind::HollowSession,
+            Entry::Session(Session::OrganicCut(_)) => EntryKind::OrganicCutSession,
         }
     }
 
@@ -72,6 +78,7 @@ impl Entry {
         match self {
             Entry::Soup(bytes) | Entry::Buffer(bytes) => bytes.len(),
             Entry::Session(Session::Hollow(source)) => source.byte_len(),
+            Entry::Session(Session::OrganicCut(source)) => source.byte_len(),
         }
     }
 
@@ -339,6 +346,19 @@ impl MeshStore {
             other => Err(wrong_kind(
                 id,
                 EntryKind::HollowSession.as_str(),
+                other.kind(),
+            )),
+        }
+    }
+
+    /// The organic cut session under `id`.
+    pub fn organic_cut_source(&self, id: &str) -> Result<Arc<OrganicCutSource>, StoreError> {
+        let entry = self.get(id)?;
+        match &*entry {
+            Entry::Session(Session::OrganicCut(source)) => Ok(source.clone()),
+            other => Err(wrong_kind(
+                id,
+                EntryKind::OrganicCutSession.as_str(),
                 other.kind(),
             )),
         }
