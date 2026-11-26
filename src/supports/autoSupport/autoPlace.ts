@@ -83,6 +83,7 @@ import { memberDepartureAngleFromVerticalDeg } from '../PlacementLogic/smartPlac
  */
 import {
     coneKeepsContactHighest,
+    isRenderedConeSideWall,
     isSideWallContact,
     maxConeBodyDiameterForContact,
     MAX_SIDE_WALL_CONTACT_LEAN_DEG,
@@ -1541,6 +1542,37 @@ function startContactCandidates(
     return candidates;
 }
 
+function trunkContactConeRejectionMessage(
+    cone: ContactCone | undefined,
+    candidateId: string,
+): string | null {
+    if (!cone) return null;
+    const isSideWall = cone.normal
+        ? isRenderedConeSideWall(cone.normal)
+        : (cone.surfaceNormal
+            ? isSideWallContact(
+                cone.surfaceNormal,
+                getSettings().tip.coneAngleMode ?? 'normal',
+                getSettings().tip.adaptiveConeAngleOffsetDeg,
+            )
+            : false);
+    if (isSideWall) {
+        return `Rejected ${candidateId}: side-wall trunk too shallow (cone within ${90 - MAX_SIDE_WALL_CONTACT_LEAN_DEG}° of flat)`;
+    }
+    // The axis policy's side-wall bound is not the whole geometry: a socket
+    // moved by the disk/standoff pass can still lift the cone's body rim over
+    // the contact. Validate the cone that will render.
+    if (!coneKeepsContactHighest({
+        coneAxis: cone.normal,
+        socketPos: getFinalSocketPosition(cone),
+        tipPos: cone.pos,
+        bodyDiameterMm: cone.profile.bodyDiameterMm,
+    })) {
+        return `Rejected ${candidateId}: contact cone rises above its tip after socket placement`;
+    }
+    return null;
+}
+
 function placeOneCandidate(
     candidate: CandidatePoint,
     draft: SupportState,
@@ -2122,26 +2154,10 @@ function placeOneCandidate(
     // `adaptive` those same contacts now measure ~69° (the policy tilts the axis
     // toward the plate) and stay.
     {
-        const cone = trunkResult.trunk.contactCone;
-        const n = cone?.normal ?? cone?.surfaceNormal;
-        if (n) {
-            const settings = getSettings();
-            if (isSideWallContact(n, settings.tip.coneAngleMode ?? 'normal', settings.tip.adaptiveConeAngleOffsetDeg)) {
-                logPlacement(`Rejected ${candidate.id}: side-wall trunk too shallow (cone within ${90 - MAX_SIDE_WALL_CONTACT_LEAN_DEG}° of flat)`);
-                return { kind: 'reject', rejectedReason: 'trunk_build_error', preset, draft: d };
-            }
-            // The axis policy's side-wall bound is not the whole geometry: a
-            // socket moved by the disk/standoff pass can still lift the cone's
-            // body rim over the contact. Validate the cone that will render.
-            if (cone && !coneKeepsContactHighest({
-                coneAxis: cone.normal,
-                socketPos: getFinalSocketPosition(cone),
-                tipPos: cone.pos,
-                bodyDiameterMm: cone.profile.bodyDiameterMm,
-            })) {
-                logPlacement(`Rejected ${candidate.id}: contact cone rises above its tip after socket placement`);
-                return { kind: 'reject', rejectedReason: 'trunk_build_error', preset, draft: d };
-            }
+        const coneRejection = trunkContactConeRejectionMessage(trunkResult.trunk.contactCone, candidate.id);
+        if (coneRejection) {
+            logPlacement(coneRejection);
+            return { kind: 'reject', rejectedReason: 'trunk_build_error', preset, draft: d };
         }
     }
 
@@ -5997,6 +6013,9 @@ export function computeAutoSupportPlan(
             },
         );
         if (trunkBuilt.error || !trunkBuilt.trunk || !trunkBuilt.root) return null;
+        if (trunkContactConeRejectionMessage(trunkBuilt.trunk.contactCone, candidate.id)) {
+            return null;
+        }
         const rootTop: Vec3 = {
             x: trunkBuilt.root.transform.pos.x,
             y: trunkBuilt.root.transform.pos.y,

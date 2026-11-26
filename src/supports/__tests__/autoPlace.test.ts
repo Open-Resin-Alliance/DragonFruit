@@ -1771,4 +1771,69 @@ test('buildStick matches cone bodyDiameterMm to explicit shaftDiameterMm overrid
     assert.equal(stick.contactConeA.profile.contactDiameterMm, 0.35);
 });
 
+test('1B: trunk side-wall guard rejects 76.67° rendered adaptive cone without double-applying ConeAxisPolicy', () => {
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    const disposeHandlers = registerSupportHistoryHandlers();
+    initializeBVH();
+    const prevSettings = getSettings();
+
+    try {
+        const settings = createDefaultSettings();
+        settings.grid.enabled = false;
+        settings.tip.coneAngleMode = 'adaptive';
+        settings.tip.adaptiveConeAngleOffsetDeg = 10;
+        settings.tip.bodyDiameterMm = 0.6;
+        settings.autoSupport.sizingPreset = 'structure';
+        settings.autoSupport.sizeScale = 0.6;
+        setSettings(settings);
+
+        const wallLeanDeg = 86;
+        const rad = THREE.MathUtils.degToRad(wallLeanDeg);
+        const surfaceNormal = { x: Math.sin(rad), y: 0, z: -Math.cos(rad) };
+
+        // Small box whose -Z face passes through (0, 0, 20) with normal at 86° off -Z.
+        const geometry = new THREE.BoxGeometry(4, 4, 2);
+        geometry.rotateY(-rad);
+        geometry.translate(-Math.sin(rad), 0, 20 + Math.cos(rad));
+        accelerateGeometry(geometry);
+        const mesh = new THREE.Mesh(geometry);
+        mesh.updateMatrixWorld(true);
+        setModelMesh('model-a', mesh);
+
+        const island: DetectedIsland = {
+            id: 'adaptive-86-wall',
+            source: 'minima',
+            contact: new THREE.Vector3(0, 0, 20),
+            baseZ: 20,
+            areaMm2: 0.5,
+            surfaceNormal,
+        };
+
+        const plan = computeAutoSupportPlan(
+            [island],
+            'model-a',
+            {
+                debugSkipAutoBracing: true,
+                stabilizationEnabled: false,
+                minimaReinforcementEnabled: false,
+                sizeScale: 0.6,
+            },
+            undefined,
+            mesh,
+        );
+        assert.ok(plan, 'auto-support plan computed');
+        assert.equal(
+            plan.result.placed.trunk,
+            0,
+            `86° contact renders 76.67° (> 75°) adaptive cone and must be rejected without double-policy (placed=${JSON.stringify(plan.result.placed)})`,
+        );
+    } finally {
+        setModelMesh('model-a', null);
+        setSettings(prevSettings);
+        disposeHandlers();
+    }
+});
+
 

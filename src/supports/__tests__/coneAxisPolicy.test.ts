@@ -6,9 +6,11 @@ import * as THREE from 'three';
 import {
     coneAxisLeanFromVerticalDeg,
     coneKeepsContactHighest,
+    isRenderedConeSideWall,
     isSideWallContact,
     maxConeBodyDiameterForContact,
     MAX_SIDE_WALL_CONTACT_LEAN_DEG,
+    renderedConeLeanFromVerticalDeg,
     resolveConeAxisPolicy,
 } from '../PlacementLogic/ConeAxisPolicy';
 import type { Vec3 } from '../types';
@@ -143,4 +145,27 @@ test('a cone stays under its contact until its own socket end would rise over it
     assert.ok(coneKeepsContactHighest(coneUnderTest(45, 3, 1.2)), 'so does the 45° shape');
     assert.ok(coneKeepsContactHighest(coneUnderTest(60, 2.5, 1.0)),
         'the adaptive wall cone (60° off vertical) keeps its tip on top');
+});
+
+test('renderedConeLeanFromVerticalDeg and isRenderedConeSideWall measure raw cone axes directly', () => {
+    assert.equal(isRenderedConeSideWall(leaningNormal(74)), false, '74° rendered cone stays inside 75° bound');
+    assert.equal(isRenderedConeSideWall(leaningNormal(76)), true, '76° rendered cone is a side wall');
+
+    const upwardCone = { x: Math.sin(0.2), y: 0, z: Math.cos(0.2) };
+    const upwardLean = renderedConeLeanFromVerticalDeg(upwardCone);
+    assert.ok(upwardLean > 168, `upward +Z cone must exceed 168° off -Z (got ${upwardLean.toFixed(2)}°)`);
+    assert.equal(isRenderedConeSideWall(upwardCone), true, 'upward +Z cone is rejected as a side wall');
+
+    const tilted80 = leaningNormal(80);
+    assert.equal(isSideWallContact(tilted80, 'adaptive'), false, 're-running adaptive policy on 80° normal clears 75°');
+    assert.equal(isSideWallContact(tilted80, 'locked'), false, 're-running locked policy on 80° normal clears 75°');
+    assert.equal(isRenderedConeSideWall(tilted80), true, 'direct rendered check refuses 80° cone without double-policy');
+
+    const singlePass = resolveConeAxisPolicy({
+        surfaceNormal: leaningNormal(80.8),
+        coneAngleMode: 'adaptive',
+    }).coneAxis;
+    const singlePassLean = renderedConeLeanFromVerticalDeg(singlePass);
+    assert.ok(singlePassLean > 55 && singlePassLean < 56, `single-pass 80.8° adaptive cone leans ~55.4° (got ${singlePassLean.toFixed(2)}°)`);
+    assert.equal(isRenderedConeSideWall(singlePass), false, 'single-pass 80.8° adaptive cone (~55.4°) stays accepted');
 });

@@ -152,6 +152,16 @@ export function resolveConeAxisPolicy(input: ConeAxisPolicyInput): ConeAxisPolic
 }
 
 /**
+ * Lean from vertical (`-Z`) in degrees for a cone's rendered axis:
+ * `0°` points straight at the plate (`-Z`), `90°` lies horizontal, and
+ * `(90°, 180°]` points upward (`+Z`).
+ */
+export function renderedConeLeanFromVerticalDeg(coneAxis: Vec3): number {
+    const axis = normalizeOrFallback(coneAxis, { x: 0, y: 0, z: -1 });
+    return (Math.atan2(Math.hypot(axis.x, axis.y), -axis.z) * 180) / Math.PI;
+}
+
+/**
  * How far the cone a contact will actually render leans from vertical, in
  * degrees: 0 is a cone pointing straight at the plate, 90 one lying flat
  * sideways.
@@ -171,8 +181,7 @@ export function coneAxisLeanFromVerticalDeg(
         coneAngleMode,
         adaptiveConeAngleOffsetDeg,
     });
-    const horizontal = Math.sqrt(coneAxis.x * coneAxis.x + coneAxis.y * coneAxis.y);
-    return (Math.atan2(horizontal, Math.max(0.001, Math.abs(coneAxis.z))) * 180) / Math.PI;
+    return renderedConeLeanFromVerticalDeg(coneAxis);
 }
 
 /**
@@ -181,6 +190,14 @@ export function coneAxisLeanFromVerticalDeg(
  * it up, and it reads as a near-horizontal whisker off the model.
  */
 export const MAX_SIDE_WALL_CONTACT_LEAN_DEG = 75;
+
+/**
+ * Whether an already-resolved rendered `cone.normal` leans past the side-wall
+ * bound. Measured directly without re-running `resolveConeAxisPolicy`.
+ */
+export function isRenderedConeSideWall(coneNormal: Vec3): boolean {
+    return renderedConeLeanFromVerticalDeg(coneNormal) > MAX_SIDE_WALL_CONTACT_LEAN_DEG;
+}
 
 /**
  * Whether a contact's cone renders too close to flat to place on. The contact
