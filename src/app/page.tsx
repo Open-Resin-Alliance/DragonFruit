@@ -5326,7 +5326,13 @@ export default function Home() {
         profileId: selectedMaterialId,
         callbacks: {
           onProgress: (event: PluginUploadProgressEvent) => {
-            if (isCancelRequested()) return;
+            if (isCancelRequested()) {
+              // A plugin's chunk loop reports progress after every chunk, so throwing here stops
+              // it at the next one. Athena's progress comes from an XHR event, where a throw
+              // would go uncaught; that upload is stopped by abortUpload instead.
+              if (activeNetworkUiAdapter.pluginId !== 'athena') throw new Error('Upload canceled by user.');
+              return;
+            }
             const progress = event.percentComplete / 100;
             const clampedProgress = Math.min(progress, 0.9999);
             if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
@@ -11528,6 +11534,7 @@ export default function Home() {
         handlePrintingMonitorStoragePathChange={handlePrintingMonitorStoragePathChange}
         handleResetPrintingMonitorWebcamStreamSlot={handleResetPrintingMonitorWebcamStreamSlot}
         handleSavePrintingMonitorWebcamSnapshot={handleSavePrintingMonitorWebcamSnapshot}
+        handleCancelSendToPrinter={handleCancelSendToPrinter}
         handleSendToPrinter={handleSendToPrinter}
         handleStartMonitorRecentPlate={handleStartMonitorRecentPlate}
         hasPrintingMonitorFleet={hasPrintingMonitorFleet}

@@ -65,6 +65,7 @@ export type PrintingModalsProps = {
   handlePrintingMonitorStoragePathChange: (nextPath: "/local/" | "/usb/") => void;
   handleResetPrintingMonitorWebcamStreamSlot: () => Promise<void>;
   handleSavePrintingMonitorWebcamSnapshot: () => Promise<void>;
+  handleCancelSendToPrinter: () => void;
   handleSendToPrinter: () => Promise<void>;
   handleStartMonitorRecentPlate: (plateId: number) => void;
   hasPrintingMonitorFleet: boolean;
@@ -279,6 +280,7 @@ export function PrintingModals({
   handlePrintingMonitorStoragePathChange,
   handleResetPrintingMonitorWebcamStreamSlot,
   handleSavePrintingMonitorWebcamSnapshot,
+  handleCancelSendToPrinter,
   handleSendToPrinter,
   handleStartMonitorRecentPlate,
   hasPrintingMonitorFleet,
@@ -1083,6 +1085,12 @@ export function PrintingModals({
               </div>
 
               <div className="pt-1 flex items-center justify-end gap-2">
+                {printingSendBusy && (printingUploadDialogStage === 'uploading' || printingUploadDialogStage === 'processing') && (
+                  <Button variant="secondary" onClick={handleCancelSendToPrinter}>
+                    <Trans>Cancel Upload</Trans>
+                  </Button>
+                )}
+
                 {(printingUploadDialogStage === 'failed' || printingUploadDialogStage === 'started' || printingUploadDialogStage === 'ready') && (
                   <Button
                     variant="secondary"
