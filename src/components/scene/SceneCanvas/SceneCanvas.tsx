@@ -7168,6 +7168,8 @@ export function SceneCanvas({
                       {PREPARE_MERGED_SUPPORTS && mode === 'prepare' && perfLayerEnabled('mergedMesh') && (
                         <PrepareMergedSupportMesh
                           entry={prepareMergedSupports.entries.get(model.id) ?? null}
+                          clipLower={clipLower}
+                          clipUpper={clipUpper}
                           selectedModelIds={selectedModelIds}
                           marqueeCandidateModelIds={marqueeCandidateModelIds}
                           hoverModelId={supportHoverModelId}
