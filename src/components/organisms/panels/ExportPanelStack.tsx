@@ -6,6 +6,7 @@ import type { SliceExportArtifact, SliceExportResult } from '@/features/slicing/
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import { modelsOnPlate, plateSliceScope } from '@/features/scene/plates/plateLayout';
 import type { useSlicingManager } from '@/features/slicing/useSlicingManager';
+import { registerPanelStack } from '@/components/layout/FloatingPanelStack';
 
 export type ExportPanelStackProps = {
   scene: ReturnType<typeof useSceneCollectionManager>;
@@ -81,7 +82,7 @@ export function ExportPanelStack({
   handlePreSliceSceneSave,
   preSliceFileDestinationPathRef,
 }: ExportPanelStackProps) {
-  // Invoked inline by Home (not as <JSX/>) so FloatingPanelStack can flatten these keyed panels as direct children for its layout-profile positioning. 'use no memo' keeps React Compiler from injecting a useMemoCache hook (the conditional inline call must stay hook-free).
+  // Called by FloatingPanelStack while it flattens its children (see registerPanelStack), not rendered as a component. 'use no memo' keeps React Compiler from injecting a useMemoCache hook: the call must stay hook-free.
   'use no memo';
 
   // The plates a slice can cover. Computed inline because this component is
@@ -166,3 +167,5 @@ export function ExportPanelStack({
     </>
   );
 }
+
+registerPanelStack(ExportPanelStack);

@@ -1,9 +1,6 @@
 {
   "comment": "Components and hooks the React Compiler skips, by file. Checked by scripts/check-compiler-skips.mjs; only ever shrink it.",
   "files": {
-    "src/app/page.tsx": [
-      "Home"
-    ],
     "src/components/AppLogger.tsx": [
       "AppLogger"
     ],

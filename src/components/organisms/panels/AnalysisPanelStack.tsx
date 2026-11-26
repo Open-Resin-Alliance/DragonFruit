@@ -8,6 +8,7 @@ import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/compo
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import type { useSlicingManager } from '@/features/slicing/useSlicingManager';
 import type { useIslandManager } from '@/volumeAnalysis/IslandScan/useIslandManager';
+import { registerPanelStack } from '@/components/layout/FloatingPanelStack';
 
 export type AnalysisPanelStackProps = {
   scene: ReturnType<typeof useSceneCollectionManager>;
@@ -21,7 +22,7 @@ export function AnalysisPanelStack({
   slicing,
   islands,
 }: AnalysisPanelStackProps) {
-  // Invoked inline by Home (not as <JSX/>) so FloatingPanelStack can flatten these keyed panels as direct children for its layout-profile positioning. 'use no memo' keeps React Compiler from injecting a useMemoCache hook (the conditional inline call must stay hook-free).
+  // Called by FloatingPanelStack while it flattens its children (see registerPanelStack), not rendered as a component. 'use no memo' keeps React Compiler from injecting a useMemoCache hook: the call must stay hook-free.
   'use no memo';
   return (
     <>
@@ -109,3 +110,5 @@ export function AnalysisPanelStack({
     </>
   );
 }
+
+registerPanelStack(AnalysisPanelStack);

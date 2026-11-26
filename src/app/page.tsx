@@ -18,7 +18,7 @@ import { PreparePanelStack } from '@/components/organisms/panels/PreparePanelSta
 import { AnalysisPanelStack } from '@/components/organisms/panels/AnalysisPanelStack';
 import { ExportPanelStack } from '@/components/organisms/panels/ExportPanelStack';
 import { PrintingPanelStack } from '@/components/organisms/panels/PrintingPanelStack';
-import { SharedPanelStack } from '@/components/organisms/panels/SharedPanelStack';
+import { SharedPanelStack, type TransformDebugStats } from '@/components/organisms/panels/SharedPanelStack';
 import { TopBar } from '@/components/layout/TopBar';
 import { NotificationStack } from '@/components/organisms/NotificationStack';
 import { SystemNotificationStack } from '@/components/organisms/SystemNotificationStack';
@@ -125,7 +125,7 @@ import { BlockingOverlay, Button, IconButton, Toast, ToastViewport } from '@/com
 import { EditorContextMenu, MENU_ITEMS, type EditorMenuAction, type EditorMenuItemDef } from '@/components/ui/EditorContextMenu';
 import { StructuredDialogModal } from '@/components/ui/StructuredDialogModal';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
-import { raise, withCleanup, withCleanupAsync } from '@/utils/compilerControlFlow';
+import { attemptAsync, raise, withCleanup, withCleanupAsync } from '@/utils/compilerControlFlow';
 import { DiagnosticsModal } from '@/components/modals/DiagnosticsModal';
 import { RenderProfilerOverlay } from '@/components/debug/RenderProfilerOverlay';
 import { toggleRenderProfilerEnabled } from '@/utils/debug/renderProfiler';
@@ -793,6 +793,62 @@ function formatPlateLockedNotice(
   }), { plateName });
 }
 
+/** Where Home polls one printer's reachability: its plugin, status operation and address. */
+type PrinterReachabilityTarget = {
+  id: string;
+  host: string;
+  port: number;
+  pluginId: string;
+  operation: string;
+  adapter: ReturnType<typeof getProfileMonitoringUiAdapter>;
+};
+
+/** Ask one printer whether it is up. Never rejects: a failed probe reads as unreachable. */
+async function probePrinterReachability(target: PrinterReachabilityTarget): Promise<readonly [string, boolean]> {
+  try {
+    const response = await pluginNetworkFetch({
+      pluginId: target.pluginId,
+      operation: target.operation,
+      ipAddress: target.host,
+      port: target.port,
+    });
+
+    const payload = await readJsonObject(response);
+    if (!response.ok) return [target.id, false] as const;
+
+    const payloadOk = readBooleanField(payload, 'ok');
+    if (payloadOk != null) {
+      return [target.id, payloadOk === true] as const;
+    }
+
+    try {
+      const snapshot = target.adapter.parseStatusPayload(payload, `${target.host}:${target.port}`);
+      if (snapshot && typeof snapshot.connected === 'boolean') {
+        return [target.id, snapshot.connected] as const;
+      }
+    } catch {
+      // Fall back to transport success.
+    }
+
+    return [target.id, true] as const;
+  } catch {
+    return [target.id, false] as const;
+  }
+}
+
+/** The bytes of a slice artifact: its blob when it has one, else the native temp file it was written to. */
+async function readSliceArtifactBytes(artifact: SliceExportArtifact): Promise<Uint8Array | null> {
+  if (artifact.blob) return new Uint8Array(await artifact.blob.arrayBuffer());
+  const nativePath = artifact.nativeTempPath?.trim() || '';
+  return nativePath ? readPrintArtifactBytesFromPath(nativePath) : null;
+}
+
+/** Whether a native save dialog failed because the user dismissed it. */
+function isCancelError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.toLowerCase().includes('cancel');
+}
+
 // The lazily loaded modules Home needs. A dynamic `import()` inside the component would
 // take it out of the React Compiler (#941); called through these it stays in.
 const importTauriCore = () => import('@tauri-apps/api/core');
@@ -824,6 +880,19 @@ export default function Home() {
   const plateLockedNoticeTimerRef = React.useRef<number | null>(null);
   const notifyPlateLockedRef = React.useRef<(plateId?: string) => void>(() => {});
   const scene = useSceneCollectionManager({ onBlockedByLock: (plateId) => notifyPlateLockedRef.current(plateId) });
+  // Methods read off the manager once: a call written `scene.x()` inside a hook makes the
+  // React Compiler depend on the whole `scene` object, which is new on every render.
+  const {
+    deleteModels,
+    getModelMeshModifiers,
+    isModelPlateLocked: isSceneModelPlateLocked,
+    reassignSceneMaterials,
+    resolveModelPlateId,
+    setActiveModelId,
+    setMode,
+    setModelsAutoLift,
+    setShaderType,
+  } = scene;
 
   /**
    * The build volume of every plate, in world coordinates. Every plate is a valid
@@ -844,9 +913,9 @@ export default function Home() {
    * scene so a model with no membership of its own is placed by where it is.
    */
   const volumeBoundsForModel = React.useCallback((model: (typeof scene.models)[number]): THREE.Box3 | null => {
-    const plateId = scene.resolveModelPlateId(model);
+    const plateId = resolveModelPlateId(model);
     return (plateId ? plateVolumeBounds?.get(plateId) : undefined) ?? null;
-  }, [plateVolumeBounds, scene.resolveModelPlateId]);
+  }, [plateVolumeBounds, resolveModelPlateId]);
 
   /**
    * The models on the plate being worked on. Layer count, print time and resin
@@ -870,12 +939,14 @@ export default function Home() {
   const [manifoldWarningModelId, setManifoldWarningModelId] = React.useState<string | null>(null);
   // Restarting the timer on every refusal means holding the lock and clicking about
   // keeps one toast on screen rather than stacking them.
-  notifyPlateLockedRef.current = (plateId) => {
-    setPlateLockedNoticePlateId(plateId ?? null);
-    setPlateLockedNoticeVisible(true);
-    if (plateLockedNoticeTimerRef.current !== null) window.clearTimeout(plateLockedNoticeTimerRef.current);
-    plateLockedNoticeTimerRef.current = window.setTimeout(() => setPlateLockedNoticeVisible(false), 2600);
-  };
+  React.useLayoutEffect(() => {
+    notifyPlateLockedRef.current = (plateId) => {
+      setPlateLockedNoticePlateId(plateId ?? null);
+      setPlateLockedNoticeVisible(true);
+      if (plateLockedNoticeTimerRef.current !== null) window.clearTimeout(plateLockedNoticeTimerRef.current);
+      plateLockedNoticeTimerRef.current = window.setTimeout(() => setPlateLockedNoticeVisible(false), 2600);
+    };
+  }, []);
   // The flag hides the toast; this holds the element one transition longer, so the
   // fade-out has something to run on. See `useTrailingMount`.
   const plateLockedNoticeMounted = useTrailingMount(plateLockedNoticeVisible);
@@ -1098,14 +1169,14 @@ export default function Home() {
   const applyMaterialReassignment = React.useCallback((mapping: Map<string, SceneMaterialReassignOption>) => {
     const next = new Map<string, { id: string; color?: string }>();
     mapping.forEach((option, oldId) => next.set(oldId, { id: option.id, ...(option.color ? { color: option.color } : {}) }));
-    scene.reassignSceneMaterials(next);
+    reassignSceneMaterials(next);
     setMaterialReassignPrompt(null);
-  }, [scene.reassignSceneMaterials]);
+  }, [reassignSceneMaterials]);
 
   const unassignSceneMaterialsForPrinter = React.useCallback(() => {
-    scene.reassignSceneMaterials(new Map(), true);
+    reassignSceneMaterials(new Map(), true);
     setMaterialReassignPrompt(null);
-  }, [scene.reassignSceneMaterials]);
+  }, [reassignSceneMaterials]);
 
   const assignSceneMaterialsToMatchingTanks = React.useCallback(() => {
     const prompt = materialReassignPrompt;
@@ -1148,7 +1219,7 @@ export default function Home() {
   const transformMgr = useTransformManager({ geom: scene.geom, activeModel: scene.activeModel ?? null });
   // Taken out of the manager's result so writes to `.current` go through the ref
   // itself; the React Compiler rejects a write through a hook's return value.
-  const { pendingTransformRef } = transformMgr;
+  const { onTransformChange, pendingTransformRef, setIsTransforming, setTransformMode } = transformMgr;
   // Owned here rather than by useMirrorManager: the transform persistence effect
   // reads it and is declared long before the mirror manager is called.
   const mirrorSessionRef = React.useRef<MirrorSession | null>(null);
@@ -1214,7 +1285,7 @@ export default function Home() {
     hollowPreviewWarmupKeyRef,
     hollowingSourceByModelIdRef,
     cavityGeometryByModelIdRef,
-    cavityGeometryVersion,
+    cavityGeometryByModelId,
     defaultHollowingState,
     isHollowingApplied,
     persistedHollowingSignature,
@@ -1671,7 +1742,7 @@ export default function Home() {
   const slicedPlatesView = useSlicedPlates({
     activePlateId: scene.activePlateId,
     models: scene.models,
-    plateOf: scene.resolveModelPlateId,
+    plateOf: resolveModelPlateId,
     profileFingerprint: activeSliceProfileFingerprint,
   });
   const { slicedPlates, activeSlice, isActiveSliceStale, hasSlicedPlate, layerPreviewUrlAt, layerPreviewCount } = slicedPlatesView;
@@ -1757,6 +1828,9 @@ export default function Home() {
   );
   const [exportThumbnailRenderOptions, setExportThumbnailRenderOptions] = React.useState<ExportThumbnailRenderOptions>(resolveInitialExportThumbnailRenderOptions);
   const previousSceneModeRef = React.useRef<typeof scene.mode>(scene.mode);
+  // The same value for render to read: `isTransitioningOutOfPrinting` holds for the
+  // commit that leaves Printing, until the mode effect below catches up.
+  const [previousSceneMode, setPreviousSceneMode] = React.useState<typeof scene.mode>(scene.mode);
   const preservedNonPrintingLayerIndexRef = React.useRef<number | null>(null);
   const lastSliceHistoryEventIdRef = React.useRef<number | null>(null);
   const triggerSliceExportRef = React.useRef<(() => void) | null>(null);
@@ -1809,7 +1883,8 @@ export default function Home() {
   const [printingUploadDialogOpen, setPrintingUploadDialogOpen] = React.useState(false);
   const [preSlicePrintConfirmOpen, setPreSlicePrintConfirmOpen] = React.useState(false);
 
-  const topbarPrinterOfflineCacheByDeviceIdRef = React.useRef<Record<string, boolean>>({});
+  // Last known offline state per device, for while its reachability is unknown.
+  const [topbarPrinterOfflineCacheByDeviceId, setTopbarPrinterOfflineCacheByDeviceId] = React.useState<Record<string, boolean>>({});
   const printerReachabilityByDeviceId = React.useSyncExternalStore(
     subscribeToPrinterReachability,
     getPrinterReachabilitySnapshot,
@@ -1939,11 +2014,9 @@ export default function Home() {
     if (pluginImportWarningSkipFuture) {
       setSuppressPluginImportWarning(true);
       if (typeof window !== 'undefined') {
+        const storageKey = activePluginImportWarning?.storageKey ?? PLUGIN_IMPORT_WARNING_DISMISSED_STORAGE_KEY;
         try {
-          window.localStorage.setItem(
-            activePluginImportWarning?.storageKey ?? PLUGIN_IMPORT_WARNING_DISMISSED_STORAGE_KEY,
-            '1',
-          );
+          window.localStorage.setItem(storageKey, '1');
         } catch {
           // Ignore persistence failure and still proceed.
         }
@@ -2429,100 +2502,112 @@ export default function Home() {
     };
   }, []);
 
-  const transformDebugStats = React.useMemo(() => {
-    const activeModel = scene.models.find((m) => m.id === scene.activeModelId) ?? null;
-    const storeTransform = activeModel?.transform ?? null;
-    const liveTransform = transformMgr.transform;
+  // Read on the overlay's own tick, inside the effect: most of it comes from refs the
+  // transform pipeline writes, and reading those in render would keep Home out of the
+  // React Compiler.
+  const [transformDebugStats, setTransformDebugStats] = React.useState<TransformDebugStats | null>(null);
+  React.useEffect(() => {
+    if (!isTransformDebugOverlayOpen) return;
+    const readTransformDebugStats = () => {
+      const activeModel = scene.models.find((m) => m.id === scene.activeModelId) ?? null;
+      const storeTransform = activeModel?.transform ?? null;
+      const liveTransform = transformMgr.transform;
 
-    const posDelta = storeTransform
-      ? liveTransform.position.distanceTo(storeTransform.position)
-      : 0;
-    const rotDelta = storeTransform
-      ? Math.max(
-        Math.abs(liveTransform.rotation.x - storeTransform.rotation.x),
-        Math.abs(liveTransform.rotation.y - storeTransform.rotation.y),
-        Math.abs(liveTransform.rotation.z - storeTransform.rotation.z),
-      )
-      : 0;
-    const scaleDelta = storeTransform
-      ? liveTransform.scale.distanceTo(storeTransform.scale)
-      : 0;
+      const posDelta = storeTransform
+        ? liveTransform.position.distanceTo(storeTransform.position)
+        : 0;
+      const rotDelta = storeTransform
+        ? Math.max(
+          Math.abs(liveTransform.rotation.x - storeTransform.rotation.x),
+          Math.abs(liveTransform.rotation.y - storeTransform.rotation.y),
+          Math.abs(liveTransform.rotation.z - storeTransform.rotation.z),
+        )
+        : 0;
+      const scaleDelta = storeTransform
+        ? liveTransform.scale.distanceTo(storeTransform.scale)
+        : 0;
 
-    const dragGroup = supportDragGroupRef.current;
-    let dragGroupPos: THREE.Vector3 | null = null;
-    let dragGroupScale: THREE.Vector3 | null = null;
-    if (dragGroup) {
-      const pos = new THREE.Vector3();
-      const quat = new THREE.Quaternion();
-      const scale = new THREE.Vector3();
-      dragGroup.matrix.decompose(pos, quat, scale);
-      dragGroupPos = pos;
-      dragGroupScale = scale;
-    }
+      const dragGroup = supportDragGroupRef.current;
+      let dragGroupPos: THREE.Vector3 | null = null;
+      let dragGroupScale: THREE.Vector3 | null = null;
+      if (dragGroup) {
+        const pos = new THREE.Vector3();
+        const quat = new THREE.Quaternion();
+        const scale = new THREE.Vector3();
+        dragGroup.matrix.decompose(pos, quat, scale);
+        dragGroupPos = pos;
+        dragGroupScale = scale;
+      }
 
-    const timeline = transformDebugTimelineRef.current;
-    const pendingHistory = pendingTransformHistoryRef.current;
-    const historyDebug = transformHistoryDebugRef.current;
+      const timeline = transformDebugTimelineRef.current;
+      const pendingHistory = pendingTransformHistoryRef.current;
+      const historyDebug = transformHistoryDebugRef.current;
 
-    return {
-      activeModel,
-      storeTransform,
-      liveTransform,
-      posDelta,
-      rotDelta,
-      scaleDelta,
-      dragGroupAutoUpdate: dragGroup?.matrixAutoUpdate ?? null,
-      dragGroupPos,
-      dragGroupScale,
-      timeline: {
-        lastOperation: timeline.lastOperation,
-        dragReleasedAt: timeline.dragReleasedAt,
-        liveCalculatedAt: timeline.liveCalculatedAt,
-        storeUpdateStartedAt: timeline.storeUpdateStartedAt,
-        storeUpdatedAt: timeline.storeUpdatedAt,
-        supportStoreUpdatedAt: timeline.supportStoreUpdatedAt,
-        kickstandStoreUpdatedAt: timeline.kickstandStoreUpdatedAt,
-        activeModelStoreObservedAt: timeline.activeModelStoreObservedAt,
-        nowPerfMs: performance.now(),
-      },
-      historyCommit: {
-        pendingModelId: pendingHistory?.modelId ?? null,
-        pendingDescription: pendingHistory?.description ? _(pendingHistory.description) : null,
-        pendingHasAfter: Boolean(pendingHistory?.after),
-        pendingBeforeRotation: pendingHistory
-          ? {
-              x: pendingHistory.before.rotation.x,
-              y: pendingHistory.before.rotation.y,
-              z: pendingHistory.before.rotation.z,
-            }
-          : null,
-        pendingAfterRotation: pendingHistory?.after
-          ? {
-              x: pendingHistory.after.rotation.x,
-              y: pendingHistory.after.rotation.y,
-              z: pendingHistory.after.rotation.z,
-            }
-          : null,
-        commitRequested: transformHistoryCommitRequestedRef.current,
-        commitNonce: transformHistoryCommitNonceRef.current,
-        pendingResync: pendingHistoryTransformResyncRef.current,
-        suppressNextPersistence: suppressNextTransformPersistenceRef.current,
-        skipToken: skipNextTransformEndCommitRef.current,
-        pendingRotateGizmoModelId: pendingRotateGizmoCommitRef.current?.modelId ?? null,
-        lastResult: historyDebug.lastResult,
-        lastReason: historyDebug.lastReason,
-        lastModelId: historyDebug.lastModelId,
-        lastDescription: historyDebug.lastDescription ? _(historyDebug.lastDescription) : null,
-        lastExpectedNonce: historyDebug.lastExpectedNonce,
-        lastScheduledNonce: historyDebug.lastScheduledNonce,
-        lastUndoCountBefore: historyDebug.lastUndoCountBefore,
-        lastUndoCountAfter: historyDebug.lastUndoCountAfter,
-        lastPushApplied: historyDebug.lastPushApplied,
-        lastAt: historyDebug.lastAt,
-      },
-      supportCounts: countSupportCollections(supportStateSnapshot),
+      setTransformDebugStats({
+        activeModel,
+        storeTransform,
+        liveTransform,
+        posDelta,
+        rotDelta,
+        scaleDelta,
+        dragGroupAutoUpdate: dragGroup?.matrixAutoUpdate ?? null,
+        dragGroupPos,
+        dragGroupScale,
+        timeline: {
+          lastOperation: timeline.lastOperation,
+          dragReleasedAt: timeline.dragReleasedAt,
+          liveCalculatedAt: timeline.liveCalculatedAt,
+          storeUpdateStartedAt: timeline.storeUpdateStartedAt,
+          storeUpdatedAt: timeline.storeUpdatedAt,
+          supportStoreUpdatedAt: timeline.supportStoreUpdatedAt,
+          kickstandStoreUpdatedAt: timeline.kickstandStoreUpdatedAt,
+          activeModelStoreObservedAt: timeline.activeModelStoreObservedAt,
+          nowPerfMs: performance.now(),
+        },
+        historyCommit: {
+          pendingModelId: pendingHistory?.modelId ?? null,
+          pendingDescription: pendingHistory?.description ? _(pendingHistory.description) : null,
+          pendingHasAfter: Boolean(pendingHistory?.after),
+          pendingBeforeRotation: pendingHistory
+            ? {
+                x: pendingHistory.before.rotation.x,
+                y: pendingHistory.before.rotation.y,
+                z: pendingHistory.before.rotation.z,
+              }
+            : null,
+          pendingAfterRotation: pendingHistory?.after
+            ? {
+                x: pendingHistory.after.rotation.x,
+                y: pendingHistory.after.rotation.y,
+                z: pendingHistory.after.rotation.z,
+              }
+            : null,
+          commitRequested: transformHistoryCommitRequestedRef.current,
+          commitNonce: transformHistoryCommitNonceRef.current,
+          pendingResync: pendingHistoryTransformResyncRef.current,
+          suppressNextPersistence: suppressNextTransformPersistenceRef.current,
+          skipToken: skipNextTransformEndCommitRef.current,
+          pendingRotateGizmoModelId: pendingRotateGizmoCommitRef.current?.modelId ?? null,
+          lastResult: historyDebug.lastResult,
+          lastReason: historyDebug.lastReason,
+          lastModelId: historyDebug.lastModelId,
+          lastDescription: historyDebug.lastDescription ? _(historyDebug.lastDescription) : null,
+          lastExpectedNonce: historyDebug.lastExpectedNonce,
+          lastScheduledNonce: historyDebug.lastScheduledNonce,
+          lastUndoCountBefore: historyDebug.lastUndoCountBefore,
+          lastUndoCountAfter: historyDebug.lastUndoCountAfter,
+          lastPushApplied: historyDebug.lastPushApplied,
+          lastAt: historyDebug.lastAt,
+        },
+        supportCounts: countSupportCollections(supportStateSnapshot),
+      });
     };
-  }, [_, scene.activeModelId, scene.models, supportDragGroupRef, supportStateSnapshot, transformDebugTick, transformMgr.transform]);
+    readTransformDebugStats();
+    const intervalId = window.setInterval(readTransformDebugStats, 120);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [_, isTransformDebugOverlayOpen, scene.activeModelId, scene.models, supportStateSnapshot, transformMgr.transform]);
 
   const supportDebugStats = React.useMemo(() => {
     const snapTarget = bracePlacementSnapshot.snapTarget;
@@ -2805,11 +2890,11 @@ export default function Home() {
   // The same lookup the add-joint handler runs, so the menu item is offered
   // exactly when the action would succeed.
   const supportContextMenuSegmentOwner = React.useMemo(() => {
+    // The lookup reads the support store itself. Naming the collections here is
+    // what re-runs it after a support edit, the invalidation this memo needs.
+    void liveSupportCollections;
     const segmentId = editorContextMenuSupportTarget?.segmentId;
     return segmentId ? findShaftOwnerOfSegment(segmentId) : null;
-    // The collections are read through a helper, not named here: the lookup is
-    // the invalidation this memo needs, and a support edit is what moves it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editorContextMenuSupportTarget?.segmentId, liveSupportCollections]);
 
   const supportsCanAddJoint = React.useMemo(() => {
@@ -2978,7 +3063,7 @@ export default function Home() {
     setPrintingSelectedLayer(1);
     setPrintingDisplayedLayer(1);
     printingSelectedLayerRef.current = 1;
-  }, [slicedPlates]);
+  }, [slicedPlates, printingSelectedLayerRef, setPrintingDisplayedLayer, setPrintingSelectedLayer]);
 
   const handleSliceRunStartedForPrinting = React.useCallback((context?: { plateId?: string }) => {
     // The bed being sliced, not the one being worked on: a batch slices one bed after another
@@ -2992,7 +3077,7 @@ export default function Home() {
     setPrintingDisplayedLayer(1);
     printingSelectedLayerRef.current = 1;
     setPrintingReadyPlateId(null);
-  }, [scene.activePlateId, slicedPlates]);
+  }, [scene.activePlateId, slicedPlates, printingSelectedLayerRef, setPrintingDisplayedLayer, setPrintingSelectedLayer]);
 
   useSlicedPlatePreviewLoading(slicedPlatesView, {
     activePlateId: scene.activePlateId,
@@ -3071,7 +3156,7 @@ export default function Home() {
     if (shouldReturnToPrintingAfterSliceRef.current) {
       shouldReturnToPrintingAfterSliceRef.current = false;
       setShouldAutoSliceOnExportEntry(false);
-      scene.setMode('printing');
+      setMode('printing');
       return;
     }
 
@@ -3085,11 +3170,11 @@ export default function Home() {
     if (intent === 'upload' || intent === 'print') {
       pendingPostSliceActionRef.current = intent;
       setShouldAutoSliceOnExportEntry(false);
-      scene.setMode('printing');
+      setMode('printing');
     } else if (intent === 'preview') {
       // 'preview': navigate to printing workspace without saving or uploading.
       setShouldAutoSliceOnExportEntry(false);
-      scene.setMode('printing');
+      setMode('printing');
     } else {
       // 'file' or 'uvtools': write to pre-selected destination, then navigate to printing workspace.
       // The run writes to the path the pre-slice step chose, so a batch hands that path back
@@ -3125,7 +3210,7 @@ export default function Home() {
         }
 
         setShouldAutoSliceOnExportEntry(false);
-        scene.setMode('printing');
+        setMode('printing');
         return;
       }
 
@@ -3133,43 +3218,33 @@ export default function Home() {
         let savedPath: string | null = null;
 
         if (destinationPath) {
-          try {
-            const nativePathForWrite = a.nativeTempPath?.trim() || '';
-            const bytes = a.blob
-              ? new Uint8Array(await a.blob.arrayBuffer())
-              : (nativePathForWrite ? await readPrintArtifactBytesFromPath(nativePathForWrite) : null);
+          const written = await attemptAsync(async () => {
+            const bytes = await readSliceArtifactBytes(a);
             if (!bytes) raise(new Error('No artifact bytes available for write.'));
             await writeBytesToNativePath(destinationPath, bytes);
+          });
+          if (written.ok) {
             savedPath = destinationPath;
-          } catch (error) {
-            console.warn('[Slicing] Failed writing pre-selected save path, falling back to save dialog.', error);
+          } else {
+            console.warn('[Slicing] Failed writing pre-selected save path, falling back to save dialog.', written.error);
           }
         }
 
         if (!savedPath) {
           const nativePath = a.nativeTempPath?.trim() || '';
           if (nativePath) {
-            try {
-              const resolvedPath = await savePrintArtifactPathWithNativeDialog(nativePath, a.outputName);
-              savedPath = resolvedPath || a.outputName;
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err ?? '');
-              if (msg.toLowerCase().includes('cancel')) return;
-            }
+            const picked = await attemptAsync(() => savePrintArtifactPathWithNativeDialog(nativePath, a.outputName));
+            if (picked.ok) savedPath = picked.value || a.outputName;
+            else if (isCancelError(picked.error)) return;
           }
           if (!savedPath) {
-            try {
-              const nativePath2 = a.nativeTempPath?.trim() || '';
-              const bytes = a.blob
-                ? new Uint8Array(await a.blob.arrayBuffer())
-                : (nativePath2 ? await readPrintArtifactBytesFromPath(nativePath2) : null);
+            const picked = await attemptAsync(async () => {
+              const bytes = await readSliceArtifactBytes(a);
               if (!bytes) raise(new Error('No artifact bytes'));
-              const resolvedPath = await savePrintArtifactWithNativeDialog(bytes, a.outputName);
-              savedPath = resolvedPath || a.outputName;
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err ?? '');
-              if (msg.toLowerCase().includes('cancel')) return;
-            }
+              return savePrintArtifactWithNativeDialog(bytes, a.outputName);
+            });
+            if (picked.ok) savedPath = picked.value || a.outputName;
+            else if (isCancelError(picked.error)) return;
           }
           if (!savedPath && a.blob) {
             const url = URL.createObjectURL(a.blob);
@@ -3202,11 +3277,11 @@ export default function Home() {
           }
         }
         setShouldAutoSliceOnExportEntry(false);
-        scene.setMode('printing');
+        setMode('printing');
       };
       void saveAndNavigate(artifact);
     }
-  }, [recordPrintingSlice, scene]);
+  }, [recordPrintingSlice, scene, printingPreviewDragRef, printingPreviewSettleTimeoutRef, printingPreviewSettledRef, queuePrintingPreviewPan, setIsPrintingPreviewPanning, setIsPrintingPreviewSettled, setIsPrintingSettledCanvasReady, setMode, setPrintingPreviewZoom]);
 
   const handleSlicingBenchmarkComplete = React.useCallback((benchmark: SliceExportResult['benchmark']) => {
     setPrintingSlicingBenchmark(benchmark);
@@ -3664,10 +3739,10 @@ export default function Home() {
     if (activePrinterProfile?.networkConnection?.connected !== true) return null;
     if (selectedSliceDeviceReachability === false) return null;
 
-    const selectedMaterialId = activePrinterProfile.networkConnection?.selectedMaterialId?.trim() ?? '';
+    const selectedMaterialId = activePrinterProfile?.networkConnection?.selectedMaterialId?.trim() ?? '';
     if (!selectedMaterialId) return null;
 
-    const candidate = Number(activePrinterProfile.networkConnection?.selectedMaterialLayerHeightMm);
+    const candidate = Number(activePrinterProfile?.networkConnection?.selectedMaterialLayerHeightMm);
     if (!Number.isFinite(candidate) || candidate <= 0) return null;
     return Math.max(0.001, candidate);
   }, [
@@ -3940,14 +4015,7 @@ export default function Home() {
   });
 
   const allReachabilityProbeTargets = React.useMemo(() => {
-    const targets = new Map<string, {
-      id: string;
-      host: string;
-      port: number;
-      pluginId: string;
-      operation: string;
-      adapter: ReturnType<typeof getProfileMonitoringUiAdapter>;
-    }>();
+    const targets = new Map<string, PrinterReachabilityTarget>();
 
     for (const printer of profileState.printerProfiles) {
       if (!printer.networkSupport) continue;
@@ -4002,37 +4070,7 @@ export default function Home() {
 
     const pollAllReachability = async () => {
       const entries = await Promise.all(
-        allReachabilityProbeTargets.map(async (target) => {
-          try {
-            const response = await pluginNetworkFetch({
-              pluginId: target.pluginId,
-              operation: target.operation,
-              ipAddress: target.host,
-              port: target.port,
-            });
-
-            const payload = await readJsonObject(response);
-            if (!response.ok) return [target.id, false] as const;
-
-            const payloadOk = readBooleanField(payload, 'ok');
-            if (payloadOk != null) {
-              return [target.id, payloadOk === true] as const;
-            }
-
-            try {
-              const snapshot = target.adapter.parseStatusPayload(payload, `${target.host}:${target.port}`);
-              if (snapshot && typeof snapshot.connected === 'boolean') {
-                return [target.id, snapshot.connected] as const;
-              }
-            } catch {
-              // Fall back to transport success.
-            }
-
-            return [target.id, true] as const;
-          } catch {
-            return [target.id, false] as const;
-          }
-        }),
+        allReachabilityProbeTargets.map(probePrinterReachability),
       );
 
       if (cancelled) return;
@@ -4192,22 +4230,22 @@ export default function Home() {
         return true;
       }
 
-      try {
-        const destinationPath = await pickSavePathWithNativeDialog(extension ? `${baseName}.${extension}` : baseName);
-        if (!destinationPath || destinationPath.trim().length === 0) {
-          return false;
-        }
-        preSliceFileDestinationPathRef.current = destinationPath.trim();
-        return true;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error ?? '');
-        if (message.toLowerCase().includes('cancel')) {
+      const suggestedName = extension ? `${baseName}.${extension}` : baseName;
+      const picked = await attemptAsync(() => pickSavePathWithNativeDialog(suggestedName));
+      if (!picked.ok) {
+        if (isCancelError(picked.error)) {
           return false;
         }
         // If native picker isn't available (web runtime), keep current post-slice fallback behavior.
-        console.warn('[Slicing] Pre-slice save picker unavailable; falling back to post-slice save flow.', error);
+        console.warn('[Slicing] Pre-slice save picker unavailable; falling back to post-slice save flow.', picked.error);
         return true;
       }
+      const destinationPath = picked.value;
+      if (!destinationPath || destinationPath.trim().length === 0) {
+        return false;
+      }
+      preSliceFileDestinationPathRef.current = destinationPath.trim();
+      return true;
     }
 
     if (!activeNetworkUiAdapter || reachablePrintableConnectedPrinterFleet.length === 0) {
@@ -4267,6 +4305,8 @@ export default function Home() {
     printingTargetDevice,
     requiresRemoteMaterialSelectionForUpload,
     suggestedSliceOutputFilename,
+    setPrintingTargetPickerMode,
+    setPrintingTargetPickerOpen,
   ]);
 
   const printingDialogStageLabel = React.useMemo(() => {
@@ -4328,20 +4368,29 @@ export default function Home() {
       || selectedPrinterIsPauseTransition,
     );
   }, [selectedPrinterIsPauseTransition, selectedPrinterMonitorSnapshot?.isPaused]);
-  React.useEffect(() => {
-    const selectedDeviceId = selectedKnownPrinterDevice?.id;
-    if (!selectedDeviceId) return;
-
-    const selectedReachability = printerReachabilityByDeviceId[selectedDeviceId];
-    if (selectedReachability === false || selectedKnownPrinterDevice.connected !== true) {
-      topbarPrinterOfflineCacheByDeviceIdRef.current[selectedDeviceId] = true;
-      return;
-    }
-
-    if (selectedReachability === true && selectedKnownPrinterDevice.connected === true) {
-      topbarPrinterOfflineCacheByDeviceIdRef.current[selectedDeviceId] = false;
-    }
-  }, [printerReachabilityByDeviceId, selectedKnownPrinterDevice]);
+  // Remember what this render saw, adjusting state during render as React suggests for
+  // information from previous renders: no effect, and no extra commit with a stale value.
+  const topbarObservedPrinterId = selectedKnownPrinterDevice?.id;
+  const topbarObservedPrinterReachability = topbarObservedPrinterId
+    ? printerReachabilityByDeviceId[topbarObservedPrinterId]
+    : undefined;
+  const topbarObservedPrinterOffline = !topbarObservedPrinterId
+    ? undefined
+    : topbarObservedPrinterReachability === false || selectedKnownPrinterDevice?.connected !== true
+      ? true
+      : topbarObservedPrinterReachability === true
+        ? false
+        : undefined;
+  if (
+    topbarObservedPrinterId
+    && topbarObservedPrinterOffline !== undefined
+    && topbarPrinterOfflineCacheByDeviceId[topbarObservedPrinterId] !== topbarObservedPrinterOffline
+  ) {
+    setTopbarPrinterOfflineCacheByDeviceId({
+      ...topbarPrinterOfflineCacheByDeviceId,
+      [topbarObservedPrinterId]: topbarObservedPrinterOffline,
+    });
+  }
   const isTopbarSelectedPrinterOffline = React.useMemo(() => {
     const selectedHost = (selectedKnownPrinterDevice?.ipAddress || activePrinterProfile?.network?.ipAddress || '').trim();
     if (!selectedHost) return false;
@@ -4351,7 +4400,7 @@ export default function Home() {
       if (selectedReachability === false) return true;
       if (selectedKnownPrinterDevice.connected !== true) return true;
       if (selectedReachability === true) return false;
-      return topbarPrinterOfflineCacheByDeviceIdRef.current[selectedKnownPrinterDevice.id] === true;
+      return topbarPrinterOfflineCacheByDeviceId[selectedKnownPrinterDevice.id] === true;
     }
 
     return activePrinterProfile?.networkConnection?.connected === false;
@@ -4360,6 +4409,7 @@ export default function Home() {
     activePrinterProfile?.networkConnection?.connected,
     printerReachabilityByDeviceId,
     selectedKnownPrinterDevice,
+    topbarPrinterOfflineCacheByDeviceId,
   ]);
 
 
@@ -4509,33 +4559,23 @@ export default function Home() {
     const nativeTempPath = printingArtifact.nativeTempPath;
 
     if (nativeTempPath && nativeTempPath.trim().length > 0) {
-      try {
-        await savePrintArtifactPathWithNativeDialog(nativeTempPath, printingArtifact.outputName);
-        return;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error ?? '');
-        const cancelled = message.toLowerCase().includes('cancel');
-        if (!cancelled) {
-          console.warn('[Printing] Native path save dialog failed, attempting byte fallback.', error);
-        }
+      const saved = await attemptAsync(() => savePrintArtifactPathWithNativeDialog(nativeTempPath, printingArtifact.outputName));
+      if (saved.ok) return;
+      if (!isCancelError(saved.error)) {
+        console.warn('[Printing] Native path save dialog failed, attempting byte fallback.', saved.error);
       }
     }
 
-    try {
-      const bytes = printingArtifact.blob
-        ? new Uint8Array(await printingArtifact.blob.arrayBuffer())
-        : (nativeTempPath ? await readPrintArtifactBytesFromPath(nativeTempPath) : null);
+    const saved = await attemptAsync(async () => {
+      const bytes = await readSliceArtifactBytes(printingArtifact);
       if (!bytes) {
         raise(new Error('No print artifact bytes available for download.'));
       }
       await savePrintArtifactWithNativeDialog(bytes, printingArtifact.outputName);
-      return;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error ?? '');
-      const cancelled = message.toLowerCase().includes('cancel');
-      if (!cancelled) {
-        console.warn('[Printing] Native save dialog failed, falling back to browser download.', error);
-      }
+    });
+    if (saved.ok) return;
+    if (!isCancelError(saved.error)) {
+      console.warn('[Printing] Native save dialog failed, falling back to browser download.', saved.error);
     }
 
     if (!printingArtifact.blob) {
@@ -4686,47 +4726,51 @@ export default function Home() {
       setTimeout(resolve, 0);
     });
 
-    await withCleanupAsync(async () => { try {
-      // Read exactly the payload discovery resolved — the sidecar beside the
-      // project, or the generic location if that is where the tick fell back to.
-      // The backend re-validates the path against its own candidate list.
-      const bytes = await readAutosaveRecoveryBytes(recoverySnapshot?.voxlPath ?? null);
-      const uint8 = new Uint8Array(bytes);
-      if (uint8.byteLength === 0) {
-        raise(new Error('Autosaved VOXL file is empty.'));
-      }
-      const file = new File([uint8], 'autosave.voxl', { type: 'application/octet-stream' });
-      suppressSceneAutosave(60_000);
-      setNativePickerPreparationState({
-        active: false,
-        label: '',
-        detail: '',
-        progress: null,
+    await withCleanupAsync(async () => {
+      const outcome = await attemptAsync(async () => {
+        // Read exactly the payload discovery resolved — the sidecar beside the
+        // project, or the generic location if that is where the tick fell back to.
+        // The backend re-validates the path against its own candidate list.
+        const bytes = await readAutosaveRecoveryBytes(recoverySnapshot?.voxlPath ?? null);
+        const uint8 = new Uint8Array(bytes);
+        if (uint8.byteLength === 0) {
+          raise(new Error('Autosaved VOXL file is empty.'));
+        }
+        const file = new File([uint8], 'autosave.voxl', { type: 'application/octet-stream' });
+        suppressSceneAutosave(60_000);
+        setNativePickerPreparationState({
+          active: false,
+          label: '',
+          detail: '',
+          progress: null,
+        });
+        const restored = await importSceneFile(file, { suppressRecentTracking: true, suppressPlacementPrompt: true, suppressRepair: true });
+        if (restored) {
+          await clearAutosave();
+        } else {
+          setSceneSaveError({
+            title: _(msg`Restore Failed`),
+            message: _(msg`The autosaved recovery file is corrupted or unreadable.`),
+            detail: _(msg`The scene importer rejected or could not parse the autosave data.`),
+          });
+          await clearAutosave();
+        }
       });
-      const restored = await importSceneFile(file, { suppressRecentTracking: true, suppressPlacementPrompt: true, suppressRepair: true });
-      if (restored) {
-        await clearAutosave();
-      } else {
+      if (!outcome.ok) {
+        const error = outcome.error;
+        console.error('[Autosave] Failed to restore autosaved scene.', error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const isMissing = errorMessage.includes('No autosaved scene file found') || errorMessage.includes('does not exist');
         setSceneSaveError({
           title: _(msg`Restore Failed`),
-          message: _(msg`The autosaved recovery file is corrupted or unreadable.`),
-          detail: _(msg`The scene importer rejected or could not parse the autosave data.`),
+          message: isMissing
+            ? _(msg`The autosave recovery file could not be found.`)
+            : _(msg`The autosaved recovery file is corrupted or unreadable.`),
+          detail: errorMessage,
         });
         await clearAutosave();
       }
-    } catch (error) {
-      console.error('[Autosave] Failed to restore autosaved scene.', error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const isMissing = errorMessage.includes('No autosaved scene file found') || errorMessage.includes('does not exist');
-      setSceneSaveError({
-        title: _(msg`Restore Failed`),
-        message: isMissing
-          ? _(msg`The autosave recovery file could not be found.`)
-          : _(msg`The autosaved recovery file is corrupted or unreadable.`),
-        detail: errorMessage,
-      });
-      await clearAutosave();
-    } }, () => {
+    }, () => {
       setNativePickerPreparationState({
         active: false,
         label: '',
@@ -4734,7 +4778,7 @@ export default function Home() {
         progress: null,
       });
     });
-  }, [autosaveRecovery, clearAutosave, importSceneFile, setSceneSaveError, _]);
+  }, [autosaveRecovery, clearAutosave, importSceneFile, setSceneSaveError, _, setNativePickerPreparationState]);
 
   const handleAutosaveDiscard = React.useCallback(async () => {
     setAutosaveRecovery(null);
@@ -4954,43 +4998,40 @@ export default function Home() {
     }
 
     let cancelled = false;
-    void (async () => {
-      try {
-        // If launched with a file, suppress recovery even if the pending flag wasn't yet set
-        // when this effect first ran (race between launch-file fetch and recovery fetch).
-        try {
-          const core = await importTauriCore();
-          const launchEntries = await core.invoke<unknown[]>('get_launch_scene_files');
-          if (Array.isArray(launchEntries) && launchEntries.length > 0) {
-            if (!cancelled) setAutosaveRecovery(null);
-            return;
-          }
-        } catch {
-          // Non-Tauri or invoke not available — fall through to normal recovery check.
-        }
-
-        // Discovery, not a bare manifest read: the payload may be a sidecar
-        // beside the project, the generic location, or a legacy `scene.voxl`
-        // from before Ph0.1. `resolveAutosaveRecovery` validates that whichever
-        // it finds actually exists and really is a VOXL file, so the prompt is
-        // never offered for a payload that cannot be restored.
-        const candidate = await resolveAutosaveRecovery();
-        if (!cancelled && candidate && !candidate.clean) {
-          // Re-check pending handoff after async fetch — it may have become pending while we were fetching.
-          if (pendingStartupSceneHandoff) {
-            setAutosaveRecovery(null);
-            return;
-          }
-          setAutosaveRecovery({
-            savedAt: candidate.savedAt ?? new Date().toISOString(),
-            voxlPath: candidate.voxlPath,
-            origin: candidate.origin,
-          });
-        }
-      } catch {
-        // Non-fatal: no autosave recovery available.
+    // Failures are non-fatal: no autosave recovery available.
+    void attemptAsync(async () => {
+      // If launched with a file, suppress recovery even if the pending flag wasn't yet set
+      // when this effect first ran (race between launch-file fetch and recovery fetch).
+      // Outside Tauri, or with invoke unavailable, this fails and falls through to the
+      // normal recovery check.
+      const launch = await attemptAsync(async () => {
+        const core = await importTauriCore();
+        return core.invoke<unknown[]>('get_launch_scene_files');
+      });
+      if (launch.ok && Array.isArray(launch.value) && launch.value.length > 0) {
+        if (!cancelled) setAutosaveRecovery(null);
+        return;
       }
-    })();
+
+      // Discovery, not a bare manifest read: the payload may be a sidecar
+      // beside the project, the generic location, or a legacy `scene.voxl`
+      // from before Ph0.1. `resolveAutosaveRecovery` validates that whichever
+      // it finds actually exists and really is a VOXL file, so the prompt is
+      // never offered for a payload that cannot be restored.
+      const candidate = await resolveAutosaveRecovery();
+      if (!cancelled && candidate && !candidate.clean) {
+        // Re-check pending handoff after async fetch — it may have become pending while we were fetching.
+        if (pendingStartupSceneHandoff) {
+          setAutosaveRecovery(null);
+          return;
+        }
+        setAutosaveRecovery({
+          savedAt: candidate.savedAt ?? new Date().toISOString(),
+          voxlPath: candidate.voxlPath,
+          origin: candidate.origin,
+        });
+      }
+    });
 
     return () => {
       cancelled = true;
@@ -5063,15 +5104,17 @@ export default function Home() {
     void (async () => {
       setCloseUnsavedChangesBusy('save_and_close');
       await withCleanupAsync(async () => {
-        try {
-          const saved = await saveCurrentSceneNow();
-          if (!saved) return;
-          setShowCloseUnsavedChangesModal(false);
-          await closeDesktopWindowNow();
-        } catch (error) {
-          console.error('[SceneSave] Save-and-close failed.', error);
-        }
-      }, () => {
+          const outcome = await attemptAsync(async () => {
+            const saved = await saveCurrentSceneNow();
+            if (!saved) return;
+            setShowCloseUnsavedChangesModal(false);
+            await closeDesktopWindowNow();
+          });
+          if (!outcome.ok) {
+            const error = outcome.error;
+            console.error('[SceneSave] Save-and-close failed.', error);
+          }
+        }, () => {
         setCloseUnsavedChangesBusy('none');
       });
     })();
@@ -5087,8 +5130,8 @@ export default function Home() {
   const startNewScene = React.useCallback(() => {
     const ids = scene.models.map((model) => model.id);
     if (ids.length === 0) return;
-    void scene.deleteModels(ids);
-  }, [scene.deleteModels, scene.models]);
+    void deleteModels(ids);
+  }, [deleteModels, scene.models]);
 
   const handleRequestNewScene = React.useCallback(() => {
     if (hasUnsavedSceneChangesRef.current) {
@@ -5112,15 +5155,17 @@ export default function Home() {
     void (async () => {
       setNewSceneBusy('save_and_new');
       await withCleanupAsync(async () => {
-        try {
-          const saved = await saveCurrentSceneNow();
-          if (!saved) return;
-          setShowNewSceneUnsavedChangesModal(false);
-          startNewScene();
-        } catch (error) {
-          console.error('[SceneSave] Save-and-new-scene failed.', error);
-        }
-      }, () => {
+          const outcome = await attemptAsync(async () => {
+            const saved = await saveCurrentSceneNow();
+            if (!saved) return;
+            setShowNewSceneUnsavedChangesModal(false);
+            startNewScene();
+          });
+          if (!outcome.ok) {
+            const error = outcome.error;
+            console.error('[SceneSave] Save-and-new-scene failed.', error);
+          }
+        }, () => {
         setNewSceneBusy('none');
       });
     })();
@@ -5155,41 +5200,38 @@ export default function Home() {
     let unlisten: (() => void) | null = null;
     let disposed = false;
 
-    void (async () => {
-      try {
-        const { getCurrentWindow } = await importTauriWindow();
-        const currentWindow = getCurrentWindow();
-        unlisten = await currentWindow.onCloseRequested((event) => {
-          if (allowProgrammaticWindowCloseRef.current) {
-            allowProgrammaticWindowCloseRef.current = false;
-            return;
-          }
-
-          if (!hasUnsavedSceneChangesRef.current) {
-            // Clean exit with nothing outstanding: take the close over so the
-            // recovery file is actually gone before the process ends. A
-            // fire-and-forget delete here would race the window teardown and
-            // leave a `_autosave.voxl` beside a fully-saved project.
-            event.preventDefault();
-            void (async () => {
-              await clearAutosave();
-              await closeDesktopWindowNow();
-            })();
-            return;
-          }
-
-          event.preventDefault();
-          setShowCloseUnsavedChangesModal(true);
-        });
-
-        if (disposed && unlisten) {
-          unlisten();
-          unlisten = null;
+    // Failures are non-fatal in the web runtime or restricted capability mode.
+    void attemptAsync(async () => {
+      const { getCurrentWindow } = await importTauriWindow();
+      const currentWindow = getCurrentWindow();
+      unlisten = await currentWindow.onCloseRequested((event) => {
+        if (allowProgrammaticWindowCloseRef.current) {
+          allowProgrammaticWindowCloseRef.current = false;
+          return;
         }
-      } catch {
-        // Non-fatal in web runtime or restricted capability mode.
+
+        if (!hasUnsavedSceneChangesRef.current) {
+          // Clean exit with nothing outstanding: take the close over so the
+          // recovery file is actually gone before the process ends. A
+          // fire-and-forget delete here would race the window teardown and
+          // leave a `_autosave.voxl` beside a fully-saved project.
+          event.preventDefault();
+          void (async () => {
+            await clearAutosave();
+            await closeDesktopWindowNow();
+          })();
+          return;
+        }
+
+        event.preventDefault();
+        setShowCloseUnsavedChangesModal(true);
+      });
+
+      if (disposed && unlisten) {
+        unlisten();
+        unlisten = null;
       }
-    })();
+    });
 
     return () => {
       disposed = true;
@@ -5310,194 +5352,203 @@ export default function Home() {
     setPrintingDeviceProcessingStartedAtMs(null);
     setPrintingDeviceProcessingElapsedSec(0);
 
-    await withCleanupAsync(async () => { try {
-      const nativeTempPath = printingArtifact.nativeTempPath?.trim() || '';
-      const zipFilePath = nativeTempPath.length > 0 ? nativeTempPath : null;
-      const zipBlob = printingArtifact.blob ?? null;
-      throwIfCanceled();
-
-      if (!zipBlob && !zipFilePath) {
-        raise(new Error('No print artifact payload available for printer upload.'));
-      }
-
-      throwIfCanceled();
-
-      const pathBase = printingArtifact.outputName.replace(/\.[^.]+$/i, '');
-      const networkMode = (activeNetworkUiAdapter.mode || '').trim();
-      if (!networkMode) {
-        raise(new Error('No network mode available for printer upload.'));
-      }
-      
-      // Build the printer host URL
-      const hostUrl = `http://${host}${port && port !== 80 ? `:${port}` : ''}`;
-
-      // Track upload progress and send via active plugin handler
-      let resolvedPlateId: number | null = null;
-      
-      const uploadResult = await uploadPrintJobWithProgress({
-        networkMode,
-        hostUrl,
-        zipBlob,
-        zipFilePath,
-        path: pathBase,
-        profileId: selectedMaterialId,
-        callbacks: {
-          onProgress: (event: PluginUploadProgressEvent) => {
-            if (isCancelRequested()) return;
-            const progress = event.percentComplete / 100;
-            const clampedProgress = Math.min(progress, 0.9999);
-            if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
-              window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
-              printingUploadProcessingHandoffTimeoutRef.current = null;
-            }
-            setPrintingSendProgress(clampedProgress);
-            setPrintingUploadDisplayProgress(clampedProgress);
-            setPrintingUploadTelemetry({
-              speed: event.uploadSpeed,
-              remaining: event.remainingTime,
-              transferred: event.transferred,
-            });
-          },
-          onStatusUpdate: (update) => {
-            if (isCancelRequested()) return;
-            if (update.stage === 'processing') {
-              setPrintingSendProgress(1);
-              setPrintingUploadDisplayProgress(1);
-              if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
-                window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
-              }
-              printingUploadProcessingHandoffTimeoutRef.current = window.setTimeout(() => {
-                printingUploadProcessingHandoffTimeoutRef.current = null;
-                setPrintingUploadDialogStage('processing');
-                setPrintingSendStageText(_(msg`Processing on device…`));
-                setPrintingSendStatusText(formatUploadCompleteProcessing(_, activeNetworkUiAdapter.displayName));
-                setPrintingUploadTelemetry(null);
-                setPrintingDeviceProcessingStartedAtMs(Date.now());
-              }, 220);
-            } else if (update.stage === 'error') {
-              if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
-                window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
-                printingUploadProcessingHandoffTimeoutRef.current = null;
-              }
-              setPrintingSendStatusText(formatSendFailed(_, update.error || update.message));
-              setPrintingSendStageText(_(msg`Upload failed`));
-              setPrintingUploadDialogStage('failed');
-              setPrintingUploadTelemetry(null);
-              setPrintingSendProgress(0);
-              setPrintingUploadDisplayProgress(0);
-            }
-          },
-          onComplete: (plateId) => {
-            if (isCancelRequested()) return;
-            resolvedPlateId = plateId;
-          },
-        },
-      });
-
-      throwIfCanceled();
-
-      if (!uploadResult.ok) {
-        raise(new Error('Upload failed on printer backend'));
-      }
-
-      const startedAt = Date.now();
-      const timeoutMs = 10 * 60 * 1000;
-      const pollMs = 1250;
-      let metadataReady = false;
-      let pollFailureCount = 0;
-
-      while ((Date.now() - startedAt) < timeoutMs) {
+    await withCleanupAsync(async () => {
+      const outcome = await attemptAsync(async () => {
+        const nativeTempPath = printingArtifact.nativeTempPath?.trim() || '';
+        const zipFilePath = nativeTempPath.length > 0 ? nativeTempPath : null;
+        const zipBlob = printingArtifact.blob ?? null;
         throwIfCanceled();
-        try {
-          const responseReady = await pluginNetworkFetch({
-            pluginId: printingMonitoringAdapter.pluginId,
-            operation: platesListOperation,
-            ipAddress: host,
-            port,
-            plateId: resolvedPlateId,
-            jobName: pathBase,
-          });
 
-          const readyPayload = await readJsonObject(responseReady);
-          const matchedPlate = readyPayload?.matchedPlate as Record<string, unknown> | null | undefined;
-          const matchedPlateId = Number(
-            (matchedPlate as any)?.PlateID
-            ?? (matchedPlate as any)?.plateId
-            ?? (matchedPlate as any)?.plate_id
-            ?? (matchedPlate as any)?.id,
-          );
-          if (!resolvedPlateId && Number.isFinite(matchedPlateId) && matchedPlateId > 0) {
-            resolvedPlateId = matchedPlateId;
-          }
-
-          throwIfCanceled();
-
-          metadataReady = readyPayload?.metadataReady === true;
-          pollFailureCount = 0;
-
-          if (metadataReady) {
-            break;
-          }
-        } catch {
-          pollFailureCount += 1;
-          if (pollFailureCount >= 6) {
-            raise(new Error('Lost connection while waiting for device processing.'));
-          }
+        if (!zipBlob && !zipFilePath) {
+          raise(new Error('No print artifact payload available for printer upload.'));
         }
 
-        await new Promise<void>((resolve) => {
-          window.setTimeout(resolve, pollMs);
+        throwIfCanceled();
+
+        const pathBase = printingArtifact.outputName.replace(/\.[^.]+$/i, '');
+        const networkMode = (activeNetworkUiAdapter.mode || '').trim();
+        if (!networkMode) {
+          raise(new Error('No network mode available for printer upload.'));
+        }
+      
+        // Build the printer host URL
+        const hostUrl = `http://${host}${port && port !== 80 ? `:${port}` : ''}`;
+
+        // Track upload progress and send via active plugin handler
+        let resolvedPlateId: number | null = null;
+      
+        const uploadResult = await uploadPrintJobWithProgress({
+          networkMode,
+          hostUrl,
+          zipBlob,
+          zipFilePath,
+          path: pathBase,
+          profileId: selectedMaterialId,
+          callbacks: {
+            onProgress: (event: PluginUploadProgressEvent) => {
+              if (isCancelRequested()) return;
+              const progress = event.percentComplete / 100;
+              const clampedProgress = Math.min(progress, 0.9999);
+              if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+                window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+                printingUploadProcessingHandoffTimeoutRef.current = null;
+              }
+              setPrintingSendProgress(clampedProgress);
+              setPrintingUploadDisplayProgress(clampedProgress);
+              setPrintingUploadTelemetry({
+                speed: event.uploadSpeed,
+                remaining: event.remainingTime,
+                transferred: event.transferred,
+              });
+            },
+            onStatusUpdate: (update) => {
+              if (isCancelRequested()) return;
+              if (update.stage === 'processing') {
+                setPrintingSendProgress(1);
+                setPrintingUploadDisplayProgress(1);
+                if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+                  window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+                }
+                printingUploadProcessingHandoffTimeoutRef.current = window.setTimeout(() => {
+                  printingUploadProcessingHandoffTimeoutRef.current = null;
+                  setPrintingUploadDialogStage('processing');
+                  setPrintingSendStageText(_(msg`Processing on device…`));
+                  setPrintingSendStatusText(formatUploadCompleteProcessing(_, activeNetworkUiAdapter.displayName));
+                  setPrintingUploadTelemetry(null);
+                  setPrintingDeviceProcessingStartedAtMs(Date.now());
+                }, 220);
+              } else if (update.stage === 'error') {
+                if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+                  window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+                  printingUploadProcessingHandoffTimeoutRef.current = null;
+                }
+                setPrintingSendStatusText(formatSendFailed(_, update.error || update.message));
+                setPrintingSendStageText(_(msg`Upload failed`));
+                setPrintingUploadDialogStage('failed');
+                setPrintingUploadTelemetry(null);
+                setPrintingSendProgress(0);
+                setPrintingUploadDisplayProgress(0);
+              }
+            },
+            onComplete: (plateId) => {
+              if (isCancelRequested()) return;
+              resolvedPlateId = plateId;
+            },
+          },
         });
 
         throwIfCanceled();
-      }
 
-      if (resolvedPlateId) {
-        setPrintingReadyPlateId(resolvedPlateId);
-      }
+        if (!uploadResult.ok) {
+          raise(new Error('Upload failed on printer backend'));
+        }
 
-      if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
-        window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
-        printingUploadProcessingHandoffTimeoutRef.current = null;
-      }
+        const startedAt = Date.now();
+        const timeoutMs = 10 * 60 * 1000;
+        const pollMs = 1250;
+        let metadataReady = false;
+        let pollFailureCount = 0;
 
-      if (metadataReady) {
-        setPrintingSendProgress(1);
-        setPrintingUploadDisplayProgress(1);
-        setPrintingSendStageText(_(msg`Ready to print`));
-        setPrintingUploadDialogStage('ready');
-        setPrintingDeviceProcessingStartedAtMs(null);
-        setPrintingUploadTelemetry(null);
-        setPrintingSendStatusText(formatImportComplete(_, resolvedPlateId));
-      } else {
-        setPrintingSendProgress(1);
-        setPrintingUploadDisplayProgress(1);
-        setPrintingSendStageText(_(msg`Device still processing`));
+        while ((Date.now() - startedAt) < timeoutMs) {
+          throwIfCanceled();
+          // A cancel thrown inside the poll counts as a failed poll; the check after the
+          // wait below is the one that ends the loop.
+          const poll = await attemptAsync(async () => {
+            const responseReady = await pluginNetworkFetch({
+              pluginId: printingMonitoringAdapter.pluginId,
+              operation: platesListOperation,
+              ipAddress: host,
+              port,
+              plateId: resolvedPlateId,
+              jobName: pathBase,
+            });
+
+            const readyPayload = await readJsonObject(responseReady);
+            const matchedPlate = readyPayload?.matchedPlate as Record<string, unknown> | null | undefined;
+            const matchedPlateId = Number(
+              (matchedPlate as any)?.PlateID
+              ?? (matchedPlate as any)?.plateId
+              ?? (matchedPlate as any)?.plate_id
+              ?? (matchedPlate as any)?.id,
+            );
+            if (!resolvedPlateId && Number.isFinite(matchedPlateId) && matchedPlateId > 0) {
+              resolvedPlateId = matchedPlateId;
+            }
+
+            throwIfCanceled();
+
+            return readyPayload?.metadataReady === true;
+          });
+          if (poll.ok) {
+            metadataReady = poll.value;
+            pollFailureCount = 0;
+
+            if (metadataReady) {
+              break;
+            }
+          } else {
+            pollFailureCount += 1;
+            if (pollFailureCount >= 6) {
+              raise(new Error('Lost connection while waiting for device processing.'));
+            }
+          }
+
+          await new Promise<void>((resolve) => {
+            window.setTimeout(resolve, pollMs);
+          });
+
+          throwIfCanceled();
+        }
+
+        if (resolvedPlateId) {
+          setPrintingReadyPlateId(resolvedPlateId);
+        }
+
+        if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+          window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+          printingUploadProcessingHandoffTimeoutRef.current = null;
+        }
+
+        if (metadataReady) {
+          setPrintingSendProgress(1);
+          setPrintingUploadDisplayProgress(1);
+          setPrintingSendStageText(_(msg`Ready to print`));
+          setPrintingUploadDialogStage('ready');
+          setPrintingDeviceProcessingStartedAtMs(null);
+          setPrintingUploadTelemetry(null);
+          setPrintingSendStatusText(formatImportComplete(_, resolvedPlateId));
+        } else {
+          setPrintingSendProgress(1);
+          setPrintingUploadDisplayProgress(1);
+          setPrintingSendStageText(_(msg`Device still processing`));
+          setPrintingUploadDialogStage('failed');
+          setPrintingDeviceProcessingStartedAtMs(null);
+          setPrintingUploadTelemetry(null);
+          setPrintingSendStatusText(formatUploadStillProcessing(_, resolvedPlateId));
+        }
+      });
+      if (!outcome.ok) {
+        const error = outcome.error;
+        if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
+          window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
+          printingUploadProcessingHandoffTimeoutRef.current = null;
+        }
+        const message = error instanceof Error ? error.message : _(msg`Unknown error`);
+        const canceled = printingSendCancelRequestedRef.current || /cancel|abort/i.test(message);
+        if (canceled) {
+          setPrintingSendStatusText(_(msg`Upload canceled. You can retry when ready.`));
+          setPrintingSendStageText(_(msg`Upload canceled`));
+        } else {
+          setPrintingSendStatusText(formatSendFailed(_, message));
+          setPrintingSendStageText(_(msg`Upload failed`));
+        }
         setPrintingUploadDialogStage('failed');
         setPrintingDeviceProcessingStartedAtMs(null);
         setPrintingUploadTelemetry(null);
-        setPrintingSendStatusText(formatUploadStillProcessing(_, resolvedPlateId));
+        setPrintingSendProgress(0);
+        setPrintingUploadDisplayProgress(0);
       }
-    } catch (error) {
-      if (printingUploadProcessingHandoffTimeoutRef.current !== null) {
-        window.clearTimeout(printingUploadProcessingHandoffTimeoutRef.current);
-        printingUploadProcessingHandoffTimeoutRef.current = null;
-      }
-      const message = error instanceof Error ? error.message : _(msg`Unknown error`);
-      const canceled = printingSendCancelRequestedRef.current || /cancel|abort/i.test(message);
-      if (canceled) {
-        setPrintingSendStatusText(_(msg`Upload canceled. You can retry when ready.`));
-        setPrintingSendStageText(_(msg`Upload canceled`));
-      } else {
-        setPrintingSendStatusText(formatSendFailed(_, message));
-        setPrintingSendStageText(_(msg`Upload failed`));
-      }
-      setPrintingUploadDialogStage('failed');
-      setPrintingDeviceProcessingStartedAtMs(null);
-      setPrintingUploadTelemetry(null);
-      setPrintingSendProgress(0);
-      setPrintingUploadDisplayProgress(0);
-    } }, () => {
+    }, () => {
       setPrintingSendBusy(false);
       printingSendCancelRequestedRef.current = false;
     });
@@ -5511,6 +5562,7 @@ export default function Home() {
     printingMonitoringAdapter.pluginId,
     printingTargetMaterialOptions,
     slicedLayerHeightMm,
+    setPrintingTargetDeviceId,
   ]);
 
   const handleSendToPrinter = React.useCallback(async () => {
@@ -5544,6 +5596,8 @@ export default function Home() {
     printingArtifact,
     printingTargetDevice,
     requiresRemoteMaterialSelectionForUpload,
+    setPrintingTargetPickerMode,
+    setPrintingTargetPickerOpen,
   ]);
 
   const handleCancelSendToPrinter = React.useCallback(() => {
@@ -5585,34 +5639,38 @@ export default function Home() {
     setPrintingUploadDialogStage('starting');
     setPrintingDeviceProcessingStartedAtMs(null);
 
-    await withCleanupAsync(async () => { try {
-      const response = await pluginNetworkFetch({
-        pluginId: printingMonitoringAdapter.pluginId,
-        operation: startOperation,
-        ipAddress: host,
-        port,
-        plateId: printingReadyPlateId,
-      });
+    await withCleanupAsync(async () => {
+      const outcome = await attemptAsync(async () => {
+        const response = await pluginNetworkFetch({
+          pluginId: printingMonitoringAdapter.pluginId,
+          operation: startOperation,
+          ipAddress: host,
+          port,
+          plateId: printingReadyPlateId,
+        });
 
-      const payload = await readJsonObject(response);
-      if (response.ok && payload?.ok === true) {
-        setPrintingSendStageText(_(msg`Print started`));
-        setPrintingUploadDialogStage('started');
-        setPrintingSendStatusText(formatPrintStarted(_, printingReadyPlateId));
-        setPrintingUploadDialogOpen(false);
-        openPrintingMonitorForTargetDevice(printingTargetDevice.id);
-      } else {
-        const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
+        const payload = await readJsonObject(response);
+        if (response.ok && payload?.ok === true) {
+          setPrintingSendStageText(_(msg`Print started`));
+          setPrintingUploadDialogStage('started');
+          setPrintingSendStatusText(formatPrintStarted(_, printingReadyPlateId));
+          setPrintingUploadDialogOpen(false);
+          openPrintingMonitorForTargetDevice(printingTargetDevice.id);
+        } else {
+          const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
+          setPrintingSendStageText(_(msg`Start print failed`));
+          setPrintingUploadDialogStage('failed');
+          setPrintingSendStatusText(formatPrintStartFailed(_, reason));
+        }
+      });
+      if (!outcome.ok) {
+        const error = outcome.error;
+        const message = error instanceof Error ? error.message : _(msg`Unknown error`);
         setPrintingSendStageText(_(msg`Start print failed`));
         setPrintingUploadDialogStage('failed');
-        setPrintingSendStatusText(formatPrintStartFailed(_, reason));
+        setPrintingSendStatusText(formatPrintStartFailed(_, message));
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : _(msg`Unknown error`);
-      setPrintingSendStageText(_(msg`Start print failed`));
-      setPrintingUploadDialogStage('failed');
-      setPrintingSendStatusText(formatPrintStartFailed(_, message));
-    } }, () => {
+    }, () => {
       setPrintingPrintNowBusy(false);
     });
   }, [_, activePrinterProfile, openPrintingMonitorForTargetDevice, printingMonitoringAdapter.operations, printingMonitoringAdapter.pluginId, printingReadyPlateId, printingTargetDevice]);
@@ -5701,8 +5759,8 @@ export default function Home() {
     } else {
       scene.setSelectedModelIds(ids);
     }
-    scene.setActiveModelId(activeId);
-  }, [scene]);
+    setActiveModelId(activeId);
+  }, [scene, setActiveModelId]);
 
   const handleGroupSelection = React.useCallback((groupId: string, mode: 'single' | 'add' = 'single') => {
     scene.selectGroup(groupId, mode);
@@ -5787,8 +5845,8 @@ export default function Home() {
     const preferredActiveId = deduped.includes(scene.activeModelId ?? '')
       ? scene.activeModelId
       : deduped[0];
-    scene.setActiveModelId(preferredActiveId);
-  }, [scene]);
+    setActiveModelId(preferredActiveId);
+  }, [scene, setActiveModelId]);
 
   const isFiniteNumber = React.useCallback((n: number) => Number.isFinite(n) && !Number.isNaN(n), []);
 
@@ -6102,7 +6160,7 @@ export default function Home() {
     pendingHistoryTransformResyncRef.current = false;
     invalidatePendingTransformHistory();
     pendingTransformRef.current = null;
-    transformMgr.setIsTransforming(false);
+    setIsTransforming(false);
 
     cancelPendingHistoryTransformResyncFrames();
     const token = ++historyTransformResyncTokenRef.current;
@@ -6150,7 +6208,7 @@ export default function Home() {
     scene.activeModel,
     scene.activeModelId,
     pendingTransformRef,
-    transformMgr.setIsTransforming,
+    setIsTransforming,
     transformMgr.transformHook,
   ]);
 
@@ -6377,7 +6435,7 @@ export default function Home() {
           modelIds: scene.models.map((model) => model.id),
           selectedModelIds: scene.selectedModelIds,
           activeModelId: scene.activeModelId,
-        }, scene.deleteModels);
+        }, deleteModels);
         break;
       case 'copy':
         if (scene.selectedModelIds.length > 0) {
@@ -6497,6 +6555,7 @@ export default function Home() {
     liveSelectedBodies,
     multiTankMaterialChoices,
     scene,
+    deleteModels,
   ]);
 
   React.useEffect(() => {
@@ -6908,7 +6967,7 @@ export default function Home() {
   // Keep this callback stable during active drags to avoid callback-identity
   // churn feeding back into gizmo drag listeners/effects.
   const handleTransformChange = React.useCallback((pos: THREE.Vector3, rot: THREE.Euler, scl: THREE.Vector3) => {
-    transformMgr.setIsTransforming(true);
+    setIsTransforming(true);
     if (isScaleGestureRef.current) {
       // Scale gizmos already hold the starting bottom; the live snap would recompute the same Z.
       pendingTransformRef.current = { pos: pos.clone(), rot: rot.clone(), scl: scl.clone() };
@@ -6917,8 +6976,8 @@ export default function Home() {
       transformMgr.transformHook.setScale(scl.x, scl.y, scl.z);
       return;
     }
-    transformMgr.onTransformChange(pos, rot, scl);
-  }, [transformMgr.onTransformChange, pendingTransformRef, transformMgr.setIsTransforming, transformMgr.transformHook]);
+    onTransformChange(pos, rot, scl);
+  }, [onTransformChange, pendingTransformRef, setIsTransforming, transformMgr.transformHook]);
 
   // 3. Slicing (Global context - operates on scene bounds, not just active model)
   const hasAnyEntries = React.useCallback((record: Record<string, unknown>) => {
@@ -7205,13 +7264,17 @@ export default function Home() {
 
   // Populate the import/export manager deps now that the slicing manager and the
   // select-all model state exist (breaks the TDZ/dependency cycle, mirrors the
-  // hollowing manager). Render-time assignment so mount-time effects see real values.
-  importExportDepsRef.current = {
-    isDesktopRuntime,
-    slicing: { layerIndex: slicing.layerIndex, setLayerIndex: slicing.setLayerIndex },
-    isSelectAllModelsActive,
-    setIsSelectAllModelsActive,
-  };
+  // hollowing manager). An insertion effect runs before every layout and passive
+  // effect of the commit, children's included, so mount-time effects see real values;
+  // assigned in render, it would keep Home out of the React Compiler.
+  React.useInsertionEffect(() => {
+    importExportDepsRef.current = {
+      isDesktopRuntime,
+      slicing: { layerIndex: slicing.layerIndex, setLayerIndex: slicing.setLayerIndex },
+      isSelectAllModelsActive,
+      setIsSelectAllModelsActive,
+    };
+  });
 
   React.useEffect(() => {
     const targetMicron = Math.max(1, Math.round(crossSectionLayerHeightMm * 1000));
@@ -7255,6 +7318,7 @@ export default function Home() {
     }
 
     previousSceneModeRef.current = currentMode;
+    setPreviousSceneMode(currentMode);
   }, [scene.mode, scene.activeModelId, scene.setSelectedModelIds, slicing.layerIndex, slicing.numLayers, slicing.setLayerIndex]);
 
 
@@ -7262,7 +7326,7 @@ export default function Home() {
   React.useEffect(() => {
     if (scene.models.length === 0 && scene.mode === 'printing') {
       // Reset to prepare mode if we delete the last model while in printing
-      scene.setMode('prepare');
+      setMode('prepare');
       slicedPlates.clear();
     }
   }, [scene.models.length, scene.mode, scene, slicedPlates]);
@@ -7277,7 +7341,7 @@ export default function Home() {
       isProfileModalOpenRef.current = isOpen;
       if (!isOpen && pendingPrintingKickRef.current) {
         pendingPrintingKickRef.current = false;
-        scene.setMode('prepare');
+        setMode('prepare');
         setShowPrintingResliceModal(true);
       }
     };
@@ -7292,7 +7356,7 @@ export default function Home() {
       if (isProfileModalOpenRef.current) {
         pendingPrintingKickRef.current = true;
       } else {
-        scene.setMode('prepare');
+        setMode('prepare');
         setShowPrintingResliceModal(true);
       }
     }
@@ -7436,7 +7500,7 @@ export default function Home() {
 
   const handleModeChange = React.useCallback((nextMode: typeof scene.mode) => {
     if (scene.models.length === 0 && nextMode !== 'prepare') {
-      scene.setMode('prepare');
+      setMode('prepare');
       return;
     }
     // A sliced bed anywhere is enough to enter the printing workspace: the preview follows the
@@ -7449,8 +7513,8 @@ export default function Home() {
       setShowPrintingResliceModal(true);
       return;
     }
-    scene.setMode(nextMode);
-  }, [hasSlicedPlate, isActiveSliceStale, scene]);
+    setMode(nextMode);
+  }, [hasSlicedPlate, isActiveSliceStale, scene, setMode]);
 
   const handleAddPrinterFromOnboarding = React.useCallback(() => {
     openProfileSettingsModal('printer', { openPrinterLibrary: true });
@@ -8007,8 +8071,8 @@ export default function Home() {
       suppressTransformPersistenceCycles(10);
       finalizeMirrorSessionRef.current();
     }
-    transformMgr.setTransformMode(nextMode);
-  }, [suppressTransformPersistenceCycles, transformMgr.transformMode, transformMgr.setTransformMode]);
+    setTransformMode(nextMode);
+  }, [suppressTransformPersistenceCycles, transformMgr.transformMode, setTransformMode]);
 
   // Keep the history origin mirror current, and wire the restore now that both
   // setters exist. The restore is assigned on every render (no dep array) so it
@@ -8025,7 +8089,8 @@ export default function Home() {
   // Bring back the models the undone entry was made on. Run on the tick the history
   // subscriber bumps, not in the subscriber: an undo that restores a deleted model
   // only has it in `scene.models` once that render lands.
-  React.useEffect(() => {
+  // Only the tick starts this; the rest is read as it stands when it fires.
+  const restorePendingHistorySelection = React.useEffectEvent(() => {
     const pending = pendingHistorySelectionRef.current;
     pendingHistorySelectionRef.current = null;
     if (!pending) return;
@@ -8040,15 +8105,16 @@ export default function Home() {
       current,
       (id) => {
         const model = byId.get(id);
-        return Boolean(model) && !scene.isModelPlateLocked(model!);
+        return Boolean(model) && !isSceneModelPlateLocked(model!);
       },
     );
     if (!next) return;
     scene.setSelectedModelIds(next.modelIds);
-    scene.setActiveModelId(next.activeModelId);
+    setActiveModelId(next.activeModelId);
     historyFocusPendingRef.current = true;
-    // Only the tick starts this; the rest is read as it stands when it fires.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  });
+  React.useEffect(() => {
+    restorePendingHistorySelection();
   }, [historyTransformResyncTick]);
 
   // Then frame it, the way F does, once the camera controller has the new selection.
@@ -8065,7 +8131,7 @@ export default function Home() {
       if (isAppMode(origin.appMode) && origin.appMode !== scene.mode) {
         // The workspace switch must not put back the workspace's remembered tool over this one.
         historyOriginToolPendingRef.current = isTransformMode(origin.transformMode);
-        scene.setMode(origin.appMode);
+        setMode(origin.appMode);
       }
       if (isTransformMode(origin.transformMode) && origin.transformMode !== transformMgr.transformMode) {
         setTransformModeWithMirrorFinalize(origin.transformMode);
@@ -8124,13 +8190,13 @@ export default function Home() {
 
   useDeleteHotkey();
   useCameraProjectionHotkey();
-  // The map is a ref, so it never subscribes this component: `cavityGeometryVersion`
-  // is the reactive half and has to be in the deps, or the answer is whatever it
-  // was on the last render and interior view stays available after the hollow that
-  // justified it is reset.
+  // Read from the manager's copy of the cavity map, not the ref: a ref never
+  // subscribes this component, so the answer would be whatever it was on the last
+  // render and interior view would stay available after the hollow that justified
+  // it is reset.
   const hasCavityGeometry = React.useMemo(
-    () => (scene.activeModel ? cavityGeometryByModelIdRef.current.has(scene.activeModel.id) : false),
-    [scene.activeModel, cavityGeometryVersion],
+    () => (scene.activeModel ? cavityGeometryByModelId.has(scene.activeModel.id) : false),
+    [scene.activeModel, cavityGeometryByModelId],
   );
   useInteriorViewHotkey(
     () => setInteriorView((prev) => !prev),
@@ -8154,8 +8220,8 @@ export default function Home() {
   React.useEffect(() => {
     if (scene.models.length > 0) return;
     if (scene.mode === 'prepare') return;
-    scene.setMode('prepare');
-  }, [scene.mode, scene.models.length, scene.setMode]);
+    setMode('prepare');
+  }, [scene.mode, scene.models.length, setMode]);
 
   // Visible models with unapplied hole punches and/or unapplied hollowing.
   // Hidden models are ignored entirely — they neither open the warning nor get
@@ -8172,12 +8238,12 @@ export default function Home() {
     const hollowIds: string[] = [];
     for (const model of scene.models) {
       if (!model.visible) continue;
-      const unapplied = getUnappliedModifiers(scene.getModelMeshModifiers(model.id));
+      const unapplied = getUnappliedModifiers(getModelMeshModifiers(model.id));
       if (unapplied.holePunches) holeIds.push(model.id);
       if (unapplied.hollowing) hollowIds.push(model.id);
     }
     return { holeIds, hollowIds };
-  }, [scene.models, scene.getModelMeshModifiers]);
+  }, [scene.models, getModelMeshModifiers]);
 
   const getVisibleModelIdsWithUnappliedHoles = React.useCallback(
     (): string[] => getVisibleModelIdsWithUnappliedModifiers().holeIds,
@@ -8194,9 +8260,9 @@ export default function Home() {
     if (queue.length === 0) return;
     holePunchApplyAllQueueRef.current = queue.slice(1);
     setApplyAllHolePunchProgress({ done: 0, total: queue.length });
-    scene.setActiveModelId(queue[0]);
+    setActiveModelId(queue[0]);
     setPendingHolePunchAutoApplyModelId(queue[0]);
-  }, [getVisibleModelIdsWithUnappliedHoles, scene.setActiveModelId]);
+  }, [getVisibleModelIdsWithUnappliedHoles, setActiveModelId]);
 
   // Guide the user to the per-model hole-punch UI (Support → Hollowing tool).
   const handleGoToHollowTool = React.useCallback(() => {
@@ -8204,11 +8270,11 @@ export default function Home() {
     const { holeIds, hollowIds } = getVisibleModelIdsWithUnappliedModifiers();
     const firstPending = holeIds[0] ?? hollowIds[0];
     if (firstPending) {
-      scene.setActiveModelId(firstPending);
+      setActiveModelId(firstPending);
     }
-    scene.setMode('support');
+    setMode('support');
     setTransformModeWithMirrorFinalize('hollowing');
-  }, [getVisibleModelIdsWithUnappliedModifiers, scene.setActiveModelId, scene.setMode, setTransformModeWithMirrorFinalize]);
+  }, [getVisibleModelIdsWithUnappliedModifiers, setActiveModelId, setMode, setTransformModeWithMirrorFinalize]);
 
   // The modal reports which action the user picked; the page performs it and
   // answers any waiting caller (Generate Supports). The export flow opens the
@@ -8279,7 +8345,7 @@ export default function Home() {
     const pendingIds = [...new Set([...holeIds, ...hollowIds])];
     if (pendingIds.length === 0) return Promise.resolve(true);
     if (scene.activeModelId === null || !pendingIds.includes(scene.activeModelId)) {
-      scene.setActiveModelId(pendingIds[0]);
+      setActiveModelId(pendingIds[0]);
     }
     setUnappliedModifierPromptPurpose('supports');
     unappliedHolePunchResolveRef.current = resolveUnappliedModifier;
@@ -8287,7 +8353,7 @@ export default function Home() {
     return new Promise<boolean>((resolve) => {
       pendingModifierDecisionResolve.current = resolve;
     });
-  }, [getVisibleModelIdsWithUnappliedModifiers, resolveUnappliedModifier, scene.activeModelId, scene.setActiveModelId]);
+  }, [getVisibleModelIdsWithUnappliedModifiers, resolveUnappliedModifier, scene.activeModelId, setActiveModelId]);
 
   React.useEffect(() => {
     if (scene.mode !== 'export') return;
@@ -8308,7 +8374,7 @@ export default function Home() {
       // Only nudge when the active model isn't already one that needs baking, so
       // this doesn't fight a deliberate selection or loop on re-run.
       if (scene.activeModelId === null || !unbakedHoleModelIds.includes(scene.activeModelId)) {
-        scene.setActiveModelId(unbakedHoleModelIds[0]);
+        setActiveModelId(unbakedHoleModelIds[0]);
       }
     }
 
@@ -8322,13 +8388,13 @@ export default function Home() {
     if (!scene.activeModelId) {
       const firstVisible = visibleModels[0] ?? scene.models[0];
       if (firstVisible) {
-        scene.setActiveModelId(firstVisible.id);
+        setActiveModelId(firstVisible.id);
       }
     }
 
     // Select all visible models for export workspace tinting
     scene.setSelectedModelIds(visibleIds);
-  }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId, scene.setSelectedModelIds, getVisibleModelIdsWithUnappliedHoles, applyAllHolePunchProgress, resolveUnappliedModifier]);
+  }, [scene.mode, scene.activeModelId, scene.models, setActiveModelId, scene.setSelectedModelIds, getVisibleModelIdsWithUnappliedHoles, applyAllHolePunchProgress, resolveUnappliedModifier]);
 
 
   // Advance the "Apply to All" queue once the current model's bake settles.
@@ -8352,9 +8418,9 @@ export default function Home() {
     setApplyAllHolePunchProgress((previous) => (
       previous ? { ...previous, done: previous.done + 1 } : previous
     ));
-    scene.setActiveModelId(nextModelId);
+    setActiveModelId(nextModelId);
     setPendingHolePunchAutoApplyModelId(nextModelId);
-  }, [applyAllHolePunchProgress, isApplyingHolePunch, pendingHolePunchAutoApplyModelId, scene.setActiveModelId]);
+  }, [applyAllHolePunchProgress, isApplyingHolePunch, pendingHolePunchAutoApplyModelId, setActiveModelId]);
 
   // When entering arrange mode with exactly one visible model, auto-select it.
   React.useEffect(() => {
@@ -8408,7 +8474,7 @@ export default function Home() {
     return 'tint';
   }, [isSupportSpotlightHoldActive, scene.mode]);
 
-  const isTransitioningOutOfPrinting = scene.mode !== 'printing' && previousSceneModeRef.current === 'printing';
+  const isTransitioningOutOfPrinting = scene.mode !== 'printing' && previousSceneMode === 'printing';
 
   // The scene reads the clip from its own store, so a slider drag does not
   // re-render this page. The switch below is the only thing that gates it.
@@ -8452,15 +8518,14 @@ export default function Home() {
    * fresh Map per render is worse — the Prepare merged-support cache keys on this
    * map, so every unrelated render (a tool switch, a selection) invalidated the
    * walk and re-merged every model, which is a second of work landing on the
-   * camera transition that triggered it. `cavityGeometryVersion` is bumped on
-   * every mutation of the ref, so it is the correct trigger.
+   * camera transition that triggered it. The manager's copy of the map is replaced
+   * on every mutation of the ref, so it is the correct trigger.
    */
   const sceneCanvasCavityGeometryByModelId = React.useMemo(
     () => new Map(
-      Array.from(cavityGeometryByModelIdRef.current.entries()).map(([id, entry]) => [id, entry.geometry]),
+      Array.from(cavityGeometryByModelId.entries()).map(([id, entry]) => [id, entry.geometry]),
     ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the ref is stable; the version is its change signal
-    [cavityGeometryVersion],
+    [cavityGeometryByModelId],
   );
 
   React.useEffect(() => {
@@ -8470,9 +8535,9 @@ export default function Home() {
 
     const firstVisible = scene.models.find((model) => model.visible) ?? scene.models[0];
     if (firstVisible) {
-      scene.setActiveModelId(firstVisible.id);
+      setActiveModelId(firstVisible.id);
     }
-  }, [scene.mode, scene.activeModelId, scene.models, scene.setActiveModelId]);
+  }, [scene.mode, scene.activeModelId, scene.models, setActiveModelId]);
 
   React.useEffect(() => {
     if (scene.mode !== 'support') return;
@@ -8490,14 +8555,14 @@ export default function Home() {
 
     scene.setSelectedModelIds([keptId]);
     if (scene.activeModelId !== keptId) {
-      scene.setActiveModelId(keptId);
+      setActiveModelId(keptId);
     }
   }, [
     scene.mode,
     scene.selectedModelIds,
     scene.models,
     scene.activeModelId,
-    scene.setActiveModelId,
+    setActiveModelId,
     scene.setSelectedModelIds,
     scene.clearModelSelection,
   ]);
@@ -8528,14 +8593,14 @@ export default function Home() {
     const fallback = scene.models.find((model) => model.visible) ?? scene.models[0];
     if (!fallback) return;
 
-    scene.setActiveModelId(fallback.id);
+    setActiveModelId(fallback.id);
     scene.setSelectedModelIds([fallback.id]);
   }, [
     scene.mode,
     scene.models,
     scene.activeModelId,
     scene.selectedModelIds,
-    scene.setActiveModelId,
+    setActiveModelId,
     scene.setSelectedModelIds,
   ]);
 
@@ -8623,9 +8688,7 @@ export default function Home() {
     }
     : {};
 
-  const renderId = useRef(0);
   const postRotateLiftScheduledRef = useRef(false);
-  renderId.current++;
 
   // Glue Logic: Transform End Hook
   // When rotation ends, we must clear scan data as it invalidates the scan
@@ -8674,7 +8737,7 @@ export default function Home() {
     }
 
     if (options?.skipStoreCommit) {
-      transformMgr.setIsTransforming(false);
+      setIsTransforming(false);
       pendingTransformRef.current = null;
       invalidatePendingTransformHistory();
       return;
@@ -8859,7 +8922,7 @@ export default function Home() {
       pendingTransformHistoryRef.current.description = modelTransformLabel(operation, targetModelName);
     }
 
-    transformMgr.setIsTransforming(false);
+    setIsTransforming(false);
 
     if (operation === 'rotate') {
       islands.clearScanData();
@@ -9236,14 +9299,14 @@ export default function Home() {
     // tracking the lift distance.
     const currentOrigin = getSelectionPositionOrigin(scene.models, targetIds);
     if (!currentOrigin || Math.abs(z - currentOrigin.z) > 1e-6) {
-      scene.setModelsAutoLift(targetIds, false);
+      setModelsAutoLift(targetIds, false);
     }
     applySelectionPositionUpdates(buildSelectionPositionUpdates(
       scene.models,
       targetIds,
       new THREE.Vector3(x, y, z),
     ), { pushHistory: false });
-  }, [applySelectionPositionUpdates, ensurePendingSelectionHistory, getSelectionTargetIds, scene.models, scene.setModelsAutoLift]);
+  }, [applySelectionPositionUpdates, ensurePendingSelectionHistory, getSelectionTargetIds, scene.models, setModelsAutoLift]);
 
   const handleRotateSelectedModels = React.useCallback((x: number, y: number, z: number) => {
     const activeModel = scene.activeModel;
@@ -9449,7 +9512,7 @@ export default function Home() {
 
   const getCavityGeometryForModel = React.useCallback(
     (modelId: string) => cavityGeometryByModelIdRef.current.get(modelId)?.geometry ?? null,
-    [],
+    [cavityGeometryByModelIdRef],
   );
 
   /** Whether every model in the selection follows the lift distance. */
@@ -9475,8 +9538,8 @@ export default function Home() {
   /** Whether the bed a model stands on refuses edits. */
   const isModelPlateLocked = React.useCallback((modelId: string) => {
     const model = scene.models.find((candidate) => candidate.id === modelId);
-    return model ? scene.isModelPlateLocked(model) : false;
-  }, [scene.isModelPlateLocked, scene.models]);
+    return model ? isSceneModelPlateLocked(model) : false;
+  }, [isSceneModelPlateLocked, scene.models]);
 
   const notifyPlateLocked = React.useCallback(() => {
     notifyPlateLockedRef.current();
@@ -9533,7 +9596,7 @@ export default function Home() {
     if (operation === 'move' && details?.axis === 'z') {
       disableSnapForManualZMove();
       // A Z drag is a manual placement too, for every model it moves.
-      scene.setModelsAutoLift(getSelectionTargetIds(), false);
+      setModelsAutoLift(getSelectionTargetIds(), false);
     }
 
     if (!pendingTransformHistoryRef.current || pendingTransformHistoryRef.current.modelId !== scene.activeModelId) {
@@ -9555,7 +9618,7 @@ export default function Home() {
 
     isScaleGestureRef.current = operation === 'scale';
     return true;
-  }, [captureTransformSupportSnapshot, disableSnapForManualZMove, getSelectionTargetIds, isModelPlateLocked, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, scene.models, scene.selectedModelIds, scene.setModelsAutoLift]);
+  }, [captureTransformSupportSnapshot, disableSnapForManualZMove, getSelectionTargetIds, isModelPlateLocked, requestDestructiveTransformSupportDeletion, scene.activeModel, scene.activeModelId, scene.models, scene.selectedModelIds, setModelsAutoLift]);
 
   const ensurePendingTransformHistoryForActiveModel = React.useCallback((operation: 'move' | 'rotate' | 'scale') => {
     if (!scene.activeModelId || !scene.activeModel) return;
@@ -9715,7 +9778,7 @@ export default function Home() {
         if (isSelectAllModelsActive) {
           void scene.deleteModelsAndExtraPlates(ids);
         } else {
-          void scene.deleteModels(ids);
+          void deleteModels(ids);
         }
         setIsSelectAllModelsActive(false);
       },
@@ -10065,8 +10128,8 @@ export default function Home() {
     // live snap even if a manual Z drag had stood it down for that gesture.
     transformMgr.setSnapEnabled(true);
 
-    transformMgr.setIsTransforming(true);
-  }, [ensurePendingTransformHistoryForActiveModel, transformMgr]);
+    setIsTransforming(true);
+  }, [ensurePendingTransformHistoryForActiveModel, transformMgr, setIsTransforming]);
 
   const persistActiveModelModifiers = React.useCallback((
     next: ModelMeshModifiers | undefined,
@@ -10193,7 +10256,7 @@ export default function Home() {
             const visibleIds = scene.models.filter((model) => model.visible).map((model) => model.id);
             if (visibleIds.length > 0) {
               scene.setSelectedModelIds(visibleIds);
-              scene.setActiveModelId(visibleIds[0]);
+              setActiveModelId(visibleIds[0]);
             }
             setIsSelectAllModelsActive(true);
           }
@@ -10274,35 +10337,38 @@ export default function Home() {
       if (scene.shaderType !== 'overhang_heatmap') {
         preOverhangViewTypeRef.current = scene.shaderType;
       }
-      scene.setShaderType('overhang_heatmap');
+      setShaderType('overhang_heatmap');
       return;
     }
     const previous = preOverhangViewTypeRef.current;
-    scene.setShaderType(previous === 'overhang_heatmap' ? 'soft_clay' : previous);
-  }, [scene.shaderType, scene.setShaderType]);
+    setShaderType(previous === 'overhang_heatmap' ? 'soft_clay' : previous);
+  }, [scene.shaderType, setShaderType]);
 
   // Populate the hollowing manager deps now that the hole-punch manager and
-  // shared callbacks exist (breaks the TDZ/dependency cycle).
-  hollowingDepsRef.current = {
-    showOperationError,
-    setShowDamagedModelDialog,
-    beginFinalizing,
-    clearFinalizing,
-    nextPaint,
-    persistActiveModelModifiers,
-    setPendingModifierResetAction,
-    setInteriorView,
-    computeAutoHolePunchDepthMmForGeometry,
-    setHolePunchState,
-    setHolePunchPlacements,
-    holePunchPlacementsRef,
-    setPendingHolePunchAutoApplyModelId,
-    setPendingBlockerResetState,
-    setSelectedHolePunchPlacementIds,
-    setHoveredHolePunchPlacementId,
-    setHolePunchHoverPlacement,
-    interiorView,
-  };
+  // shared callbacks exist (breaks the TDZ/dependency cycle). In an insertion
+  // effect for the same reason as the import/export deps above.
+  React.useInsertionEffect(() => {
+    hollowingDepsRef.current = {
+      showOperationError,
+      setShowDamagedModelDialog,
+      beginFinalizing,
+      clearFinalizing,
+      nextPaint,
+      persistActiveModelModifiers,
+      setPendingModifierResetAction,
+      setInteriorView,
+      computeAutoHolePunchDepthMmForGeometry,
+      setHolePunchState,
+      setHolePunchPlacements,
+      holePunchPlacementsRef,
+      setPendingHolePunchAutoApplyModelId,
+      setPendingBlockerResetState,
+      setSelectedHolePunchPlacementIds,
+      setHoveredHolePunchPlacementId,
+      setHolePunchHoverPlacement,
+      interiorView,
+    };
+  });
 
   const handleConfirmModifierReset = React.useCallback(() => {
     const action = pendingModifierResetAction;
@@ -10353,7 +10419,7 @@ export default function Home() {
         openFaceSelected: next.mode === 'shell_open_face' ? false : true,
       },
     }, { historyDescription: HOLLOWING_SETTINGS_LABEL });
-  }, [defaultHollowingState, hollowingState, pendingBlockerResetState, persistActiveModelModifiers, scene.activeModel]);
+  }, [defaultHollowingState, hollowingState, pendingBlockerResetState, persistActiveModelModifiers, scene.activeModel, setBlockedHollowVoxelIndices, setEditingBlockedHollowVoxelIndices, setHollowingDraftEnabled, setHollowingState, setIsShellOpenFaceSelected]);
 
 
   const handleToolRailHover = React.useCallback((mode: TransformMode | null) => {
@@ -10706,7 +10772,7 @@ export default function Home() {
         hasModels={scene.models.length > 0}
         hasPrintingData={hasPrintingWorkspaceData}
         viewType={scene.shaderType}
-        onViewTypeChange={scene.setShaderType}
+        onViewTypeChange={setShaderType}
         overhangViewActive={scene.shaderType === 'overhang_heatmap'}
         onOverhangViewChange={toggleOverhangView}
         hideWorkflowControls={onboardingMounted && wizardActive}
@@ -10738,58 +10804,58 @@ export default function Home() {
       >
         {scene.mode === 'prepare' ? (
           <>
-            {PreparePanelStack({
-              scene: scene,
-              transformMgr: transformMgr,
-              arrange: arrange,
-              organicCut: organicCut,
-              outsidePlateModelIds: outsidePlateModelIds,
-              modelsPanelVisible: modelsPanelShown,
-              modelsPanelCollapsible: toolLayout === 'horizontal',
-              handleModelSelection: handleModelSelection,
-              selectedBodyKeys,
-              handleSelectBody,
-              handleCloseBodyDrawer,
-              handleModelRangeSelection: handleModelRangeSelection,
-              handleGroupSelection: handleGroupSelection,
-              handleGroupSelectedModels: handleGroupSelectedModels,
-              handleUngroupSelectedModels: handleUngroupSelectedModels,
-              handleUngroupFolder: handleUngroupFolder,
-              handleSplitImportGroup: handleSplitImportGroup,
-              handleRenameFolder: handleRenameFolder,
-              handleRenameModel: handleRenameModel,
-              handleModelListContextMenu: handleModelListContextMenu,
-              handleRepairModel: handleRepairModel,
-              handleOpenModelSupportsInfo: handleOpenModelSupportsInfo,
-              handleAddModels: () => { void handleOpenMeshDialog(); },
-              showEmptySceneDialog: showEmptySceneDialog,
-              importOverlayState: importOverlayState,
-              modelStatsBottomClearancePx: modelStatsBottomClearancePx,
-              ensurePendingTransformHistoryForActiveModel: ensurePendingTransformHistoryForActiveModel,
-              requestDestructiveTransformSupportDeletion: requestDestructiveTransformSupportDeletion,
-              handleRotationComplete: handleRotationComplete,
-              autoLift: selectionLifted,
-              handleAutoLiftChange: handleAutoLiftChange,
-              selectionPositionOrigin: selectionPositionOrigin,
-              handlePositionSelectedModels: handlePositionSelectedModels,
-              commitPendingSelectionPositionHistory: commitPendingSelectionPositionHistory,
-              handleCenterSelectedModels: handleCenterSelectedModels,
-              handleLiftSelectedModels: handleLiftSelectedModels,
-              handleDropSelectedModels: handleDropSelectedModels,
-              handleRotateSelectedModels: handleRotateSelectedModels,
-              handleSelectionTransformCommit: handleSelectionTransformCommit,
-              handleScaleSelectedModels: handleScaleSelectedModels,
-              handleResetSelectedModels: handleResetSelectedModels,
-              selectionRotationMode: selectionRotationMode,
-              setSelectionRotationMode: setSelectionRotationMode,
-              scheduleCommitPendingTransformHistory: scheduleCommitPendingTransformHistory,
-              uniformScaling: uniformScaling,
-              setUniformScaling: setUniformScaling,
-              localTransformSpace: localTransformSpace,
-              setLocalTransformSpace: setLocalTransformSpace,
-              arrangeSpacingMm: arrangeSpacingMm,
-              setArrangeSpacingMm: setArrangeSpacingMm,
-              orientationPanel: autoRotationExperimentEnabled
+            <PreparePanelStack
+              scene={scene}
+              transformMgr={transformMgr}
+              arrange={arrange}
+              organicCut={organicCut}
+              outsidePlateModelIds={outsidePlateModelIds}
+              modelsPanelVisible={modelsPanelShown}
+              modelsPanelCollapsible={toolLayout === 'horizontal'}
+              handleModelSelection={handleModelSelection}
+              selectedBodyKeys={selectedBodyKeys}
+              handleSelectBody={handleSelectBody}
+              handleCloseBodyDrawer={handleCloseBodyDrawer}
+              handleModelRangeSelection={handleModelRangeSelection}
+              handleGroupSelection={handleGroupSelection}
+              handleGroupSelectedModels={handleGroupSelectedModels}
+              handleUngroupSelectedModels={handleUngroupSelectedModels}
+              handleUngroupFolder={handleUngroupFolder}
+              handleSplitImportGroup={handleSplitImportGroup}
+              handleRenameFolder={handleRenameFolder}
+              handleRenameModel={handleRenameModel}
+              handleModelListContextMenu={handleModelListContextMenu}
+              handleRepairModel={handleRepairModel}
+              handleOpenModelSupportsInfo={handleOpenModelSupportsInfo}
+              handleAddModels={() => { void handleOpenMeshDialog(); }}
+              showEmptySceneDialog={showEmptySceneDialog}
+              importOverlayState={importOverlayState}
+              modelStatsBottomClearancePx={modelStatsBottomClearancePx}
+              ensurePendingTransformHistoryForActiveModel={ensurePendingTransformHistoryForActiveModel}
+              requestDestructiveTransformSupportDeletion={requestDestructiveTransformSupportDeletion}
+              handleRotationComplete={handleRotationComplete}
+              autoLift={selectionLifted}
+              handleAutoLiftChange={handleAutoLiftChange}
+              selectionPositionOrigin={selectionPositionOrigin}
+              handlePositionSelectedModels={handlePositionSelectedModels}
+              commitPendingSelectionPositionHistory={commitPendingSelectionPositionHistory}
+              handleCenterSelectedModels={handleCenterSelectedModels}
+              handleLiftSelectedModels={handleLiftSelectedModels}
+              handleDropSelectedModels={handleDropSelectedModels}
+              handleRotateSelectedModels={handleRotateSelectedModels}
+              handleSelectionTransformCommit={handleSelectionTransformCommit}
+              handleScaleSelectedModels={handleScaleSelectedModels}
+              handleResetSelectedModels={handleResetSelectedModels}
+              selectionRotationMode={selectionRotationMode}
+              setSelectionRotationMode={setSelectionRotationMode}
+              scheduleCommitPendingTransformHistory={scheduleCommitPendingTransformHistory}
+              uniformScaling={uniformScaling}
+              setUniformScaling={setUniformScaling}
+              localTransformSpace={localTransformSpace}
+              setLocalTransformSpace={setLocalTransformSpace}
+              arrangeSpacingMm={arrangeSpacingMm}
+              setArrangeSpacingMm={setArrangeSpacingMm}
+              orientationPanel={autoRotationExperimentEnabled
                 ? {
                   activeModelId: scene.activeModelId ?? undefined,
                   activeModelName: scene.activeModel?.name,
@@ -10798,47 +10864,47 @@ export default function Home() {
                   onBeforeOrientApply: requestOrientSupportDeletionWithContinuation,
                   onOrientationReport: showOrientationToast,
                 }
-                : null,
-            })}
+                : null}
+            />
           </>
         ) : scene.mode === 'analysis' ? (
           <>
-            {AnalysisPanelStack({
-              scene: scene,
-              slicing: slicing,
-              islands: islands,
-            })}
+            <AnalysisPanelStack
+              scene={scene}
+              slicing={slicing}
+              islands={islands}
+            />
           </>
         ) : scene.mode === 'export' ? (
           <>
-            {ExportPanelStack({
-              scene: scene,
-              slicing: slicing,
-              supportsRef: supportsRef,
-              captureExportThumbnailPng: captureSliceThumbnailPng,
-              handleExportSuccess: handleExportSuccess,
-              showOperationError: showOperationError,
-              estimatedSlicerLayerCount: estimatedSlicerLayerCount,
-              excludedSliceModelIds: excludedSliceModelIds,
-              crossSectionLayerHeightMm: crossSectionLayerHeightMm,
-              estimatedVolumeMlLabel: estimatedVolumeMlLabel,
-              handleSliceRunStartedForPrinting: handleSliceRunStartedForPrinting,
-              handleSlicingFinishedForPrinting: handleSlicingFinishedForPrinting,
-              handleSliceArtifactReady: handleSliceArtifactReady,
-              handleSlicePlateSliced: handleSlicePlateSliced,
-              handleSlicingBenchmarkComplete: handleSlicingBenchmarkComplete,
-              triggerSliceExportRef: triggerSliceExportRef,
-              shouldAutoSliceOnExportEntry: shouldAutoSliceOnExportEntry,
-              shouldReturnToPrintingAfterSliceRef: shouldReturnToPrintingAfterSliceRef,
-              setIsSlicingBusy: setIsSlicingBusy,
-              canSliceAndUpload: canSliceAndUpload,
-              canSliceAndPrint: canSliceAndPrint,
-              sliceIntentRef: sliceIntentRef,
-              handleBeforeSliceStart: handleBeforeSliceStart,
-              handlePreSliceSceneSave: handlePreSliceSceneSave,
-              preSliceFileDestinationPathRef: preSliceFileDestinationPathRef,
-              setIsExporting: setIsExporting,
-            })}
+            <ExportPanelStack
+              scene={scene}
+              slicing={slicing}
+              supportsRef={supportsRef}
+              captureExportThumbnailPng={captureSliceThumbnailPng}
+              handleExportSuccess={handleExportSuccess}
+              showOperationError={showOperationError}
+              estimatedSlicerLayerCount={estimatedSlicerLayerCount}
+              excludedSliceModelIds={excludedSliceModelIds}
+              crossSectionLayerHeightMm={crossSectionLayerHeightMm}
+              estimatedVolumeMlLabel={estimatedVolumeMlLabel}
+              handleSliceRunStartedForPrinting={handleSliceRunStartedForPrinting}
+              handleSlicingFinishedForPrinting={handleSlicingFinishedForPrinting}
+              handleSliceArtifactReady={handleSliceArtifactReady}
+              handleSlicePlateSliced={handleSlicePlateSliced}
+              handleSlicingBenchmarkComplete={handleSlicingBenchmarkComplete}
+              triggerSliceExportRef={triggerSliceExportRef}
+              shouldAutoSliceOnExportEntry={shouldAutoSliceOnExportEntry}
+              shouldReturnToPrintingAfterSliceRef={shouldReturnToPrintingAfterSliceRef}
+              setIsSlicingBusy={setIsSlicingBusy}
+              canSliceAndUpload={canSliceAndUpload}
+              canSliceAndPrint={canSliceAndPrint}
+              sliceIntentRef={sliceIntentRef}
+              handleBeforeSliceStart={handleBeforeSliceStart}
+              handlePreSliceSceneSave={handlePreSliceSceneSave}
+              preSliceFileDestinationPathRef={preSliceFileDestinationPathRef}
+              setIsExporting={setIsExporting}
+            />
           </>
 
         ) : scene.mode === 'support' ? (
@@ -10944,65 +11010,65 @@ export default function Home() {
           </>
         ) : scene.mode === 'printing' ? (
           <>
-            {PrintingPanelStack({
-              printingArtifact: printingArtifact,
-              printingOutputSizeLabel: printingOutputSizeLabel,
-              activePrinterProfile: activePrinterProfile,
-              printingResinName: printingResinName,
-              estimatedPrintTimeLabel: estimatedPrintTimeLabel,
-              estimatedVolumeMlLabel: estimatedVolumeMlLabel,
-              canDownloadPrintArtifact: canDownloadPrintArtifact,
-              canSendToPrinter: canSendToPrinter,
-              printingSendBusy: printingSendBusy,
-              printingSendStatusText: printingSendStatusText,
-              sendToPrinterButtonLabel: sendToPrinterButtonLabel,
-              printableConnectedPrinterFleet: printableConnectedPrinterFleet,
-              setPrintingTargetPickerMode: setPrintingTargetPickerMode,
-              setPrintingTargetPickerOpen: setPrintingTargetPickerOpen,
-              handleDownloadPrintArtifact: handleDownloadPrintArtifact,
-              handleSendToPrinter: handleSendToPrinter,
-              handleCancelSendToPrinter: handleCancelSendToPrinter,
-              completedSliceIntent: completedSliceIntent,
-              completedSaveDestinationPath: completedSaveDestinationPath,
-            })}
+            <PrintingPanelStack
+              printingArtifact={printingArtifact}
+              printingOutputSizeLabel={printingOutputSizeLabel}
+              activePrinterProfile={activePrinterProfile}
+              printingResinName={printingResinName}
+              estimatedPrintTimeLabel={estimatedPrintTimeLabel}
+              estimatedVolumeMlLabel={estimatedVolumeMlLabel}
+              canDownloadPrintArtifact={canDownloadPrintArtifact}
+              canSendToPrinter={canSendToPrinter}
+              printingSendBusy={printingSendBusy}
+              printingSendStatusText={printingSendStatusText}
+              sendToPrinterButtonLabel={sendToPrinterButtonLabel}
+              printableConnectedPrinterFleet={printableConnectedPrinterFleet}
+              setPrintingTargetPickerMode={setPrintingTargetPickerMode}
+              setPrintingTargetPickerOpen={setPrintingTargetPickerOpen}
+              handleDownloadPrintArtifact={handleDownloadPrintArtifact}
+              handleSendToPrinter={handleSendToPrinter}
+              handleCancelSendToPrinter={handleCancelSendToPrinter}
+              completedSliceIntent={completedSliceIntent}
+              completedSaveDestinationPath={completedSaveDestinationPath}
+            />
           </>
         ) : (
           <>
           </>
         )}
 
-        {SharedPanelStack({
-          scene: scene,
-          transformMgr: transformMgr,
-          isTransformDebugOverlayOpen: isTransformDebugOverlayOpen,
-          setIsTransformDebugOverlayOpen: setIsTransformDebugOverlayOpen,
-          displayActiveModelId: displayActiveModelId,
-          transformDebugStats: transformDebugStats,
-          supportDebugStats: supportDebugStats,
-          formatDebugVec3: formatDebugVec3,
-          formatDebugVec3Like: formatDebugVec3Like,
-          formatDebugNumber: formatDebugNumber,
-          formatDebugTime: formatDebugTime,
-          formatDebugLatencyMs: formatDebugLatencyMs,
-          printingPreviewTotalLayers: printingPreviewTotalLayers,
-          printingSelectedLayer: printingSelectedLayer,
-          printingDisplayedLayer: printingDisplayedLayer,
-          isPrintingLayerScrubbing: isPrintingLayerScrubbing,
-          shouldShowScrubPreview: shouldShowScrubPreview,
-          printingSendProgress: printingSendProgress,
-          printingSendBusy: printingSendBusy,
-          printingSendStageText: printingSendStageText,
-          printingLayerPreviewUrlAt: layerPreviewUrlAt,
-          printingLayerPreviewCount: layerPreviewCount,
-          printingArtifact: printingArtifact,
-          printingUploadDialogOpen: printingUploadDialogOpen,
-          printingUploadDialogStage: printingUploadDialogStage,
-          printingUploadDisplayProgress: printingUploadDisplayProgress,
-          printingReadyPlateId: printingReadyPlateId,
-          printingPrintNowBusy: printingPrintNowBusy,
-          printingSendStatusText: printingSendStatusText,
-          printingSlicingBenchmark: printingSlicingBenchmark,
-        })}
+        <SharedPanelStack
+          scene={scene}
+          transformMgr={transformMgr}
+          isTransformDebugOverlayOpen={isTransformDebugOverlayOpen}
+          setIsTransformDebugOverlayOpen={setIsTransformDebugOverlayOpen}
+          displayActiveModelId={displayActiveModelId}
+          transformDebugStats={transformDebugStats}
+          supportDebugStats={supportDebugStats}
+          formatDebugVec3={formatDebugVec3}
+          formatDebugVec3Like={formatDebugVec3Like}
+          formatDebugNumber={formatDebugNumber}
+          formatDebugTime={formatDebugTime}
+          formatDebugLatencyMs={formatDebugLatencyMs}
+          printingPreviewTotalLayers={printingPreviewTotalLayers}
+          printingSelectedLayer={printingSelectedLayer}
+          printingDisplayedLayer={printingDisplayedLayer}
+          isPrintingLayerScrubbing={isPrintingLayerScrubbing}
+          shouldShowScrubPreview={shouldShowScrubPreview}
+          printingSendProgress={printingSendProgress}
+          printingSendBusy={printingSendBusy}
+          printingSendStageText={printingSendStageText}
+          printingLayerPreviewUrlAt={layerPreviewUrlAt}
+          printingLayerPreviewCount={layerPreviewCount}
+          printingArtifact={printingArtifact}
+          printingUploadDialogOpen={printingUploadDialogOpen}
+          printingUploadDialogStage={printingUploadDialogStage}
+          printingUploadDisplayProgress={printingUploadDisplayProgress}
+          printingReadyPlateId={printingReadyPlateId}
+          printingPrintNowBusy={printingPrintNowBusy}
+          printingSendStatusText={printingSendStatusText}
+          printingSlicingBenchmark={printingSlicingBenchmark}
+        />
       </FloatingPanelStack>
 
       {scene.models.length > 0 && scene.mode !== 'printing' && (
@@ -11116,7 +11182,7 @@ export default function Home() {
             interiorView={interiorView}
             plates={scene.plates}
             plateFrames={scene.plateFrames}
-            resolveModelPlateId={scene.resolveModelPlateId}
+            resolveModelPlateId={resolveModelPlateId}
             activePlateId={scene.activePlateId}
             plateViewRunId={scene.plateViewRunId}
             onActivatePlate={scene.activatePlate}
@@ -12055,7 +12121,7 @@ export default function Home() {
                 //
                 // The plate, not the scene: with more than one bed, the bin empties
                 // the one you are working on and leaves the others alone.
-                void scene.deleteModels(
+                void deleteModels(
                   modelsOnPlate({ models: scene.models, plateId: scene.activePlateId, frames: scene.plateFrames }).map((model) => model.id),
                 );
               }}

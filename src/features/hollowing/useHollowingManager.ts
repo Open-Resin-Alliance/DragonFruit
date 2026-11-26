@@ -154,15 +154,18 @@ export function useHollowingManager({
   const hollowingSourceByModelIdRef = React.useRef<Map<string, HollowingSourceEntry>>(new Map());
   const cavityGeometryByModelIdRef = React.useRef<Map<string, CavityGeometryEntry>>(new Map());
   /**
-   * Bumped whenever the cavity map above changes. The map is a ref, so a read of
-   * it does not subscribe anything: without this, a value derived from it —
-   * "is interior view available?" — keeps the answer it had on the last render
-   * that happened for some other reason, and the feature stayed enabled after the
-   * hollow that justified it was reset.
+   * A copy of the cavity map above, taken whenever it changes, for render to read.
+   * The map is a ref, so a read of it does not subscribe anything: without this, a
+   * value derived from it — "is interior view available?" — keeps the answer it had
+   * on the last render that happened for some other reason, and the feature stayed
+   * enabled after the hollow that justified it was reset. The copy is taken in the
+   * updater, so it holds every change made before the render that applies it.
    */
-  const [cavityGeometryVersion, setCavityGeometryVersion] = React.useState(0);
+  const [cavityGeometryByModelId, setCavityGeometryByModelId] = React.useState<ReadonlyMap<string, CavityGeometryEntry>>(
+    () => new Map(),
+  );
   const markCavityGeometryChanged = React.useCallback(() => {
-    setCavityGeometryVersion((version) => version + 1);
+    setCavityGeometryByModelId(() => new Map(cavityGeometryByModelIdRef.current));
   }, []);
   const bakedHollowingBeforeDraftRef = React.useRef<Map<string, ModelHollowingModifier>>(new Map());
 
@@ -1744,7 +1747,7 @@ export function useHollowingManager({
     hollowPreviewWarmupKeyRef,
     hollowingSourceByModelIdRef,
     cavityGeometryByModelIdRef,
-    cavityGeometryVersion,
+    cavityGeometryByModelId,
     defaultHollowingState,
     isHollowingApplied,
     persistedHollowingSignature,

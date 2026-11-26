@@ -223,16 +223,45 @@ function isPanelHeaderDragHandleTarget(target: EventTarget | null) {
   return Boolean(target.closest('[data-panel-drag-handle="true"]'));
 }
 
+const panelStacks = new WeakSet<object>();
+
+/**
+ * Marks a function as a panel stack. Written as JSX inside `FloatingPanelStack`,
+ * a panel stack is called while the children are flattened instead of being
+ * rendered as a component, so the keyed panels it returns become direct entries
+ * of the stack and keep their layout-profile placement. It must not call hooks.
+ *
+ * Home used to call these inline for the same reason, but an inline call hands
+ * the stack handlers that read refs, which keeps Home out of the React Compiler
+ * (#941). As JSX they are props, and the compiler takes them as handlers.
+ */
+export function registerPanelStack(stack: (props: never) => React.ReactNode): void {
+  panelStacks.add(stack);
+}
+
+function isPanelStackElement(
+  child: React.ReactNode,
+): child is React.ReactElement<object, (props: object) => React.ReactNode> {
+  return React.isValidElement(child) && typeof child.type === 'function' && panelStacks.has(child.type);
+}
+
 function flattenPanelChildren(
   children: React.ReactNode,
   prefix = 'panel',
 ): Array<{ id: string; node: React.ReactNode; hidden: boolean }> {
   const entries: Array<{ id: string; node: React.ReactNode; hidden: boolean }> = [];
 
-  React.Children.forEach(children, (child, index) => {
+  const pushChild = (child: React.ReactNode, fallbackId: string) => {
     if (child == null) return;
 
-    const fallbackId = `${prefix}-${index}`;
+    // A panel stack stands where its output would have stood, so its panels get
+    // the same fallback ids as when Home called it inline.
+    if (isPanelStackElement(child)) {
+      const output = child.type(child.props);
+      if (Array.isArray(output)) entries.push(...flattenPanelChildren(output, fallbackId));
+      else pushChild(output, fallbackId);
+      return;
+    }
 
     if (React.isValidElement<{ children?: React.ReactNode }>(child) && child.type === React.Fragment) {
       entries.push(...flattenPanelChildren(child.props.children, fallbackId));
@@ -245,6 +274,10 @@ function flattenPanelChildren(
     // panel below them down.
     const style = React.isValidElement<{ style?: React.CSSProperties }>(child) ? child.props.style : undefined;
     entries.push({ id, node: child, hidden: style?.display === 'none' });
+  };
+
+  React.Children.forEach(children, (child, index) => {
+    pushChild(child, `${prefix}-${index}`);
   });
 
   return entries;
