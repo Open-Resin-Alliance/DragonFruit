@@ -37,6 +37,8 @@ import type { View3DSettings } from '@/components/settings/view3dPreferences';
 import type { SlicingThumbnailRenderSettings } from '@/components/settings/PerformanceSettingsTab';
 import { useSceneFileInputAccept } from '@/features/plugins/pluginFileTypeExtensions';
 import { formatTopbarPrinterAriaLabel, formatTopbarPrinterTitle } from '@/components/layout/topBarMessages';
+import { WindowResizeHandles } from '@/components/layout/WindowResizeHandles';
+import { useIsLinux } from '@/hooks/usePlatform';
 
 interface TopBarProps {
   meshColor: string;
@@ -175,6 +177,7 @@ export function TopBar({
   useEscapeToClose(showProfileChangeWarning, () => setShowProfileChangeWarning(false));
   const [isDesktopWindow, setIsDesktopWindow] = useState(false);
   const [isDesktopWindowMaximized, setIsDesktopWindowMaximized] = useState(false);
+  const isLinux = useIsLinux();
   const [isLightTheme, setIsLightTheme] = useState(() => {
     if (typeof document === 'undefined') return false;
     const attr = document.documentElement.getAttribute('data-theme');
@@ -182,7 +185,8 @@ export function TopBar({
     if (attr === 'dark') return false;
     return window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false;
   });
-  const [printerThumbnailFailed, setPrinterThumbnailFailed] = useState(false);
+  // Key of the thumbnail that failed to load; a new profile or image retries.
+  const [failedPrinterThumbnailKey, setFailedPrinterThumbnailKey] = useState<string | null>(null);
   const topbarActionsDisabled = isSlicingBusy;
   const [isAppMenuOpen, setIsAppMenuOpen] = useState(false);
   const [appMenuPosition, setAppMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -220,6 +224,7 @@ export function TopBar({
     if (typeof window === 'undefined') return;
 
     let cancelled = false;
+    let unlistenResized: (() => void) | undefined;
 
     const hydrateDesktopWindowState = async () => {
       const isLikelyDesktopRuntime =
@@ -243,6 +248,19 @@ export function TopBar({
           setIsDesktopWindow(true);
           setIsDesktopWindowMaximized(maximized);
         }
+        // The window manager can maximize or restore the window too (double-click
+        // on the title, Super+Up), so follow every resize, not only our button.
+        try {
+          const off = await currentWindow.onResized(() => {
+            void currentWindow.isMaximized().then((value) => {
+              if (!cancelled) setIsDesktopWindowMaximized(value);
+            }, () => {});
+          });
+          if (cancelled) off();
+          else unlistenResized = off;
+        } catch {
+          // Without resize events the maximize button still keeps the state.
+        }
       } catch {
         if (!cancelled) {
           setIsDesktopWindow(false);
@@ -254,6 +272,7 @@ export function TopBar({
 
     return () => {
       cancelled = true;
+      unlistenResized?.();
     };
   }, []);
 
@@ -388,13 +407,19 @@ export function TopBar({
       node = node.parentElement;
     }
 
+    // Linux: the window manager never sees clicks on this custom titlebar, so double-click maximizes here.
+    if (isLinux && event.detail === 2) {
+      void handleDesktopWindowToggleMaximize();
+      return;
+    }
+
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       await getCurrentWindow().startDragging();
     } catch {
       // no-op if not available in current runtime/capability
     }
-  }, [isDesktopWindow]);
+  }, [handleDesktopWindowToggleMaximize, isDesktopWindow, isLinux]);
 
   React.useEffect(() => {
     hydrateProfilesFromStorage();
@@ -461,10 +486,9 @@ export function TopBar({
   const activePrinterProfile = React.useMemo(() => getActivePrinterProfile(profileState), [profileState]);
 
 
-  React.useEffect(() => {
-    setPrinterThumbnailFailed(false);
-  }, [activePrinterProfile?.id, activePrinterProfile?.imageDataUrl]);
-
+  const printerThumbnailKey = `${activePrinterProfile?.id ?? ''}|${activePrinterProfile?.imageDataUrl ?? ''}`;
+  const printerThumbnailFailed = failedPrinterThumbnailKey === printerThumbnailKey;
+  const markPrinterThumbnailFailed = () => setFailedPrinterThumbnailKey(printerThumbnailKey);
   const activePrinterThumbnailSrc = printerThumbnailFailed ? undefined : activePrinterProfile?.imageDataUrl;
   const topbarFleetPrinterName = React.useMemo(() => {
     const fleet = activePrinterProfile?.networkFleet ?? [];
@@ -544,11 +568,12 @@ export function TopBar({
     requestOpenProfileSettings('printer');
   }, [closePrinterQuickMenu, requestOpenProfileSettings]);
 
+  const activePrinterProfileId = activePrinterProfile?.id;
   const handleSelectFleetUnitFromQuickMenu = React.useCallback((deviceId: string) => {
-    if (!activePrinterProfile?.id) return;
-    selectPrinterNetworkDevice(activePrinterProfile.id, deviceId);
+    if (!activePrinterProfileId) return;
+    selectPrinterNetworkDevice(activePrinterProfileId, deviceId);
     closePrinterQuickMenu();
-  }, [activePrinterProfile?.id, closePrinterQuickMenu]);
+  }, [activePrinterProfileId, closePrinterQuickMenu]);
 
   const stepsContainerRef = React.useRef<HTMLDivElement>(null);
   const [hideBadges, setHideBadges] = React.useState(() => {
@@ -700,6 +725,7 @@ export function TopBar({
 
   return (
     <>
+      {isDesktopWindow && isLinux && !isDesktopWindowMaximized && <WindowResizeHandles />}
       <div className={`ui-topbar-blur ${hideWorkflowControls ? 'ui-topbar-blur-transparent' : ''}`} aria-hidden="true" />
       <div
         className={`ui-topbar fixed top-0 left-0 right-0 z-50 flex items-center relative ${hideWorkflowControls ? 'justify-between ui-topbar-transparent' : ''}`}
@@ -779,7 +805,7 @@ export function TopBar({
                 alt={activePrinterProfile?.name ?? _(msg`Selected printer`)}
                 className="h-full w-full object-contain"
                 draggable={false}
-                onError={() => setPrinterThumbnailFailed(true)}
+                onError={markPrinterThumbnailFailed}
               />
             ) : (
               <Printer className="h-4 w-4" style={{ color: 'var(--text-muted)' }} />
@@ -920,7 +946,7 @@ export function TopBar({
                         alt={activePrinterProfile?.name ?? deviceName}
                         className="h-full w-full object-contain"
                         draggable={false}
-                        onError={() => setPrinterThumbnailFailed(true)}
+                        onError={markPrinterThumbnailFailed}
                       />
                     ) : (
                       <Printer className="h-3.5 w-3.5" style={{ color: 'var(--text-muted)' }} />

@@ -62,7 +62,7 @@ export function SelectionSpotlight({
     light.distance = 0;
   }, [enabled]);
 
-  useFrame(() => {
+  useFrame((state) => {
     if (!enabled) return;
 
     const mesh = meshRef.current;
@@ -120,11 +120,25 @@ export function SelectionSpotlight({
     if (debug) {
       if (!helperRef.current) {
         helperRef.current = new THREE.SpotLightHelper(light);
+        state.scene.add(helperRef.current);
       } else {
         helperRef.current.update();
       }
     }
   });
+
+  // The helper is added to the scene imperatively from the frame loop, so
+  // rendering never reads `helperRef`. Drop it when debug turns off or on unmount.
+  React.useEffect(() => {
+    if (!debug || !enabled) return;
+    return () => {
+      const helper = helperRef.current;
+      if (!helper) return;
+      helper.removeFromParent();
+      helper.dispose();
+      helperRef.current = null;
+    };
+  }, [debug, enabled]);
 
   if (!enabled) return null;
 
@@ -144,7 +158,6 @@ export function SelectionSpotlight({
         castShadow={false}
       />
       <object3D ref={targetRef} userData={{ thumbnailCaptureExclude: true, thumbnailCaptureExcludeReason: 'selection-spotlight-target' }} />
-      {debug && helperRef.current && <primitive object={helperRef.current} />}
     </>
   );
 }

@@ -194,10 +194,11 @@ test('hole punch edits land in undo history', async (t) => {
       const tauriWindow = window as unknown as { __TAURI_INTERNALS__?: unknown };
       tauriWindow.__TAURI_INTERNALS__ ??= {};
       mockIPC((cmd) => {
-        if (cmd === 'mesh_punch_from_captured_source') {
-          return JSON.stringify({ sourceTriangleCount: 12, outputTriangleCount: 2, removedTriangleCount: 10, punchCount: 3 });
+        if (cmd === 'mesh_store_put') return 'punch-source';
+        if (cmd === 'mesh_punch_staged') {
+          return JSON.stringify({ sourceTriangleCount: 12, outputTriangleCount: 2, removedTriangleCount: 10, punchCount: 3, meshId: 'punched' });
         }
-        if (cmd === 'mesh_punch_read_positions') return new Uint8Array(punched.buffer);
+        if (cmd === 'mesh_store_read') return new Uint8Array(punched.buffer);
         return null;
       });
       try {

@@ -1,7 +1,12 @@
 import React from 'react';
 import JSZip from 'jszip';
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
-import { getProfileStoreSnapshot, type PrinterProfile } from '@/features/profiles/profileStore';
+import {
+  getProfileStoreServerSnapshot,
+  getProfileStoreSnapshot,
+  subscribeToProfileStore,
+  type PrinterProfile,
+} from '@/features/profiles/profileStore';
 import { readPrintArtifactBytesFromPath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import type { SliceExportArtifact } from '@/features/slicing/sliceExportOrchestrator';
 
@@ -270,14 +275,21 @@ export function usePrintingPreviewManager({
   }, [printingPreviewTotalLayers]);
 
   // ---- moved: selectedUrlPngLoaded ----
+  // Subscribed, not read once: a material's colour can change while the tank list stays put.
+  const materialProfiles = React.useSyncExternalStore(
+    subscribeToProfileStore,
+    () => getProfileStoreSnapshot().materialProfiles,
+    () => getProfileStoreServerSnapshot().materialProfiles,
+  );
+  const activeMaterialMode = activePrinterProfile?.materialMode;
+  const activeTankMaterials = activePrinterProfile?.tankMaterials;
   const tankPreviewColours = React.useMemo(() => {
-    if (activePrinterProfile?.materialMode !== 'multiTank') return [];
-    const profiles = getProfileStoreSnapshot().materialProfiles;
-    const byId = new Map(profiles.map((profile) => [profile.id, profile.color]));
-    return (activePrinterProfile.tankMaterials ?? []).map((materialId, index) => (
+    if (activeMaterialMode !== 'multiTank') return [];
+    const byId = new Map(materialProfiles.map((profile) => [profile.id, profile.color]));
+    return (activeTankMaterials ?? []).map((materialId, index) => (
       byId.get(materialId) ?? TANK_PREVIEW_COLOURS[index % TANK_PREVIEW_COLOURS.length]
     ));
-  }, [activePrinterProfile?.materialMode, activePrinterProfile?.tankMaterials]);
+  }, [activeMaterialMode, activeTankMaterials, materialProfiles]);
 
   const multiTankArtifactPath = activePrinterProfile?.materialMode === 'multiTank'
     ? printingArtifact?.nativeTempPath ?? null

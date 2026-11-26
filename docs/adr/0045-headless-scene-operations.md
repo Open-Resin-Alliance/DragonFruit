@@ -126,13 +126,16 @@ models it left out on stderr. The CLI's save carries `plates`, `activePlateId` a
 - New scene rules have a home that is not the manager. A rule written in the hook
   after this is a rule the CLI and later surfaces cannot use.
 
-## Open questions
+## Resolved questions
 
 - **The origin mode is a viewer preference, but it decides where every plate is.**
-  `view3dSettings.originMode` (`center` by default) sets each plate's local rect,
-  and the VOXL does not record it. The CLI assumes `center`. Whether a scene should
-  carry the origin it was laid out with, as it carries its plate ordering, is for
-  the plate work to answer.
+  `view3dSettings.originMode` (`center` by default) sets each plate's local rect.
+  A scene now carries the origin it was laid out with, as it carries its plate
+  ordering (the `plateOriginMode` VOXL extension, #940). The app opens a scene saved
+  under the other origin by moving every model as far as the middle of a bed moves
+  (`originModeShift`), and the CLI lays plates out with the scene's origin. A file
+  without the extension is read as before: in the viewer's origin in the app, and
+  `center` in the CLI.
 
 ## See also
 

@@ -239,17 +239,20 @@ underside: 1.2e-5 and 1e-5 both star every pocket, 1e-4 and coarser are clean, a
 detail at 499,168 triangles against the 603,772 the default produced.
 
 The resolve also triangulates a flat region as one polygon, so a plate's whole underside came back as
-a fan of needles bridging its pockets, and `as_original` cannot help: on a round trip there is no
-operand for the provenance to point at, and the construction is what re-triangulated. The rebuild
-therefore ends with the loader's own refinement ([`crate::io::refine_coarse_faces`]), at its
-threshold and budget, so it hands back a surface at the density a read would have given it. Measured
-over that file's base, faces within 1 mm of the bottom:
+a fan of needles bridging its pockets, and the boolean's provenance cannot help: on a round trip
+there is no operand for it to point at, and the construction is what re-triangulated. The rebuild
+used to end with the loader's own refinement ([`crate::io::refine_coarse_faces`]) to hand back a
+surface at the density a read would have given it. It no longer does: the loaders stopped refining
+the model, and the needles are a shading problem, not a geometric one — the app draws the result
+through a display mesh refined by that same rule, so the occlusion lands on even vertices while the
+model keeps the resolve's own triangles. Measured over that file's base, faces within 1 mm of the
+bottom:
 
 | base | faces | median edge | p99 | longest |
 | --- | --- | --- | --- | --- |
 | the input | 13,078 | 0.536 mm | 3.011 mm | 3.155 mm |
 | the resolve alone | 7,717 | 0.309 mm | 14.563 mm | 27.028 mm |
-| the resolve plus the refinement | 15,131 | 0.580 mm | 3.031 mm | 3.151 mm |
+| the resolve plus the refinement (now the display mesh only) | 15,131 | 0.580 mm | 3.031 mm | 3.151 mm |
 
 ## The third mode: surface to solid
 

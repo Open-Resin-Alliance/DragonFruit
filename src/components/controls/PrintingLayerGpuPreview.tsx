@@ -15,7 +15,8 @@ interface Props {
   viewportWidthMm?: number;
   viewportHeightMm?: number;
   supportGroupRef?: React.RefObject<THREE.Group | null> | null;
-  supportVersion?: number;
+  /** The supports under `supportGroupRef` are gathered again whenever this changes. */
+  supportVersion?: number | string;
   mirrorX?: boolean;
   mirrorY?: boolean;
   /** Draw each body in its material colour instead of one white silhouette. */
@@ -34,7 +35,7 @@ function DemandInvalidateOnChange({
   viewportHeightMm,
 }: {
   clipZ: number | null;
-  supportVersion: number;
+  supportVersion: number | string;
   entryCount: number;
   mirrorX: boolean;
   mirrorY: boolean;

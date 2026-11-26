@@ -302,7 +302,7 @@ type LabeledNumberInputProps = {
 export function LabeledNumberInput({ label, helpText, tag, color, disabled = false, value, step: propStep, precision, min: propMin, max: propMax, title, unit, onChange }: LabeledNumberInputProps) {
     const min = propMin ?? 0;
     const max = propMax ?? Number.POSITIVE_INFINITY;
-    const clampToRange = (input: number) => Math.min(max, Math.max(min, input));
+    const clampToRange = React.useCallback((input: number) => Math.min(max, Math.max(min, input)), [min, max]);
     const safeValue = clampToRange(Number.isFinite(value) ? value : 0);
     const formatVal = React.useCallback((val: number) => {
         if (precision !== undefined) return val.toFixed(precision);
@@ -342,7 +342,7 @@ export function LabeledNumberInput({ label, helpText, tag, color, disabled = fal
         const sanitized = clampToRange(next);
         onChange(sanitized);
         setLocalValue(formatVal(sanitized));
-    }, [formatVal, localValue, onChange, value]);
+    }, [clampToRange, formatVal, localValue, onChange, value]);
 
     const nudge = React.useCallback((direction: 1 | -1) => {
         const fallback = safeValue;
@@ -353,7 +353,7 @@ export function LabeledNumberInput({ label, helpText, tag, color, disabled = fal
         const next = clampToRange(Number((current + direction * activeStep).toFixed(decimals)));
         onChange(next);
         setLocalValue(formatVal(next));
-    }, [formatVal, localValue, onChange, precision, propStep, safeValue]);
+    }, [clampToRange, formatVal, localValue, onChange, precision, propStep, safeValue]);
 
     return (
         <label className="space-y-1 block">
@@ -2480,7 +2480,15 @@ type PluginLocalMaterialSettingsSectionsProps = {
     showTabBar?: boolean;
 };
 
-export function PluginLocalMaterialSettingsSections({
+export function PluginLocalMaterialSettingsSections(props: PluginLocalMaterialSettingsSectionsProps) {
+    const { adapter } = props;
+    // The early return lives here so the body's hooks run in the same order on every render:
+    // the adapter follows the selected printer and settings mode, and can appear while mounted.
+    if (!adapter || adapter.fields.length === 0) return null;
+    return <PluginLocalMaterialSettingsSectionsBody {...props} adapter={adapter} />;
+}
+
+function PluginLocalMaterialSettingsSectionsBody({
     outputFormat,
     settingsMode,
     adapter,
@@ -2490,9 +2498,9 @@ export function PluginLocalMaterialSettingsSections({
     activeTabId: controlledActiveTabId,
     onActiveTabChange,
     showTabBar = true,
-}: PluginLocalMaterialSettingsSectionsProps) {
-    if (!adapter || adapter.fields.length === 0) return null;
-
+}: PluginLocalMaterialSettingsSectionsProps & {
+    adapter: NonNullable<PluginLocalMaterialSettingsSectionsProps['adapter']>;
+}) {
     const normalizedOutput = outputFormat.trim().toLowerCase();
     const tabs = React.useMemo(() => {
         const declared = [...(adapter.tabs ?? [])]
@@ -2981,7 +2989,7 @@ export function ReplacementMaterialEditorShell({
                 showTabBar={false}
             />
         );
-    }, [adapter, draft, localSettingsByOutput, onDraftChange, onLocalSettingsByOutputChange, outputFormat, printerDitherBitDepth, printerPanelBitDepth, settingsMode]);
+    }, [adapter, draft, localSettingsByOutput, onDraftChange, onLocalSettingsByOutputChange, outputFormat, ownerPrinterId, printerDitherBitDepth, printerPanelBitDepth, printerProfiles, settingsMode, shareablePrinterIds]);
 
     React.useLayoutEffect(() => {
         const root = measureRootRef.current;

@@ -517,6 +517,8 @@ pub fn import_with_plugin(
                 match plugin.frames.recv_timeout(remaining) {
                     Ok(Ok(Some(frame))) => match serde_json::from_slice::<sdk::PluginMessage>(&frame.payload) {
                         Ok(sdk::PluginMessage::ImportDone { .. }) => return Ok(()),
+                        // The deadline covers the whole import, so progress waits for the next frame.
+                        Ok(sdk::PluginMessage::Progress { .. }) => continue,
                         Ok(sdk::PluginMessage::Error { code, message }) => {
                             return Err(format!("import error {code}: {message}"));
                         }

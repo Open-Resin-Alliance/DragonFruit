@@ -315,9 +315,10 @@ Requirements:
   that passes: the report is the answer for exactly these triangles. The sections themselves are
   never stored separately — the split is built from `model_triangle_count` either way.
   (`src/hooks/useStlGeometry.ts`: `classificationForPayload`, `loadMeshGeometryFromRange`.)
-- A stored mesh is not refined again on load (`_refine: false`, `refine` on the native loaders).
-  Refinement is not idempotent, so re-refining a stored payload changes the count and order that
-  any boundary indexes and grows the mesh on every save/load cycle.
+- A stored mesh is read exactly as written; no loader refines a mesh, stored or not. The `MESH`
+  chunk is the model's own mesh, never the denser copy the app draws for its occlusion (the
+  display mesh, see `docs/dev/tauri-ipc-bridge.md`). Files written while the loaders still refined
+  store that refined mesh, and are read as they store it.
 - A reader that has the *file's path* may leave the `MESH` chunks packed: the directory
   already carries `(offset, compressedSize, uncompressedSize, compression)`, and
   `load_mesh_range` reads and inflates a range natively, so a scene never holds its
@@ -434,6 +435,17 @@ Extensions location:
 - Binary: `EXTD` chunk
 
 Unknown extension keys should be ignored.
+
+Plate layout extensions (both optional, read by `src/features/scene/plates/plateCascade.ts`):
+
+| Key | Value | Without it |
+| --- | --- | --- |
+| `plateOrdering` | the grid the beds were laid out on, `{ "mode": "dynamic" | "fixed", "columns": n }` (`columns` is read by `fixed` alone) | the dynamic grid |
+| `plateOriginMode` | `"center"` or `"front_left"`: the point of a bed model positions are measured from | the reader keeps its own (the app: the viewer's origin mode; the CLI: `center`) |
+
+Model positions are in the frame these two describe, spaced by the recorded printer's
+`buildVolumeMm`. A reader whose own layout differs moves each model with its bed, so a model
+keeps its place on the bed it stands on.
 
 ## Implementation notes
 

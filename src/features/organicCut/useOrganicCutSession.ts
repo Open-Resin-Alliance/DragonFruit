@@ -32,6 +32,7 @@ import {
   stageCutSource,
 } from './meshOrganicCut';
 import type { TenonPreviewKind, MembranePreviewResult } from './meshOrganicCut';
+import { IDENTITY_CUT_SCALE, type CutScale } from './cutSpace';
 import { cutPlaneFromPoints } from './cutPlane';
 import { snapPointsToFeatureEdges } from './snapToEdges';
 import { planeMeshIntersection, type PlaneMeshCurve } from './planeMeshIntersection';
@@ -257,6 +258,11 @@ export interface UseOrganicCutSessionArgs {
   activeGeometryKey: string | null;
   /** The model waypoints are placed on; a surface pick elsewhere is ignored. */
   activeModelId: string | null;
+  /**
+   * The active model's scale on the plate. The tenon, its fit and the joint clearance
+   * are printed millimetres, so the cut runs on the model at this scale.
+   */
+  activeModelScale?: readonly [number, number, number] | null;
   /**
    * Commit the split parts to the scene: replace the active model's geometry with
    * `parts[0]` and add `parts[1..]` as new independent models. A multi-loop cut may
@@ -484,8 +490,13 @@ export function useOrganicCutSession({
   activeGeometry,
   activeGeometryKey,
   activeModelId,
+  activeModelScale,
   commitParts,
 }: UseOrganicCutSessionArgs): OrganicCutSession {
+  const [scaleX, scaleY, scaleZ] = activeModelScale ?? IDENTITY_CUT_SCALE;
+  const cutScale = React.useMemo<CutScale>(() => [scaleX, scaleY, scaleZ], [scaleX, scaleY, scaleZ]);
+  const cutScaleRef = React.useRef(cutScale);
+  React.useEffect(() => { cutScaleRef.current = cutScale; }, [cutScale]);
   // Drag state is the session's own, and is declared first: the preview and
   // undo-coalescing effects below read it, and they run before the waypoint
   // commands the rest of the interaction is built on exist.
@@ -716,6 +727,20 @@ export function useOrganicCutSession({
   const isDraggingRef = React.useRef(isDraggingPoint);
   const dragBaselineRef = React.useRef<{ loops: SessionLoop[]; active: number } | null>(null);
 
+  // The preview is too heavy to rebuild on every pointer move, so the last one
+  // stays up for the drag. A WAYPOINT drag moves the seam, and the cut face
+  // goes out from under the tenon: it would be left standing in mid-air, so it
+  // goes. Dragging the TENON does not move the face — the anchor and the lean
+  // are carried on the built soup, client-side — so it stays on screen for the
+  // whole gesture and Rust is asked once, when the handle is let go. It used to
+  // be dropped for both, which is why the tenon vanished the moment you took
+  // hold of it. Adjusted during render so the stale tenon never paints.
+  const [seenDraggingPoint, setSeenDraggingPoint] = React.useState(isDraggingPoint);
+  if (seenDraggingPoint !== isDraggingPoint) {
+    setSeenDraggingPoint(isDraggingPoint);
+    if (isDraggingPoint && !isDraggingTenon) setTenonPreview(null);
+  }
+
   React.useEffect(() => {
     const wasDragging = isDraggingRef.current;
     isDraggingRef.current = isDraggingPoint;
@@ -723,15 +748,6 @@ export function useOrganicCutSession({
     if (!wasDragging && isDraggingPoint) {
       flushEditRun();
       dragBaselineRef.current = { loops: loopsRef.current, active: activeLoopIndexRef.current };
-      // The preview is too heavy to rebuild on every pointer move, so the last one
-      // stays up for the drag. A WAYPOINT drag moves the seam, and the cut face
-      // goes out from under the tenon: it would be left standing in mid-air, so it
-      // goes. Dragging the TENON does not move the face — the anchor and the lean
-      // are carried on the built soup, client-side — so it stays on screen for the
-      // whole gesture and Rust is asked once, when the handle is let go. It used to
-      // be dropped for both, which is why the tenon vanished the moment you took
-      // hold of it.
-      if (!isDraggingTenon) setTenonPreview(null);
       return;
     }
     if (!wasDragging || isDraggingPoint) return;
@@ -1069,8 +1085,8 @@ export function useOrganicCutSession({
       // Skip the staging await on the hot path: if the source is already staged
       // for this geometry (always true after the first call / during a drag), go
       // straight to the single-hop geodesic call.
-      if (!isCutSourceStaged(activeGeometryKey, activeGeometry)) {
-        const staged = await stageCutSource(activeGeometry, activeGeometryKey);
+      if (!isCutSourceStaged(activeGeometryKey, activeGeometry, cutScale)) {
+        const staged = await stageCutSource(activeGeometry, activeGeometryKey, cutScale);
         if (cancelled || !staged) return;
       }
       // Close the loop only once there are enough points to form one.
@@ -1094,7 +1110,7 @@ export function useOrganicCutSession({
     return () => {
       cancelled = true;
     };
-  }, [toolActive, loop, activeGeometry, activeGeometryKey, panelState.smoothing, cutMode]);
+  }, [toolActive, loop, activeGeometry, activeGeometryKey, cutScale, panelState.smoothing, cutMode]);
 
   // THE cut preview: one effect for both modes.
   //
@@ -1179,6 +1195,7 @@ export function useOrganicCutSession({
     // the flat branch only the loop + plane).
     const cacheKey = JSON.stringify([
       geometryKey,
+      cutScale,
       cutMode,
       loop,
       cutMode === 'contour' ? (geodesicPolyline ? Array.from(geodesicPolyline) : null) : undefined,
@@ -1205,7 +1222,7 @@ export function useOrganicCutSession({
     let cancelled = false;
     const timer = setTimeout(() => {
       void (async () => {
-        const staged = await stageCutSource(geometry, geometryKey);
+        const staged = await stageCutSource(geometry, geometryKey, cutScale);
         if (cancelled || !staged) return;
         const result = await request();
         if (cancelled) return;
@@ -1234,6 +1251,7 @@ export function useOrganicCutSession({
     loop,
     activeGeometry,
     activeGeometryKey,
+    cutScale,
     cutMode,
     geodesicPolyline,
     isDraggingPoint,
@@ -1445,7 +1463,7 @@ export function useOrganicCutSession({
     setCutLeakPoints([]);
     void (async () => {
       try {
-        const staged = await stageCutSource(geom, geomKey);
+        const staged = await stageCutSource(geom, geomKey, cutScaleRef.current);
         if (!staged) {
           // Not in the Tauri runtime (e.g. browser dev) — nothing to do.
           return;

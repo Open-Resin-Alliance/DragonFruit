@@ -24,6 +24,7 @@
     "build:thumbnail-providers": "node scripts/build-thumbnail-providers.mjs",
     "check:cargo-locks": "scripts/check-cargo-locks.sh",
     "check:cargo-locks:fix": "scripts/check-cargo-locks.sh --fix",
+    "check:compiler-skips": "node scripts/check-compiler-skips.mjs",
     "check:docs": "node scripts/check-docs-accuracy.mjs",
     "check:generated-plugin-registry": "node scripts/verify-generated-plugin-registry.mjs",
     "check:i18n-literals": "node scripts/check-i18n-literals.mjs",
@@ -135,7 +136,6 @@
     "minimatch": "^11.0.1",
     "postcss": "^8.5.26",
     "sharp": "^0.35.5",
-    "postcss-selector-parser": "^6.1.5",
-    "eslint-plugin-react-hooks": "7.0.1"
+    "postcss-selector-parser": "^6.1.5"
   }
 }

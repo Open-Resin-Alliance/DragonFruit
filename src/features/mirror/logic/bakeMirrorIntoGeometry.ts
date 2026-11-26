@@ -63,10 +63,24 @@ export function bakeMirrorIntoGeometry(
     }
     index.needsUpdate = true;
   } else {
-    for (const attr of Object.values(out.attributes)) {
-      if (attr instanceof THREE.BufferAttribute) {
-        swapNonIndexedAttributeWinding(attr);
+    // Swap the second and third corner of every triangle in every attribute, not just
+    // the positions: a normal, a UV or a display mesh's baked AO left behind would
+    // belong to the other corner.
+    const triCount = positionAttr.count / 3;
+    for (const attribute of Object.values(out.attributes)) {
+      if (!(attribute instanceof THREE.BufferAttribute) || attribute.count !== positionAttr.count) continue;
+      const values = attribute.array;
+      const size = attribute.itemSize;
+      for (let t = 0; t < triCount; t += 1) {
+        const baseA = (t * 3 + 1) * size;
+        const baseB = baseA + size;
+        for (let c = 0; c < size; c += 1) {
+          const tmp = values[baseA + c];
+          values[baseA + c] = values[baseB + c];
+          values[baseB + c] = tmp;
+        }
       }
+      attribute.needsUpdate = true;
     }
   }
 

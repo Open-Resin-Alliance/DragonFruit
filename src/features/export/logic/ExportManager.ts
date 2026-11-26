@@ -10,7 +10,8 @@ import { getProfileStoreSnapshot } from '@/features/profiles/profileStore';
 import { buildSupportExportFromStores, serializeVoxlDocumentV2, serializeVoxlDocumentV2Streaming, VoxlSizeLimitError, VoxlUnchangedError, type PrecompressedChunk, type VoxlChunkCache, type VoxlChunkReportEntry, type VoxlPrinterBundle } from '@/features/scene/voxl';
 import { type BakedChunk, meshChunkStore } from '@/features/scene/voxl/meshChunkStore';
 import { buildScopedSupportExportDocument, buildScopedSupportGeometryGroup } from '@/features/export/logic/supportExportReconstruction';
-import { VOXL_PLATE_ORDERING_EXTENSION, type PlateOrdering } from '@/features/scene/plates/plateCascade';
+import { VOXL_PLATE_ORDERING_EXTENSION, VOXL_PLATE_ORIGIN_EXTENSION, type PlateOrdering } from '@/features/scene/plates/plateCascade';
+import type { PlateOriginMode } from '@/features/scene/plates/plateLayout';
 import { allocateMeshStagePath, exportMeshFile, pickSavePathWithNativeDialog, writeChunkedToNativePath, writeFileAtomicToNativePath, writeFileAtomicStreamedToNativePath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { info as logInfo } from '@tauri-apps/plugin-log';
 import { getSnapshot } from '@/supports/state';
@@ -54,6 +55,8 @@ export interface ExportSceneContext {
   printer?: VoxlPrinterBundle;
   /** The grid the beds are laid out on, so re-opening re-lays the same beds. */
   plateOrdering?: PlateOrdering;
+  /** The origin the beds are laid out with, so re-opening reads positions in the same frame. */
+  plateOriginMode?: PlateOriginMode;
   exportThumbnailPng?: Uint8Array | null;
 }
 
@@ -1454,6 +1457,9 @@ export class ExportManager {
         ...voxlExtensions,
         ...(sceneContext?.plateOrdering
           ? { [VOXL_PLATE_ORDERING_EXTENSION]: sceneContext.plateOrdering }
+          : {}),
+        ...(sceneContext?.plateOriginMode
+          ? { [VOXL_PLATE_ORIGIN_EXTENSION]: sceneContext.plateOriginMode }
           : {}),
       },
     };

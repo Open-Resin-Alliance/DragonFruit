@@ -59,6 +59,38 @@ pub fn refinement_budget(triangles: usize) -> usize {
     by_fraction.max(triangles.saturating_add(COARSE_GROWTH_HEADROOM))
 }
 
+/// Subdivide the faces that are too long for the mesh's own size: every edge over
+/// [`MAX_EDGE_DIAGONAL_FRACTION`] of the bounding-box diagonal, within
+/// [`refinement_budget`]. The mesh comes back as it was when nothing is that long.
+///
+/// The surface does not move — an edge is split at its midpoint — so a refined copy
+/// is the same shape with more vertices. That is what its callers derive it for,
+/// each from the model's own mesh, which they leave alone: the display mesh the
+/// renderer shades per vertex, and the mesh the organic cut's seam walks.
+pub fn refine_coarse_faces(mesh: IndexedMesh) -> IndexedMesh {
+    let mut min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    let mut max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for position in &mesh.positions {
+        min = min.min(*position);
+        max = max.max(*position);
+    }
+    let diagonal = max.sub(min).length();
+    if !diagonal.is_finite() || diagonal <= 0.0 {
+        return mesh;
+    }
+    let max_edge = diagonal * MAX_EDGE_DIAGONAL_FRACTION;
+    if longest_edge(&mesh) <= max_edge {
+        return mesh;
+    }
+    // Bounded, and spent on the longest edges first: refining a dense hard-surface
+    // part all the way to its own detail scale measured 8.31x the triangles and
+    // 11x the bake, which is not a trade a shading term gets to make. The budget
+    // is `refinement_budget`'s, not a bare fraction: on a coarse mesh a fraction
+    // of a small count is no budget at all.
+    let budget = refinement_budget(mesh.triangles.len());
+    refine_long_edges_with_budget(&mesh, max_edge, MAX_PASSES, budget)
+}
+
 /// Subdivide the triangles whose edges are longer than `max_edge`.
 ///
 /// Returns the input unchanged when nothing exceeds it, so a caller can run this

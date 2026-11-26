@@ -8,7 +8,7 @@ import { Trans } from '@lingui/react/macro';
 import { Button, Card, CardHeader, Select } from '@/components/atoms';
 import { PanelCollapseToggle } from '@/components/atoms/PanelCollapseToggle';
 import { useFloatingPanelCollapse } from '@/components/layout/FloatingPanelStack';
-import { getModelMesh } from '@/supports/autoSupport/meshStore';
+import { getModelSourceMesh } from '@/supports/autoSupport/meshStore';
 import {
   suggestOrientationForGeometry,
   composeOrientationDelta,
@@ -136,7 +136,7 @@ export function AutoRotationPanel({ activeModelId, activeModelName, currentRotat
     requestAnimationFrame(() => {
       setTimeout(() => {
         try {
-          const mesh = getModelMesh(activeModelId);
+          const mesh = getModelSourceMesh(activeModelId);
           const position = mesh?.geometry?.attributes?.position;
           if (!mesh || !position) {
             setError(_(NO_GEOMETRY));

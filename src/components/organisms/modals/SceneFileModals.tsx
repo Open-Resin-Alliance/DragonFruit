@@ -88,6 +88,12 @@ function formatArrangeFootnote(count: number, translate: Translate): string {
   return translate(msg`Processing ${plural(count, { one: '# model', other: '# models' })}`);
 }
 
+function formatOffPlateSummary(offPlate: string, modelCount: number, translate: Translate): string {
+  return translate(
+    msg`${offPlate} of ${plural(modelCount, { one: '# model appears', other: '# models appear' })} outside the build plate.`,
+  );
+}
+
 function UnsavedChangesDialog({
   open,
   busy,
@@ -288,14 +294,22 @@ export function SceneFileModals({
                   {scene.sceneImportPlacementPrompt.fileName}
                 </div>
                 <div className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  {scene.sceneImportPlacementPrompt.offPlateModelCount.toLocaleString()} of {scene.sceneImportPlacementPrompt.modelCount.toLocaleString()} model{scene.sceneImportPlacementPrompt.modelCount === 1 ? '' : 's'} appear outside the build plate.
+                  {formatOffPlateSummary(
+                    scene.sceneImportPlacementPrompt.offPlateModelCount.toLocaleString(),
+                    scene.sceneImportPlacementPrompt.modelCount,
+                    _,
+                  )}
                 </div>
               </div>
 
               <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                <strong style={{ color: 'var(--text-strong)' }}><Trans>Auto-Arrange</Trans></strong> will reposition imported models onto free space on the plate.
+                <Trans>
+                  <strong style={{ color: 'var(--text-strong)' }}>Auto-Arrange</strong> will reposition imported models onto free space on the plate.
+                </Trans>
                 <span className="mt-1 block">
-                  <strong style={{ color: 'var(--text-strong)' }}><Trans>Load As-Is</Trans></strong> keeps scene coordinates exactly as stored in the file.
+                  <Trans>
+                    <strong style={{ color: 'var(--text-strong)' }}>Load As-Is</strong> keeps scene coordinates exactly as stored in the file.
+                  </Trans>
                 </span>
               </p>
 
@@ -601,9 +615,11 @@ export function SceneFileModals({
         )}
       />
 
+      {/* Opened from inside the Save & Close / Save & New Scene dialogs, which
+          portal to <body> at z-[220] and would hide it at the same level. */}
       {showSceneSaveChoiceModal && (
         <div
-          className="fixed inset-0 z-[220] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
+          className="fixed inset-0 z-[230] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
               resolveSceneSaveChoice('cancel');

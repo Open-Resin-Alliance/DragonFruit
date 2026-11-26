@@ -32,7 +32,7 @@ use dragonfruit_mesh_repair::{
     analyze, classify_support_split, hollow_voxel, io, punch_cylinders, repair_auto_with_progress,
     repair_separate_parts,
     shrink_wrap_with_progress, solid_remesh_with_progress, tet_surface_with_progress, HolePunchOptions,
-    HollowOptions, HollowSession, IndexedMesh, MeshHealthReport, RepairOptions, ShrinkWrapOptions, SolidRemeshOptions,
+    HollowOptions, IndexedMesh, MeshHealthReport, RepairOptions, ShrinkWrapOptions, SolidRemeshOptions,
     TetWrapOptions,
     Vec3,
 };
@@ -43,27 +43,13 @@ use serde::Deserialize;
 use tauri::ipc::Response;
 use tauri::Emitter;
 
+use crate::hollow_source::HollowSource;
+use crate::mesh_store;
 use crate::{
     staged_mesh, staged_mesh_file_appender, staged_mesh_file_path, staged_mesh_stats,
     StageMeshStats,
 };
 
-static HOLLOW_PREVIEW_SOURCE_MESH: OnceLock<Mutex<Option<Arc<IndexedMesh>>>> = OnceLock::new();
-static HOLLOW_PREVIEW_SESSION: OnceLock<Mutex<Option<Arc<HollowSession>>>> = OnceLock::new();
-static HOLLOW_PREVIEW_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-static HOLLOW_PREVIEW_INFILL_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-static HOLLOW_PREVIEW_REMOVED_VOXEL_CENTER_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> =
-    OnceLock::new();
-static HOLLOW_PREVIEW_REMOVED_VOXEL_INDEX_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-static HOLLOW_PREVIEW_BLOCKED_VOXEL_CENTER_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> =
-    OnceLock::new();
-static HOLLOW_PREVIEW_BLOCKED_VOXEL_INDEX_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-/// Cavity interior mesh from the staged hollow path.
-static HOLLOW_STAGED_CAVITY_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-/// Cavity interior mesh from the preview hollow path.
-static HOLLOW_PREVIEW_CAVITY_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-static PUNCH_SOURCE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-static PUNCH_RESULT_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Captured source mesh for repeated non-mutating organic-cut runs.
 static ORGANIC_CUT_SOURCE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// All parts of the most recent organic cut (LE f32 soup each), in order — read
@@ -80,54 +66,6 @@ static ORGANIC_CUT_GEODESIC_SOLVER: OnceLock<Mutex<Option<Arc<GeodesicSolver>>>>
 static ORGANIC_CUT_MEMBRANE_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 /// Most recent registration-tenon preview (LE f32 triangle soup, tenon + mortise).
 static ORGANIC_CUT_TENON_BYTES: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
-
-fn hollow_preview_source_mesh() -> &'static Mutex<Option<Arc<IndexedMesh>>> {
-    HOLLOW_PREVIEW_SOURCE_MESH.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_session() -> &'static Mutex<Option<Arc<HollowSession>>> {
-    HOLLOW_PREVIEW_SESSION.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_PREVIEW_RESULT_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_infill_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_PREVIEW_INFILL_RESULT_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_removed_voxel_center_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_PREVIEW_REMOVED_VOXEL_CENTER_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_removed_voxel_index_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_PREVIEW_REMOVED_VOXEL_INDEX_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_blocked_voxel_center_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_PREVIEW_BLOCKED_VOXEL_CENTER_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_blocked_voxel_index_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_PREVIEW_BLOCKED_VOXEL_INDEX_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_staged_cavity_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_STAGED_CAVITY_RESULT_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn hollow_preview_cavity_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    HOLLOW_PREVIEW_CAVITY_RESULT_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn punch_source_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    PUNCH_SOURCE_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-fn punch_result_bytes() -> &'static Mutex<Option<Vec<u8>>> {
-    PUNCH_RESULT_BYTES.get_or_init(|| Mutex::new(None))
-}
 
 fn organic_cut_source_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     ORGANIC_CUT_SOURCE_BYTES.get_or_init(|| Mutex::new(None))
@@ -151,45 +89,6 @@ fn organic_cut_membrane_bytes() -> &'static Mutex<Option<Vec<u8>>> {
 
 fn organic_cut_tenon_bytes() -> &'static Mutex<Option<Vec<u8>>> {
     ORGANIC_CUT_TENON_BYTES.get_or_init(|| Mutex::new(None))
-}
-
-/// Clears every hollow-preview buffer derived from the captured source mesh
-/// (session cache, all result/removed/blocked/cavity byte buffers). Called
-/// whenever a new source mesh is captured so stale data from a previous
-/// model/session can never be served alongside a fresh one.
-fn reset_hollow_preview_derived_state() -> Result<(), String> {
-    *hollow_preview_session()
-        .lock()
-        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? = None;
-    *hollow_preview_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview result lock poisoned: {e}"))? = None;
-    *hollow_preview_infill_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))? = None;
-    *hollow_preview_removed_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel center result lock poisoned: {e}"))? =
-        None;
-    *hollow_preview_removed_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel index result lock poisoned: {e}"))? =
-        None;
-    *hollow_preview_blocked_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview blocked voxel center result lock poisoned: {e}"))? =
-        None;
-    *hollow_preview_blocked_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))? =
-        None;
-    *hollow_preview_cavity_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))? = None;
-    *hollow_staged_cavity_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))? = None;
-    Ok(())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -487,6 +386,7 @@ pub async fn mesh_repair_from_path(
     file_path: String,
     options_json: String,
     progress_token: Option<String>,
+    client_id: Option<String>,
     app: crate::DragonFruitAppHandle,
 ) -> Result<String, String> {
     let path = PathBuf::from(&file_path);
@@ -513,8 +413,8 @@ pub async fn mesh_repair_from_path(
     release_cancel(progress_token.as_ref());
     report.source_path = Some(source_path);
     log_repair_report("mesh_repair_from_path", &report, Some(load_ms));
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+    let result_id = deliver_result(&mesh, &result_target(None, client_id.as_deref())?)?;
+    report_json(&report, result_id)
 }
 
 /// Writes a finished repair to the log: the total, the triangle counts and each
@@ -555,6 +455,7 @@ pub async fn mesh_repair_parts_from_path(
     file_path: String,
     options_json: String,
     progress_token: Option<String>,
+    client_id: Option<String>,
     app: crate::DragonFruitAppHandle,
 ) -> Result<String, String> {
     let path = PathBuf::from(&file_path);
@@ -599,8 +500,8 @@ pub async fn mesh_repair_parts_from_path(
     let mut report = parts.report(Some(source_path));
     report.cancelled = cancelled;
     log_repair_report("mesh_repair_parts_from_path", &report, None);
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+    let result_id = deliver_result(&mesh, &result_target(None, client_id.as_deref())?)?;
+    report_json(&report, result_id)
 }
 
 /// Loads a mesh from a path and stages it, repairing nothing.
@@ -608,8 +509,14 @@ pub async fn mesh_repair_parts_from_path(
 /// The webview refuses a `file://` fetch at the security boundary, so a model's file cannot be read
 /// back from the UI directly. This is the first half of [`mesh_repair_from_path`] on its own, for
 /// putting a model back to how it arrived.
+///
+/// With a `client_id` the mesh goes into the store and its id comes back; without one it goes
+/// to the staging register and the result is `None`.
 #[tauri::command]
-pub async fn mesh_load_from_path(file_path: String) -> Result<(), String> {
+pub async fn mesh_load_from_path(
+    file_path: String,
+    client_id: Option<String>,
+) -> Result<Option<String>, String> {
     let path = PathBuf::from(&file_path);
     if !path.exists() {
         return Err(format!(
@@ -622,7 +529,7 @@ pub async fn mesh_load_from_path(file_path: String) -> Result<(), String> {
     })
     .await
     .map_err(|e| format!("load task panicked: {e}"))??;
-    replace_staging_with_mesh(&mesh)
+    deliver_result(&mesh, &result_target(None, client_id.as_deref())?)
 }
 
 /// Repairs in flight, by progress token.
@@ -654,16 +561,19 @@ pub async fn mesh_repair_cancel(progress_token: String) -> Result<bool, String> 
 pub async fn mesh_repair_staged(
     options_json: String,
     progress_token: Option<String>,
+    mesh_id: Option<String>,
+    client_id: Option<String>,
     app: crate::DragonFruitAppHandle,
 ) -> Result<String, String> {
     let options = parse_options(&options_json)?;
-    let bytes = read_staging_bytes()?;
+    let target = result_target(mesh_id.as_deref(), client_id.as_deref())?;
+    let input = staged_input(mesh_id.as_deref())?;
 
     let cancel = register_cancel(progress_token.as_ref());
     let token = progress_token.clone();
 
     let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+        let mesh = io::staged::load_positions_le(input.bytes()).map_err(|e| e.to_string())?;
         let mut sink = progress_sink("mesh-repair-progress", token, cancel, app);
         let outcome = repair_auto_with_progress(mesh, &options, Some(&mut sink));
         Ok::<_, String>((outcome.mesh, outcome.report))
@@ -673,35 +583,41 @@ pub async fn mesh_repair_staged(
     release_cancel(progress_token.as_ref());
     log_repair_report("mesh_repair_staged", &report, None);
 
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+    let result_id = deliver_result(&mesh, &target)?;
+    report_json(&report, result_id)
 }
 
-/// Runs a lightweight model/support section classifier over the current staged
-/// mesh without executing the heavy repair pipeline.
+/// Runs a lightweight model/support section classifier over a mesh without executing the
+/// heavy repair pipeline: the stored mesh `mesh_id` names, or the staging register without one.
 #[tauri::command]
-pub async fn mesh_classify_staged(options_json: Option<String>) -> Result<String, String> {
+pub async fn mesh_classify_staged(
+    options_json: Option<String>,
+    mesh_id: Option<String>,
+    client_id: Option<String>,
+) -> Result<String, String> {
     let options = parse_options(&options_json.unwrap_or_default())?;
-    let bytes = read_staging_bytes()?;
+    let target = result_target(mesh_id.as_deref(), client_id.as_deref())?;
+    let input = staged_input(mesh_id.as_deref())?;
     let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+        let mesh = io::staged::load_positions_le(input.bytes()).map_err(|e| e.to_string())?;
         let outcome = classify_support_split(mesh, &options);
         Ok::<_, String>((outcome.mesh, outcome.report))
     })
     .await
     .map_err(|e| format!("classify task panicked: {e}"))??;
 
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize report: {e}"))
+    let result_id = deliver_result(&mesh, &target)?;
+    report_json(&report, result_id)
 }
 
-/// Analyses the current staged positions buffer without modifying it.
-/// Used by the frontend to inspect mesh health before committing to a repair.
+/// Analyses a mesh without modifying it: the stored mesh `mesh_id` names, or the staging
+/// register without one. Used by the frontend to inspect mesh health before committing to a
+/// repair.
 #[tauri::command]
-pub async fn mesh_analyze_staged() -> Result<String, String> {
-    let bytes = read_staging_bytes()?;
+pub async fn mesh_analyze_staged(mesh_id: Option<String>) -> Result<String, String> {
+    let input = staged_input(mesh_id.as_deref())?;
     let analysis = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+        let mesh = io::staged::load_positions_le(input.bytes()).map_err(|e| e.to_string())?;
         Ok::<_, String>(analyze(&mesh))
     })
     .await
@@ -709,30 +625,28 @@ pub async fn mesh_analyze_staged() -> Result<String, String> {
     serde_json::to_string(&analysis).map_err(|e| format!("serialize analysis: {e}"))
 }
 
-/// Applies voxel hollowing to the current staged mesh.
-/// Replaces staged positions with the hollowed result and returns a JSON report.
+/// Hollows a stored mesh once, with no session: the output path, where nothing is previewed.
+///
+/// Returns the report JSON with the result's id as `meshId` and, when the mode leaves an
+/// interior surface, that surface's id as `cavityId`. Both belong to the input's owner.
 #[tauri::command]
-pub async fn mesh_hollow_staged(options_json: String) -> Result<String, String> {
+pub async fn mesh_hollow_staged(options_json: String, mesh_id: String) -> Result<String, String> {
     let options = parse_hollow_options(&options_json)?;
-    let bytes = read_staging_bytes()?;
-    let (mesh, cavity_bytes, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+    let store = mesh_store::global();
+    let input = store.get_soup(&mesh_id)?;
+    let owner = store.owner_of(&mesh_id)?;
+    let (outputs, report) = tauri::async_runtime::spawn_blocking(move || {
+        let bytes = input.soup_bytes().expect("get_soup returned a soup");
+        let mesh = io::staged::load_positions_le(bytes).map_err(|e| e.to_string())?;
         let outcome = hollow_voxel(mesh, &options);
-        let cavity_bytes = outcome.cavity_mesh.as_ref().map(|cm| {
-            let soup = cm.to_triangle_soup();
-            bytemuck::cast_slice::<f32, u8>(&soup).to_vec()
-        });
-        Ok::<_, String>((outcome.mesh, cavity_bytes, outcome.report))
+        Ok::<_, String>((
+            HollowOutputs::mesh_and_cavity(&outcome.mesh, outcome.cavity_mesh.as_ref()),
+            outcome.report,
+        ))
     })
     .await
     .map_err(|e| format!("hollow task panicked: {e}"))??;
-
-    *hollow_staged_cavity_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))? = cavity_bytes;
-
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize hollow report: {e}"))
+    report_json_with_ids(&report, outputs.store(&owner))
 }
 
 /// Resamples the current staged mesh with the shrinkwrap resampler.
@@ -838,326 +752,143 @@ pub async fn mesh_solid_remesh_staged(
     serde_json::to_string(&report).map_err(|e| format!("serialize shrink-wrap report: {e}"))
 }
 
-/// Captures the current staged mesh bytes as the source for repeated
-/// non-mutating hollow previews.
+/// Opens a hollowing session on a stored mesh and returns the session's id.
+///
+/// The session parses the mesh once and keeps the voxel grid it builds, so repeated previews
+/// while the user changes the shell or infill only rebuild the grid when the resolution or the
+/// rotation changes. It keeps its own copy of the source: the mesh it was opened from can be
+/// dropped right away. The session belongs to the mesh's owner; drop it with `mesh_store_drop`.
 #[tauri::command]
-pub async fn mesh_hollow_preview_capture_staged_source() -> Result<(), String> {
-    let bytes = read_staging_bytes()?;
-    let source_mesh = tauri::async_runtime::spawn_blocking(move || {
-        io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())
+pub async fn mesh_hollow_session_open(mesh_id: String) -> Result<String, String> {
+    let store = mesh_store::global();
+    let input = store.get_soup(&mesh_id)?;
+    let owner = store.owner_of(&mesh_id)?;
+    let source = tauri::async_runtime::spawn_blocking(move || {
+        let bytes = input.soup_bytes().expect("get_soup returned a soup");
+        io::staged::load_positions_le(bytes)
+            .map(HollowSource::new)
+            .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| format!("hollow preview capture task panicked: {e}"))??;
-
-    *hollow_preview_source_mesh()
-        .lock()
-        .map_err(|e| format!("hollow preview source lock poisoned: {e}"))? =
-        Some(Arc::new(source_mesh));
-    reset_hollow_preview_derived_state()?;
-    Ok(())
+    .map_err(|e| format!("hollow session open task panicked: {e}"))??;
+    Ok(store.put(
+        owner,
+        mesh_store::Entry::Session(mesh_store::Session::Hollow(Arc::new(source))),
+    ))
 }
 
-/// Runs voxel hollowing against the captured preview source mesh without
-/// mutating the regular staged mesh buffer.
+/// Runs a hollow preview on a session.
+///
+/// Returns the report JSON with an id per output, all owned by the session's owner and each the
+/// caller's to read or drop: `meshId` (the hollowed shell), `cavityId` and `infillId` when the
+/// mode produces them, and four buffers, `removedVoxelCentersId` and `blockedVoxelCentersId`
+/// (`f32`, three per voxel) and `removedVoxelIndicesId` and `blockedVoxelIndicesId` (`u32`).
 #[tauri::command]
-pub async fn mesh_hollow_preview_from_captured_source(
+pub async fn mesh_hollow_session_preview(
+    session_id: String,
     options_json: String,
 ) -> Result<String, String> {
     let options = parse_hollow_options(&options_json)?;
-    let source_mesh = hollow_preview_source_mesh()
-        .lock()
-        .map_err(|e| format!("hollow preview source lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No captured hollow preview source — call mesh_hollow_preview_capture_staged_source first"
-                .to_string()
-        })?;
-
-    let cached_session = hollow_preview_session()
-        .lock()
-        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))?
-        .clone();
-
-    let session = if let Some(session) = cached_session {
-        if session.voxel_resolution() == options.voxel_resolution
-            && session.rotation_quat() == options.rotation_quat
-        {
-            session
-        } else {
-            let source_mesh_for_build = source_mesh.clone();
-            let resolution = options.voxel_resolution;
-            let rotation = options.rotation_quat;
-            let session = tauri::async_runtime::spawn_blocking(move || {
-                Ok::<_, String>(Arc::new(HollowSession::with_rotation(
-                    (*source_mesh_for_build).clone(),
-                    resolution,
-                    rotation,
-                )))
-            })
-            .await
-            .map_err(|e| format!("hollow preview session build panicked: {e}"))??;
-            *hollow_preview_session()
-                .lock()
-                .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? =
-                Some(session.clone());
-            session
-        }
-    } else {
-        let source_mesh_for_build = source_mesh.clone();
-        let resolution = options.voxel_resolution;
-        let rotation = options.rotation_quat;
-        let session = tauri::async_runtime::spawn_blocking(move || {
-            Ok::<_, String>(Arc::new(HollowSession::with_rotation(
-                (*source_mesh_for_build).clone(),
-                resolution,
-                rotation,
-            )))
-        })
-        .await
-        .map_err(|e| format!("hollow preview session build panicked: {e}"))??;
-        *hollow_preview_session()
-            .lock()
-            .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? =
-            Some(session.clone());
-        session
-    };
-
-    let (
-        positions_bytes,
-        cavity_bytes,
-        infill_positions_bytes,
-        removed_voxel_center_bytes,
-        removed_voxel_index_bytes,
-        blocked_voxel_center_bytes,
-        blocked_voxel_index_bytes,
-        report,
-    ) = tauri::async_runtime::spawn_blocking(move || {
+    let store = mesh_store::global();
+    let source = store.hollow_source(&session_id)?;
+    let owner = store.owner_of(&session_id)?;
+    let (outputs, report) = tauri::async_runtime::spawn_blocking(move || {
+        let session = source.session_for(options.voxel_resolution, options.rotation_quat);
         let outcome = session.run(&options);
-        let soup = outcome.mesh.to_triangle_soup();
-        let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
-        let cavity_bytes = outcome.cavity_mesh.as_ref().map(|cm| {
-            let soup = cm.to_triangle_soup();
-            bytemuck::cast_slice::<f32, u8>(&soup).to_vec()
+        let mut outputs =
+            HollowOutputs::mesh_and_cavity(&outcome.mesh, outcome.cavity_mesh.as_ref());
+        outputs.infill = outcome.preview_infill_mesh.as_ref().map(soup_bytes);
+        outputs.voxels = Some(HollowVoxelBuffers {
+            removed_centers: bytemuck::cast_slice::<f32, u8>(&outcome.removed_voxel_centers)
+                .to_vec(),
+            removed_indices: bytemuck::cast_slice::<u32, u8>(&outcome.removed_voxel_indices)
+                .to_vec(),
+            blocked_centers: bytemuck::cast_slice::<f32, u8>(&outcome.blocked_voxel_centers)
+                .to_vec(),
+            blocked_indices: bytemuck::cast_slice::<u32, u8>(&outcome.blocked_voxel_indices)
+                .to_vec(),
         });
-        let infill_bytes = outcome.preview_infill_mesh.map(|mesh| {
-            let soup = mesh.to_triangle_soup();
-            bytemuck::cast_slice::<f32, u8>(&soup).to_vec()
-        });
-        let removed_voxel_center_bytes =
-            bytemuck::cast_slice::<f32, u8>(&outcome.removed_voxel_centers).to_vec();
-        let removed_voxel_index_bytes =
-            bytemuck::cast_slice::<u32, u8>(&outcome.removed_voxel_indices).to_vec();
-        let blocked_voxel_center_bytes =
-            bytemuck::cast_slice::<f32, u8>(&outcome.blocked_voxel_centers).to_vec();
-        let blocked_voxel_index_bytes =
-            bytemuck::cast_slice::<u32, u8>(&outcome.blocked_voxel_indices).to_vec();
+        Ok::<_, String>((outputs, outcome.report))
+    })
+    .await
+    .map_err(|e| format!("hollow preview task panicked: {e}"))??;
+    report_json_with_ids(&report, outputs.store(&owner))
+}
+
+/// Runs the hollow a session previews for real, at full detail. Returns the report JSON with
+/// `meshId` and, when there is one, `cavityId`, as `mesh_hollow_staged` does.
+#[tauri::command]
+pub async fn mesh_hollow_session_apply(
+    session_id: String,
+    options_json: String,
+) -> Result<String, String> {
+    let options = parse_hollow_options(&options_json)?;
+    let store = mesh_store::global();
+    let source = store.hollow_source(&session_id)?;
+    let owner = store.owner_of(&session_id)?;
+    let (outputs, report) = tauri::async_runtime::spawn_blocking(move || {
+        let session = source.session_for(options.voxel_resolution, options.rotation_quat);
+        let outcome = session.run(&options);
         Ok::<_, String>((
-            bytes,
-            cavity_bytes,
-            infill_bytes,
-            removed_voxel_center_bytes,
-            removed_voxel_index_bytes,
-            blocked_voxel_center_bytes,
-            blocked_voxel_index_bytes,
+            HollowOutputs::mesh_and_cavity(&outcome.mesh, outcome.cavity_mesh.as_ref()),
             outcome.report,
         ))
     })
     .await
-    .map_err(|e| format!("hollow preview task panicked: {e}"))??;
-
-    *hollow_preview_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview result lock poisoned: {e}"))? = Some(positions_bytes);
-    *hollow_preview_cavity_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))? = cavity_bytes;
-    *hollow_preview_infill_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))? =
-        infill_positions_bytes;
-    *hollow_preview_removed_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel center result lock poisoned: {e}"))? =
-        Some(removed_voxel_center_bytes);
-    *hollow_preview_removed_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel index result lock poisoned: {e}"))? =
-        Some(removed_voxel_index_bytes);
-    *hollow_preview_blocked_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview blocked voxel center result lock poisoned: {e}"))? =
-        Some(blocked_voxel_center_bytes);
-    *hollow_preview_blocked_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))? =
-        Some(blocked_voxel_index_bytes);
-
-    serde_json::to_string(&report).map_err(|e| format!("serialize hollow preview report: {e}"))
-}
-
-#[tauri::command]
-pub async fn mesh_hollow_apply_from_captured_source(
-    options_json: String,
-) -> Result<String, String> {
-    let options = parse_hollow_options(&options_json)?;
-    let source_mesh = hollow_preview_source_mesh()
-        .lock()
-        .map_err(|e| format!("hollow preview source lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No captured hollow preview source — call mesh_hollow_preview_capture_staged_source first"
-                .to_string()
-        })?;
-
-    let cached_session = hollow_preview_session()
-        .lock()
-        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))?
-        .clone();
-
-    let session = if let Some(session) = cached_session {
-        if session.voxel_resolution() == options.voxel_resolution
-            && session.rotation_quat() == options.rotation_quat
-        {
-            session
-        } else {
-            let source_mesh_for_build = source_mesh.clone();
-            let resolution = options.voxel_resolution;
-            let rotation = options.rotation_quat;
-            let session = tauri::async_runtime::spawn_blocking(move || {
-                Ok::<_, String>(Arc::new(HollowSession::with_rotation(
-                    (*source_mesh_for_build).clone(),
-                    resolution,
-                    rotation,
-                )))
-            })
-            .await
-            .map_err(|e| format!("hollow apply session build panicked: {e}"))??;
-            *hollow_preview_session()
-                .lock()
-                .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? =
-                Some(session.clone());
-            session
-        }
-    } else {
-        let source_mesh_for_build = source_mesh.clone();
-        let resolution = options.voxel_resolution;
-        let rotation = options.rotation_quat;
-        let session = tauri::async_runtime::spawn_blocking(move || {
-            Ok::<_, String>(Arc::new(HollowSession::with_rotation(
-                (*source_mesh_for_build).clone(),
-                resolution,
-                rotation,
-            )))
-        })
-        .await
-        .map_err(|e| format!("hollow apply session build panicked: {e}"))??;
-        *hollow_preview_session()
-            .lock()
-            .map_err(|e| format!("hollow preview session lock poisoned: {e}"))? =
-            Some(session.clone());
-        session
-    };
-
-    let (mesh, cavity_bytes, report) = tauri::async_runtime::spawn_blocking(move || {
-        let outcome = session.run(&options);
-        let cavity_bytes = outcome.cavity_mesh.as_ref().map(|cm| {
-            let soup = cm.to_triangle_soup();
-            bytemuck::cast_slice::<f32, u8>(&soup).to_vec()
-        });
-        Ok::<_, String>((outcome.mesh, cavity_bytes, outcome.report))
-    })
-    .await
     .map_err(|e| format!("hollow apply task panicked: {e}"))??;
-
-    *hollow_staged_cavity_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))? = cavity_bytes;
-
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize hollow apply report: {e}"))
+    report_json_with_ids(&report, outputs.store(&owner))
 }
 
-/// Returns the most recent non-mutating hollow preview positions as raw
-/// little-endian bytes.
-#[tauri::command]
-pub async fn mesh_hollow_preview_read_positions() -> Result<Response, String> {
-    let bytes = hollow_preview_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview result — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
-    Ok(Response::new(bytes))
+/// The byte outputs of one hollow run, before they go into the store.
+struct HollowOutputs {
+    mesh: Vec<u8>,
+    cavity: Option<Vec<u8>>,
+    infill: Option<Vec<u8>>,
+    voxels: Option<HollowVoxelBuffers>,
 }
 
-#[tauri::command]
-pub async fn mesh_hollow_preview_read_infill_positions() -> Result<Response, String> {
-    let bytes = hollow_preview_infill_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview infill result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview infill result — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
-    Ok(Response::new(bytes))
+/// The voxel sets a preview draws and the lasso picks from.
+struct HollowVoxelBuffers {
+    removed_centers: Vec<u8>,
+    removed_indices: Vec<u8>,
+    blocked_centers: Vec<u8>,
+    blocked_indices: Vec<u8>,
 }
 
-#[tauri::command]
-pub async fn mesh_hollow_preview_read_removed_voxel_centers() -> Result<Response, String> {
-    let bytes = hollow_preview_removed_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel center result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview removed voxel center result — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
-    Ok(Response::new(bytes))
+impl HollowOutputs {
+    fn mesh_and_cavity(mesh: &IndexedMesh, cavity: Option<&IndexedMesh>) -> Self {
+        Self {
+            mesh: soup_bytes(mesh),
+            cavity: cavity.map(soup_bytes),
+            infill: None,
+            voxels: None,
+        }
+    }
+
+    /// Puts each output into the store for `owner`, and returns the id of each under the name
+    /// the report gives it.
+    fn store(self, owner: &mesh_store::Owner) -> Vec<(&'static str, String)> {
+        use mesh_store::Entry::{Buffer, Soup};
+        let store = mesh_store::global();
+        let put = |entry| store.put(owner.clone(), entry);
+        let mut ids = vec![("meshId", put(Soup(self.mesh)))];
+        if let Some(cavity) = self.cavity {
+            ids.push(("cavityId", put(Soup(cavity))));
+        }
+        if let Some(infill) = self.infill {
+            ids.push(("infillId", put(Soup(infill))));
+        }
+        if let Some(voxels) = self.voxels {
+            ids.push(("removedVoxelCentersId", put(Buffer(voxels.removed_centers))));
+            ids.push(("removedVoxelIndicesId", put(Buffer(voxels.removed_indices))));
+            ids.push(("blockedVoxelCentersId", put(Buffer(voxels.blocked_centers))));
+            ids.push(("blockedVoxelIndicesId", put(Buffer(voxels.blocked_indices))));
+        }
+        ids
+    }
 }
 
-#[tauri::command]
-pub async fn mesh_hollow_preview_read_removed_voxel_indices() -> Result<Response, String> {
-    let bytes = hollow_preview_removed_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview removed voxel index result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview removed voxel index result — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
-    Ok(Response::new(bytes))
-}
-
-#[tauri::command]
-pub async fn mesh_hollow_preview_read_blocked_voxel_centers() -> Result<Response, String> {
-    let bytes = hollow_preview_blocked_voxel_center_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview blocked voxel center result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview blocked voxel center result — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
-    Ok(Response::new(bytes))
-}
-
-#[tauri::command]
-pub async fn mesh_hollow_preview_read_blocked_voxel_indices() -> Result<Response, String> {
-    let bytes = hollow_preview_blocked_voxel_index_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview blocked voxel index result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview blocked voxel index result — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
-    Ok(Response::new(bytes))
-}
-
-/// Request payload for `mesh_hollow_preview_select_removed_voxels_in_polygon`.
+/// Request payload for `mesh_hollow_session_select_removed_voxels`.
 /// All fields are in the same spaces the frontend lasso resolver used before
 /// the projection moved to Rust: `polygon` in container pixels, `view_proj` a
 /// column-major `projectionMatrix * matrixWorldInverse`, and the model
@@ -1178,27 +909,24 @@ struct SelectRemovedVoxelsRequest {
 }
 
 /// Selects the full through-depth set of removed (cavity) voxels whose
-/// projected screen point falls inside the lasso polygon, operating on the
-/// cached hollow-preview session so the result is immune to the boundary
+/// projected screen point falls inside the lasso polygon, on the session's voxel
+/// grid for the request's options, so the result is immune to the boundary
 /// filter and viewport cap that narrow the rendered/exported voxel subset.
 /// Returns the grid indices as raw little-endian `u32` bytes.
 #[tauri::command]
-pub async fn mesh_hollow_preview_select_removed_voxels_in_polygon(
+pub async fn mesh_hollow_session_select_removed_voxels(
+    session_id: String,
     request_json: String,
 ) -> Result<Response, String> {
     let request: SelectRemovedVoxelsRequest = serde_json::from_str(&request_json)
         .map_err(|e| format!("invalid select-removed-voxels request JSON: {e}"))?;
-
-    let session = hollow_preview_session()
-        .lock()
-        .map_err(|e| format!("hollow preview session lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview session — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
+    let source = mesh_store::global().hollow_source(&session_id)?;
 
     let indices = tauri::async_runtime::spawn_blocking(move || {
+        let session = source.session_for(
+            request.options.voxel_resolution,
+            request.options.rotation_quat,
+        );
         let selected = session.select_removed_voxels_in_polygon(
             &request.options,
             &request.polygon,
@@ -1212,7 +940,11 @@ pub async fn mesh_hollow_preview_select_removed_voxels_in_polygon(
             ),
             Vec3::new(request.scale[0], request.scale[1], request.scale[2]),
             request.rotation_quat,
-            Vec3::new(request.position[0], request.position[1], request.position[2]),
+            Vec3::new(
+                request.position[0],
+                request.position[1],
+                request.position[2],
+            ),
         );
         Ok::<Vec<u32>, String>(selected)
     })
@@ -1223,106 +955,27 @@ pub async fn mesh_hollow_preview_select_removed_voxels_in_polygon(
     Ok(Response::new(bytes))
 }
 
-/// Reads the cavity interior mesh positions from the last preview hollow operation.
+/// Punches cylindrical holes through a stored mesh, and returns the report with the result's id
+/// as `meshId`, owned by whoever owns the input.
+///
+/// The input is left in the store as it was. The hole punch preview keeps one stored source
+/// and punches it again on every change, which is what capturing the staged source used to do.
 #[tauri::command]
-pub async fn mesh_hollow_preview_read_cavity_positions() -> Result<Response, String> {
-    let bytes = hollow_preview_cavity_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow preview cavity result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow preview cavity result — call mesh_hollow_preview_from_captured_source first"
-                .to_string()
-        })?;
-    Ok(Response::new(bytes))
-}
-
-/// Reads the cavity interior mesh positions from the last staged hollow operation.
-#[tauri::command]
-pub async fn mesh_hollow_staged_read_cavity_positions() -> Result<Response, String> {
-    let bytes = hollow_staged_cavity_result_bytes()
-        .lock()
-        .map_err(|e| format!("hollow staged cavity result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No hollow staged cavity result — call mesh_hollow_staged first".to_string()
-        })?;
-    Ok(Response::new(bytes))
-}
-
-/// Applies manual cylindrical hole punches to the current staged mesh.
-#[tauri::command]
-pub async fn mesh_punch_staged(options_json: String) -> Result<String, String> {
+pub async fn mesh_punch_staged(options_json: String, mesh_id: String) -> Result<String, String> {
     let options = parse_hole_punch_options(&options_json)?;
-    let bytes = read_staging_bytes()?;
-    let (mesh, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&bytes).map_err(|e| e.to_string())?;
+    let store = mesh_store::global();
+    let input = store.get_soup(&mesh_id)?;
+    let owner = store.owner_of(&mesh_id)?;
+    let (result, report) = tauri::async_runtime::spawn_blocking(move || {
+        let bytes = input.soup_bytes().expect("get_soup returned a soup");
+        let mesh = io::staged::load_positions_le(bytes).map_err(|e| e.to_string())?;
         let outcome = punch_cylinders(mesh, &options);
-        Ok::<_, String>((outcome.mesh, outcome.report))
+        Ok::<_, String>((soup_bytes(&outcome.mesh), outcome.report))
     })
     .await
     .map_err(|e| format!("punch task panicked: {e}"))??;
-
-    replace_staging_with_mesh(&mesh)?;
-    serde_json::to_string(&report).map_err(|e| format!("serialize punch report: {e}"))
-}
-
-/// Captures the current staged mesh bytes as the source for repeated
-/// non-mutating hole-punch runs.
-#[tauri::command]
-pub async fn mesh_punch_capture_staged_source() -> Result<(), String> {
-    let bytes = read_staging_bytes()?;
-    *punch_source_bytes()
-        .lock()
-        .map_err(|e| format!("punch source lock poisoned: {e}"))? = Some(bytes);
-    *punch_result_bytes()
-        .lock()
-        .map_err(|e| format!("punch result lock poisoned: {e}"))? = None;
-    Ok(())
-}
-
-/// Runs hole punching against the captured source mesh without mutating the
-/// regular staged mesh buffer.
-#[tauri::command]
-pub async fn mesh_punch_from_captured_source(options_json: String) -> Result<String, String> {
-    let options = parse_hole_punch_options(&options_json)?;
-    let source_bytes = punch_source_bytes()
-        .lock()
-        .map_err(|e| format!("punch source lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No captured punch source — call mesh_punch_capture_staged_source first".to_string()
-        })?;
-
-    let (positions_bytes, report) = tauri::async_runtime::spawn_blocking(move || {
-        let mesh = io::staged::load_positions_le(&source_bytes).map_err(|e| e.to_string())?;
-        let outcome = punch_cylinders(mesh, &options);
-        let soup = outcome.mesh.to_triangle_soup();
-        let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
-        Ok::<_, String>((bytes, outcome.report))
-    })
-    .await
-    .map_err(|e| format!("punch task panicked: {e}"))??;
-
-    *punch_result_bytes()
-        .lock()
-        .map_err(|e| format!("punch result lock poisoned: {e}"))? = Some(positions_bytes);
-
-    serde_json::to_string(&report).map_err(|e| format!("serialize punch report: {e}"))
-}
-
-/// Returns the most recent non-mutating punch result positions as raw
-/// little-endian bytes.
-#[tauri::command]
-pub async fn mesh_punch_read_positions() -> Result<Response, String> {
-    let bytes = punch_result_bytes()
-        .lock()
-        .map_err(|e| format!("punch result lock poisoned: {e}"))?
-        .clone()
-        .ok_or_else(|| {
-            "No punch result — call mesh_punch_from_captured_source first".to_string()
-        })?;
-    Ok(Response::new(bytes))
+    let result_id = store.put(owner, mesh_store::Entry::Soup(result));
+    report_json(&report, Some(result_id))
 }
 
 // --- organic cut ---------------------------------------------------------
@@ -1912,8 +1565,6 @@ fn stl_special_case_response(
                 None,
             );
 
-            // Through the dispatcher, not `io::stl::load`, so the model gets the
-            // same coarse-face refinement every other import path applies.
             let mesh = io::load_mesh_from_path(path)
                 .map_err(|e| format!("Failed to load STL '{file_path}': {e}"))?;
 
@@ -1977,8 +1628,7 @@ fn stl_special_case_response(
 /// The format-agnostic entry point: it dispatches through
 /// `io::load_mesh_bodies_from_path` (`stl`/`obj` give one body; `3mf` gives one
 /// per build item expanded through its components, with transforms baked), so
-/// refinement and the face normals are the same ones every other
-/// import path gets. Materials and units are dropped, matching the renderer's
+/// the face normals are the same ones every other import path gets. Materials and units are dropped, matching the renderer's
 /// loaders. STL adds one format-specific step — [`stl_special_case_response`],
 /// which turns a mesh too large to render into a decimated preview.
 ///
@@ -2001,8 +1651,7 @@ pub async fn load_mesh_file(file_path: String, classify: Option<bool>) -> Result
     }
 
     // Through the dispatcher, not a format loader: `load_mesh_bodies_from_path`
-    // refines coarse faces per body before anything derives data from the mesh,
-    // and resolves a 3MF's build items into one body each.
+    // resolves a 3MF's build items into one body each.
     let bodies = io::load_mesh_bodies_from_path(path)
         .map_err(|e| format!("Failed to load mesh '{file_path}': {e}"))?;
 
@@ -2038,12 +1687,7 @@ pub async fn load_mesh_bytes(request: tauri::ipc::Request<'_>) -> Result<Respons
         .headers()
         .get("x-mesh-classify")
         .and_then(|value| value.to_str().ok())
-        .map_or(true, |value| value.trim() != "0");
-    let refine = request
-        .headers()
-        .get("x-mesh-refine")
-        .and_then(|value| value.to_str().ok())
-        .map_or(true, |value| value.trim() != "0");
+        .is_none_or(|value| value.trim() != "0");
     let bytes = match request.body() {
         tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
         tauri::ipc::InvokeBody::Json(_) => {
@@ -2054,7 +1698,7 @@ pub async fn load_mesh_bytes(request: tauri::ipc::Request<'_>) -> Result<Respons
         "[load_mesh_bytes] Starting native mesh load from {} bytes",
         bytes.len()
     );
-    load_mesh_bytes_response(&bytes, classify, refine).map(Response::new)
+    load_mesh_bytes_response(&bytes, classify).map(Response::new)
 }
 
 /// Parse a mesh that sits at a known offset inside a file on disk.
@@ -2064,7 +1708,7 @@ pub async fn load_mesh_bytes(request: tauri::ipc::Request<'_>) -> Result<Respons
 /// of them in the webview before handing them over — 677 MB of heap and ~2 s of a
 /// scene load that happens before any model work starts. The bytes never need to
 /// cross: the range is read here, inflated here, and the same pipeline the
-/// byte-source loader runs (parse, refine, classify, encode) produces the same
+/// byte-source loader runs (parse, classify, encode) produces the same
 /// `DFMX` payload.
 ///
 /// `compression` is the container's own code: 0 none, 1 zlib. Anything else is
@@ -2078,7 +1722,6 @@ pub async fn load_mesh_range(
     length: u64,
     compression: u16,
     classify: Option<bool>,
-    refine: Option<bool>,
 ) -> Result<Response, String> {
     let started = std::time::Instant::now();
     let path = source_path.clone();
@@ -2115,11 +1758,7 @@ pub async fn load_mesh_range(
     .map_err(|e| format!("mesh range task panicked: {e}"))??;
 
     let started_parse = std::time::Instant::now();
-    let (bodies, metadata_json) = mesh_bodies(
-        &bytes,
-        classify.unwrap_or(true),
-        refine.unwrap_or(true),
-    )?;
+    let (bodies, metadata_json) = mesh_bodies(&bytes, classify.unwrap_or(true))?;
 
     // Keep the mesh for its AO bake. The bake needs exactly this mesh, and sending
     // one back costs 36 bytes a triangle; a single body is the VOXL case, and only a
@@ -2144,26 +1783,23 @@ pub async fn load_mesh_range(
         .map(Response::new)
 }
 
-/// Parse a file's bytes, refine its coarse faces when asked, and classify when asked.
+/// Parse a file's bytes as written, and classify when asked.
 ///
-/// Split out of the encoders so a caller that wants to *keep* the refined mesh (the
-/// range loader does, for the AO bake — see the `registry` module) gets the same
-/// meshes the payload was built from, without a second parse.
+/// Split out of the encoders so a caller that wants to *keep* the mesh (the range
+/// loader does, for the AO bake — see the `registry` module) gets the same meshes the
+/// payload was built from, without a second parse.
 ///
-/// `refine` is false for the mesh a VOXL stores. That payload is the scene geometry
-/// the app already refined, and refinement is not idempotent: on the reported scene it
-/// turned 81,282 triangles into 126,386 on the next load, so a `classification`
-/// written for the first count could never address the second, every load re-ran the
-/// classifier (which reorders the soup), and a save/load cycle grew the mesh by half.
-/// Refining what is already refined is the one thing a reader must not do.
+/// Nothing is refined here, a VOXL's stored mesh least of all: refinement is not
+/// idempotent, and when the loaders refined, a scene of 81,282 triangles came back as
+/// 126,386, a `classification` written for the first count could never address the
+/// second, and every save/load cycle grew the mesh by half. The renderer refines a
+/// copy it draws instead (`refine_mesh_soup`).
 fn mesh_bodies(
     bytes: &[u8],
     classify: bool,
-    refine: bool,
 ) -> Result<(Vec<IndexedMesh>, Option<String>), String> {
     let mesh = io::stl::parse_bytes(bytes)
         .map_err(|e| format!("Failed to parse mesh bytes: {e}"))?;
-    let mesh = if refine { io::refine_coarse_faces(mesh) } else { mesh };
     Ok(if classify {
         classify_single_body(mesh)
     } else {
@@ -2171,15 +1807,11 @@ fn mesh_bodies(
     })
 }
 
-/// The pipeline behind `load_mesh_bytes`: parse the file's bytes, refine, classify
-/// when asked, and encode the same `DFMX` payload the path loader writes.
-fn load_mesh_bytes_response(
-    bytes: &[u8],
-    classify: bool,
-    refine: bool,
-) -> Result<Vec<u8>, String> {
+/// The pipeline behind `load_mesh_bytes`: parse the file's bytes, classify when
+/// asked, and encode the same `DFMX` payload the path loader writes.
+fn load_mesh_bytes_response(bytes: &[u8], classify: bool) -> Result<Vec<u8>, String> {
     let started = std::time::Instant::now();
-    let (bodies, metadata_json) = mesh_bodies(bytes, classify, refine)?;
+    let (bodies, metadata_json) = mesh_bodies(bytes, classify)?;
 
     let tri_count: usize = bodies.iter().map(|body| body.triangles.len()).sum();
     let encoded = encode_mesh_bodies(&bodies, tri_count as u32, false, None, metadata_json.as_deref(), None)?;
@@ -2187,7 +1819,7 @@ fn load_mesh_bytes_response(
     // round trip for the same call, and the wire between them measures 110-135
     // MB/s, so this line and that one together say where a model's load went.
     log::info!(
-        "[load_mesh_bytes] parsed, refined and encoded in {}ms",
+        "[load_mesh_bytes] parsed and encoded in {}ms",
         started.elapsed().as_millis()
     );
     Ok(encoded)
@@ -2236,7 +1868,7 @@ fn classify_single_body(mesh: IndexedMesh) -> (Vec<IndexedMesh>, Option<String>)
 ///  16 .. 19 : Original input triangle count u32 LE
 ///  20 .. 23 : Model section triangle count u32 LE (0 when absent)
 ///  24 .. 27 : Metadata JSON byte length (u32 LE, 0 when absent)
-///  28 .. 31 : Mesh token u32 LE (0 when the loader kept nothing): names the refined
+///  28 .. 31 : Mesh token u32 LE (0 when the loader kept nothing): names the
 ///             mesh in the bake registry, so the AO bake can be asked for it instead
 ///             of being sent the soup back
 ///
@@ -2248,7 +1880,8 @@ fn classify_single_body(mesh: IndexedMesh) -> (Vec<IndexedMesh>, Option<String>)
 /// soup: positions then normals, 9 f32 per triangle each (72 bytes/triangle). The
 /// metadata JSON, when present, is the last `metadataLength` bytes of the payload
 /// — a reader that does not know the key reads the bodies and ignores the tail.
-/// The refined meshes a load just built, waiting for the AO bake that needs one.
+/// The meshes a load (or a display-mesh refine) just built, waiting for the AO bake
+/// that needs one.
 ///
 /// A model's mesh crosses the IPC once (as `DFMX`) and then, until now and for the
 /// same model, a second time *back* as a soup for the bake — 36 bytes a triangle,
@@ -2270,7 +1903,10 @@ mod registry {
 
     const MESH_REGISTRY_CAP: usize = 8;
 
-    static REGISTRY: OnceLock<Mutex<VecDeque<(u32, Arc<IndexedMesh>)>>> = OnceLock::new();
+    /// Meshes waiting for their bake, oldest first, each under its token.
+    type Registry = Mutex<VecDeque<(u32, Arc<IndexedMesh>)>>;
+
+    static REGISTRY: OnceLock<Registry> = OnceLock::new();
     static NEXT_TOKEN: OnceLock<Mutex<u32>> = OnceLock::new();
 
     /// Keep `mesh` for its bake and return the token that names it.
@@ -2304,6 +1940,18 @@ mod registry {
             .find(|(registered, _)| *registered == token)
             .map(|(_, mesh)| Arc::clone(mesh))
     }
+}
+
+/// Keep `mesh` for its AO bake and return the token that names it — for a mesh built
+/// outside the loaders (the display-mesh refine), which the bake would otherwise be
+/// sent back as a soup.
+pub(crate) fn keep_for_bake(mesh: IndexedMesh) -> u32 {
+    registry::register(mesh)
+}
+
+/// The mesh a bake token names, if it is still registered.
+pub(crate) fn kept_for_bake(token: u32) -> Option<std::sync::Arc<IndexedMesh>> {
+    registry::get(token)
 }
 
 /// The mesh a bake token names, checked against the corner count the caller has.
@@ -2347,7 +1995,7 @@ const MESH_RESPONSE_FLAG_PREVIEW: u32 = 1;
 /// Positions plus normals, both 9 f32 per triangle.
 const SOUP_BYTES_PER_TRIANGLE: usize = 9 * std::mem::size_of::<f32>() * 2;
 
-fn encode_mesh_bodies(
+pub(crate) fn encode_mesh_bodies(
     bodies: &[IndexedMesh],
     original_triangle_count: u32,
     is_preview: bool,
@@ -2812,9 +2460,91 @@ fn read_staging_bytes() -> Result<Vec<u8>, String> {
     }
 }
 
-fn replace_staging_with_mesh(mesh: &IndexedMesh) -> Result<(), String> {
+/// A command's input mesh: a copy of the staging register, or a stored entry shared with the
+/// store (no copy).
+enum StagedInput {
+    Register(Vec<u8>),
+    Stored(Arc<mesh_store::Entry>),
+}
+
+impl StagedInput {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            StagedInput::Register(bytes) => bytes,
+            StagedInput::Stored(entry) => entry.soup_bytes().expect("get_soup returned a soup"),
+        }
+    }
+}
+
+/// The stored mesh `mesh_id` names, or the staging register when there is none.
+fn staged_input(mesh_id: Option<&str>) -> Result<StagedInput, String> {
+    match mesh_id {
+        Some(id) => Ok(StagedInput::Stored(mesh_store::global().get_soup(id)?)),
+        None => read_staging_bytes().map(StagedInput::Register),
+    }
+}
+
+/// Where a command's result mesh goes.
+enum ResultTarget {
+    /// The staging register, replacing what was there: the legacy path.
+    Register,
+    /// A new store entry for this owner.
+    Store(mesh_store::Owner),
+}
+
+/// A command run with a client id, or on a stored mesh, leaves its result in the store: owned by
+/// that client, or by whoever owns the input. One run with neither stays on the register.
+fn result_target(mesh_id: Option<&str>, client_id: Option<&str>) -> Result<ResultTarget, String> {
+    if let Some(client) = client_id.map(str::trim).filter(|c| !c.is_empty()) {
+        return Ok(ResultTarget::Store(mesh_store::Owner::Frontend(
+            client.to_string(),
+        )));
+    }
+    match mesh_id {
+        Some(id) => Ok(ResultTarget::Store(mesh_store::global().owner_of(id)?)),
+        None => Ok(ResultTarget::Register),
+    }
+}
+
+/// Puts a result where `target` says, and returns its id when that is the store.
+fn deliver_result(mesh: &IndexedMesh, target: &ResultTarget) -> Result<Option<String>, String> {
+    match target {
+        ResultTarget::Register => replace_staging_with_mesh(mesh).map(|()| None),
+        ResultTarget::Store(owner) => Ok(Some(
+            mesh_store::global().put(owner.clone(), mesh_store::Entry::Soup(soup_bytes(mesh))),
+        )),
+    }
+}
+
+/// A report as JSON, with the result's id under `meshId` when the result went to the store.
+fn report_json<T: serde::Serialize>(report: &T, mesh_id: Option<String>) -> Result<String, String> {
+    report_json_with_ids(
+        report,
+        mesh_id.map(|id| ("meshId", id)).into_iter().collect(),
+    )
+}
+
+/// A report as JSON with each stored output's id added under its name.
+fn report_json_with_ids<T: serde::Serialize>(
+    report: &T,
+    ids: Vec<(&'static str, String)>,
+) -> Result<String, String> {
+    let mut value = serde_json::to_value(report).map_err(|e| format!("serialize report: {e}"))?;
+    if let Some(object) = value.as_object_mut() {
+        for (name, id) in ids {
+            object.insert(name.into(), serde_json::Value::String(id));
+        }
+    }
+    serde_json::to_string(&value).map_err(|e| format!("serialize report: {e}"))
+}
+
+fn soup_bytes(mesh: &IndexedMesh) -> Vec<u8> {
     let soup = mesh.to_triangle_soup();
-    let bytes: Vec<u8> = bytemuck::cast_slice::<f32, u8>(&soup).to_vec();
+    bytemuck::cast_slice::<f32, u8>(&soup).to_vec()
+}
+
+fn replace_staging_with_mesh(mesh: &IndexedMesh) -> Result<(), String> {
+    let bytes = soup_bytes(mesh);
 
     // Clear any file-based staging; we put everything in-memory for the
     // repaired mesh since it's already fully materialised.
@@ -3097,8 +2827,7 @@ mod tests {
         let stl_path = dir.join("test_load_mesh_file.stl");
         let obj_path = dir.join("test_load_mesh_file.obj");
 
-        // Binary STL with three degenerate (all-zero) triangles: a zero diagonal,
-        // so the dispatcher's refinement no-ops and the count is exact.
+        // Binary STL with three degenerate (all-zero) triangles.
         {
             let mut file = std::fs::File::create(&stl_path).unwrap();
             let mut header = [0u8; 84];
@@ -3108,8 +2837,8 @@ mod tests {
                 file.write_all(&[0u8; 50]).unwrap();
             }
         }
-        // OBJ with one triangle, whose edges are far longer than the refinement
-        // target, so the load proves it went through `io::load_mesh_from_path`.
+        // OBJ with one triangle, far coarser than the display refine's target: the
+        // model is read as written, so it arrives as one triangle.
         std::fs::write(&obj_path, b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -3158,10 +2887,7 @@ mod tests {
         )));
         assert_eq!(&obj[0..4], b"DFMX");
         assert_eq!(bodies(&obj), 1);
-        assert!(
-            body_triangles(&obj, 0) > 1,
-            "the coarse OBJ should have been refined"
-        );
+        assert_eq!(body_triangles(&obj, 0), 1, "the coarse OBJ is read as written");
         assert_eq!(obj.len(), described_len(&obj));
 
         // An unsupported extension is an error, not a panic.
@@ -3174,8 +2900,6 @@ mod tests {
         let _ = std::fs::remove_file(&obj_path);
     }
 
-    /// A byte source has no path, so `load_mesh_bytes` carries the whole pipeline:
-    /// parse, refine, classify, encode the same payload the path loader writes.
     /// The range loader: a container chunk read from a file, inflated and parsed.
     ///
     /// The same pipeline as the byte loader, so what this pins is the range
@@ -3215,7 +2939,6 @@ mod tests {
             packed.len() as u64,
             1,
             Some(false),
-            Some(true),
         )));
         assert_eq!(&bytes[0..4], b"DFMX");
         assert_eq!(
@@ -3227,10 +2950,10 @@ mod tests {
         // The same chunk read as raw bytes is not an STL, and a range that runs off
         // the end of the file is an error rather than a short payload.
         assert!(rt
-            .block_on(load_mesh_range(path.clone(), 64, packed.len() as u64, 7, None, None))
+            .block_on(load_mesh_range(path.clone(), 64, packed.len() as u64, 7, None))
             .is_err());
         assert!(rt
-            .block_on(load_mesh_range(path.clone(), 64, 100_000_000, 1, None, None))
+            .block_on(load_mesh_range(path.clone(), 64, 100_000_000, 1, None))
             .is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -3261,9 +2984,9 @@ mod tests {
     }
 
     #[test]
-    fn test_load_mesh_bytes_leaves_scene_geometry_unrefined_when_asked() {
-        // One 100 mm triangle: its longest edge is 70x the refine threshold
-        // (2% of the bbox diagonal), so the default pass splits it.
+    fn test_load_mesh_bytes_reads_a_coarse_mesh_as_written() {
+        // One 100 mm triangle: its longest edge is 70x the display refine's threshold
+        // (2% of the bbox diagonal).
         let corners = [[0.0f32, 0.0, 0.0], [100.0, 0.0, 0.0], [0.0, 100.0, 0.0]];
         let mut stl = vec![0u8; 84];
         stl[80..84].copy_from_slice(&1u32.to_le_bytes());
@@ -3278,22 +3001,19 @@ mod tests {
             u32::from_le_bytes(response[16..20].try_into().unwrap()) as usize
         };
 
-        let refined = load_mesh_bytes_response(&stl, false, true).unwrap();
-        assert!(triangle_count(&refined) > 1, "the coarse triangle should be split");
-
-        // A VOXL payload is already the scene's refined geometry; re-refining it
-        // invalidates the classification it carries and grows on every reload.
-        let as_stored = load_mesh_bytes_response(&stl, false, false).unwrap();
+        // The model is the file: refining it here would move the triangle ids a
+        // stored classification addresses, and grow the mesh on every reload.
+        let as_stored = load_mesh_bytes_response(&stl, false).unwrap();
         assert_eq!(triangle_count(&as_stored), 1);
     }
 
     #[test]
-    fn test_load_mesh_bytes_parses_refines_and_classifies() {
+    fn test_load_mesh_bytes_parses_and_classifies() {
         let mut stl = vec![0u8; 84];
         stl[80..84].copy_from_slice(&3u32.to_le_bytes());
         stl.extend(std::iter::repeat_n(0u8, 3 * 50));
 
-        let classified = load_mesh_bytes_response(&stl, true, true).unwrap();
+        let classified = load_mesh_bytes_response(&stl, true).unwrap();
         assert_eq!(&classified[0..4], b"DFMX");
         assert_eq!(u32::from_le_bytes(classified[12..16].try_into().unwrap()), 1);
         let metadata_len = u32::from_le_bytes(classified[24..28].try_into().unwrap()) as usize;
@@ -3302,7 +3022,7 @@ mod tests {
         assert!(json.starts_with("{\"version\""));
 
         // A caller that will repair asks for no report and gets no tail.
-        let plain = load_mesh_bytes_response(&stl, false, true).unwrap();
+        let plain = load_mesh_bytes_response(&stl, false).unwrap();
         assert_eq!(&plain[0..4], b"DFMX");
         assert_eq!(u32::from_le_bytes(plain[24..28].try_into().unwrap()), 0);
         let packed = u32::from_le_bytes(plain[36..40].try_into().unwrap()) as usize;
@@ -3390,5 +3110,337 @@ mod tests {
         assert_eq!(soup1.len(), 2 * SOUP_BYTES_PER_TRIANGLE);
         assert_eq!(f32::from_le_bytes(soup0[12..16].try_into().unwrap()), 1.0);
         assert!(soup1.iter().all(|byte| *byte == 0), "body 1 is the degenerate fixture");
+    }
+}
+
+/// Two passes on two meshes: through the staging register they read each other's mesh, through
+/// store ids each one reads its own.
+#[cfg(test)]
+mod store_isolation_tests {
+    use super::*;
+    use crate::mesh_store::{self, Entry, Owner};
+
+    fn soup_bytes(triangles: &[[[f32; 3]; 3]]) -> Vec<u8> {
+        let floats: Vec<f32> = triangles.iter().flatten().flatten().copied().collect();
+        bytemuck::cast_slice::<f32, u8>(&floats).to_vec()
+    }
+
+    /// A closed tetrahedron: 4 triangles.
+    fn tetrahedron() -> Vec<u8> {
+        let (a, b, c, d) = (
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [0.0, 10.0, 0.0],
+            [0.0, 0.0, 10.0],
+        );
+        soup_bytes(&[[a, c, b], [a, b, d], [a, d, c], [b, c, d]])
+    }
+
+    /// A closed cube: 12 triangles.
+    fn cube() -> Vec<u8> {
+        let v = |x: f32, y: f32, z: f32| [x * 10.0, y * 10.0, z * 10.0];
+        let quads = [
+            [v(0., 0., 0.), v(0., 1., 0.), v(1., 1., 0.), v(1., 0., 0.)],
+            [v(0., 0., 1.), v(1., 0., 1.), v(1., 1., 1.), v(0., 1., 1.)],
+            [v(0., 0., 0.), v(1., 0., 0.), v(1., 0., 1.), v(0., 0., 1.)],
+            [v(0., 1., 0.), v(0., 1., 1.), v(1., 1., 1.), v(1., 1., 0.)],
+            [v(0., 0., 0.), v(0., 0., 1.), v(0., 1., 1.), v(0., 1., 0.)],
+            [v(1., 0., 0.), v(1., 1., 0.), v(1., 1., 1.), v(1., 0., 1.)],
+        ];
+        let triangles: Vec<[[f32; 3]; 3]> = quads
+            .iter()
+            .flat_map(|[a, b, c, d]| [[*a, *b, *c], [*a, *c, *d]])
+            .collect();
+        soup_bytes(&triangles)
+    }
+
+    fn triangle_count(analysis_json: &str) -> u64 {
+        let value: serde_json::Value = serde_json::from_str(analysis_json).unwrap();
+        value["triangle_count"].as_u64().unwrap()
+    }
+
+    /// Characterises the hazard the store exists for, and goes when the register does. Caller A
+    /// stages its tetrahedron; before its analysis runs, caller B stages a cube; A's analysis
+    /// reports the cube. Nothing errors, so nothing on screen says it happened.
+    #[test]
+    fn the_staging_register_hands_a_pass_the_mesh_another_caller_staged() {
+        *staged_mesh().lock().unwrap() = Some(tetrahedron()); // caller A
+        *staged_mesh().lock().unwrap() = Some(cube()); // caller B, in between
+        let seen_by_a =
+            tauri::async_runtime::block_on(mesh_analyze_staged(None)).expect("analysis ran");
+        *staged_mesh().lock().unwrap() = None;
+        assert_eq!(triangle_count(&seen_by_a), 12, "A analysed B's cube");
+    }
+
+    /// Hollow sessions on two meshes, previewed at the same time and many times over: each
+    /// preview reports its own session's mesh, and every output comes back as an id owned by
+    /// the session's owner.
+    #[test]
+    fn hollow_sessions_on_two_meshes_never_see_each_other() {
+        let client = "hollow-session-test".to_string();
+        let store = mesh_store::global();
+        let owner = Owner::Frontend(client.clone());
+        let open = |bytes: Vec<u8>| {
+            let mesh_id = store.put(owner.clone(), Entry::Soup(bytes));
+            let session_id =
+                tauri::async_runtime::block_on(mesh_hollow_session_open(mesh_id.clone()))
+                    .expect("session opened");
+            // The session keeps its own copy: the mesh it was opened from can go at once.
+            store.drop_ids(&[mesh_id]);
+            session_id
+        };
+        let sessions = [(open(tetrahedron()), 4u64), (open(cube()), 12u64)];
+
+        let runs: Vec<_> = (0..8)
+            .map(|i| {
+                let (session_id, expected) = sessions[i % 2].clone();
+                let owner = owner.clone();
+                std::thread::spawn(move || {
+                    let store = mesh_store::global();
+                    // Alternating resolutions makes runs on one session rebuild its grid
+                    // while others read it.
+                    let options = format!(r#"{{"voxelResolution":{}}}"#, 12 + 4 * (i % 3));
+                    let report_json = tauri::async_runtime::block_on(mesh_hollow_session_preview(
+                        session_id.clone(),
+                        options,
+                    ))
+                    .expect("preview ran");
+                    let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+                    assert_eq!(
+                        report["sourceTriangleCount"].as_u64(),
+                        Some(expected),
+                        "run {i} hollowed another session's mesh"
+                    );
+                    let mut ids = Vec::new();
+                    for name in [
+                        "meshId",
+                        "removedVoxelCentersId",
+                        "removedVoxelIndicesId",
+                        "blockedVoxelCentersId",
+                        "blockedVoxelIndicesId",
+                    ] {
+                        let id = report[name]
+                            .as_str()
+                            .unwrap_or_else(|| panic!("run {i}: no {name} in {report_json}"));
+                        assert_eq!(store.owner_of(id).unwrap(), owner);
+                        ids.push(id.to_string());
+                    }
+                    let centers = store.read_bytes(&ids[1]).unwrap();
+                    let indices = store.read_bytes(&ids[2]).unwrap();
+                    assert_eq!(
+                        centers.len() / 12,
+                        indices.len() / 4,
+                        "run {i}: one centre per removed voxel index"
+                    );
+                    for name in ["cavityId", "infillId"] {
+                        if let Some(id) = report[name].as_str() {
+                            ids.push(id.to_string());
+                        }
+                    }
+                    store.drop_ids(&ids);
+                })
+            })
+            .collect();
+        for run in runs {
+            run.join().expect("a run panicked");
+        }
+
+        let applied = tauri::async_runtime::block_on(mesh_hollow_session_apply(
+            sessions[1].0.clone(),
+            r#"{"voxelResolution":12}"#.to_string(),
+        ))
+        .expect("apply ran");
+        let applied: serde_json::Value = serde_json::from_str(&applied).unwrap();
+        assert_eq!(applied["sourceTriangleCount"].as_u64(), Some(12));
+        let result_id = applied["meshId"]
+            .as_str()
+            .expect("apply returns its result's id");
+        assert!(store.get_soup(result_id).is_ok());
+        assert!(
+            applied.get("removedVoxelCentersId").is_none(),
+            "apply returns no preview buffers"
+        );
+
+        let mut leftovers = vec![result_id.to_string()];
+        leftovers.extend(applied["cavityId"].as_str().map(str::to_string));
+        leftovers.extend(sessions.iter().map(|(id, _)| id.clone()));
+        store.drop_ids(&leftovers);
+    }
+
+    #[test]
+    fn a_hollow_session_command_on_the_wrong_id_says_why() {
+        let store = mesh_store::global();
+        let owner = Owner::Frontend("hollow-session-errors".to_string());
+        let mesh_id = store.put(owner, Entry::Soup(tetrahedron()));
+
+        let err = tauri::async_runtime::block_on(mesh_hollow_session_preview(
+            mesh_id.clone(),
+            String::new(),
+        ))
+        .unwrap_err();
+        assert!(err.starts_with("mesh-store/wrong_kind:"), "{err}");
+
+        let session_id = tauri::async_runtime::block_on(mesh_hollow_session_open(mesh_id.clone()))
+            .expect("session opened");
+        let err = tauri::async_runtime::block_on(mesh_hollow_session_open(session_id.clone()))
+            .unwrap_err();
+        assert!(err.starts_with("mesh-store/wrong_kind:"), "{err}");
+
+        store.drop_ids(&[mesh_id, session_id.clone()]);
+        let err =
+            tauri::async_runtime::block_on(mesh_hollow_session_apply(session_id, String::new()))
+                .unwrap_err();
+        assert!(err.starts_with("mesh-store/unknown:"), "{err}");
+    }
+
+    #[test]
+    fn a_one_shot_hollow_returns_its_result_by_id() {
+        let store = mesh_store::global();
+        let owner = Owner::Frontend("hollow-one-shot".to_string());
+        let mesh_id = store.put(owner.clone(), Entry::Soup(cube()));
+        let report_json = tauri::async_runtime::block_on(mesh_hollow_staged(
+            r#"{"voxelResolution":12}"#.to_string(),
+            mesh_id.clone(),
+        ))
+        .expect("hollow ran");
+        let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+        assert_eq!(report["sourceTriangleCount"].as_u64(), Some(12));
+        let result_id = report["meshId"].as_str().expect("a result id");
+        assert_eq!(store.owner_of(result_id).unwrap(), owner);
+        let mut ids = vec![mesh_id, result_id.to_string()];
+        ids.extend(report["cavityId"].as_str().map(str::to_string));
+        store.drop_ids(&ids);
+    }
+
+    const CENTRE_PUNCH: &str = r#"{"punches":[{"centerNorm":[0.5,0.5,0.5],"radiusMm":2}]}"#;
+
+    /// The hole punch preview punches one stored source again on every change, so a punch must
+    /// leave its input as it found it.
+    #[test]
+    fn a_punch_leaves_its_source_in_place_for_the_next_one() {
+        let store = mesh_store::global();
+        let owner = Owner::Frontend("punch-source".to_string());
+        let source_id = store.put(owner.clone(), Entry::Soup(cube()));
+        let mut ids = vec![source_id.clone()];
+        for _ in 0..2 {
+            let report_json = tauri::async_runtime::block_on(mesh_punch_staged(
+                CENTRE_PUNCH.to_string(),
+                source_id.clone(),
+            ))
+            .expect("punch ran");
+            let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+            assert_eq!(report["sourceTriangleCount"].as_u64(), Some(12));
+            let result_id = report["meshId"].as_str().expect("a result id").to_string();
+            assert_eq!(store.owner_of(&result_id).unwrap(), owner);
+            ids.push(result_id);
+        }
+        assert!(store.get_soup(&source_id).is_ok(), "the source is still there");
+        store.drop_ids(&ids);
+    }
+
+    #[test]
+    fn punches_on_two_stored_meshes_never_see_each_other() {
+        let store = mesh_store::global();
+        let owner = Owner::Frontend("punch-isolation".to_string());
+        let sources = [
+            (store.put(owner.clone(), Entry::Soup(tetrahedron())), 4),
+            (store.put(owner.clone(), Entry::Soup(cube())), 12),
+        ];
+        let runs: Vec<_> = (0..8)
+            .map(|i| {
+                let (source_id, expected) = sources[i % 2].clone();
+                std::thread::spawn(move || {
+                    let report_json = tauri::async_runtime::block_on(mesh_punch_staged(
+                        CENTRE_PUNCH.to_string(),
+                        source_id,
+                    ))
+                    .expect("punch ran");
+                    let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+                    let result_id = report["meshId"].as_str().unwrap().to_string();
+                    (report["sourceTriangleCount"].as_u64(), expected, result_id)
+                })
+            })
+            .collect();
+        let mut ids: Vec<String> = sources.iter().map(|(id, _)| id.clone()).collect();
+        for run in runs {
+            let (seen, expected, result_id) = run.join().unwrap();
+            assert_eq!(seen, Some(expected), "each punch read its own source");
+            ids.push(result_id);
+        }
+        store.drop_ids(&ids);
+    }
+
+    #[test]
+    fn a_punch_on_something_other_than_a_mesh_says_why() {
+        let store = mesh_store::global();
+        let owner = Owner::Frontend("punch-wrong-kind".to_string());
+        let buffer_id = store.put(owner, Entry::Buffer(vec![0; 16]));
+        let error = tauri::async_runtime::block_on(mesh_punch_staged(
+            CENTRE_PUNCH.to_string(),
+            buffer_id.clone(),
+        ))
+        .unwrap_err();
+        assert!(error.starts_with("mesh-store/wrong_kind:"), "{error}");
+        store.drop_ids(&[buffer_id]);
+    }
+
+    /// The same two callers, at the same time and many times over, through ids: each analysis
+    /// sees its own mesh, and each classify result chains into an analysis of that result.
+    #[test]
+    fn store_ids_keep_concurrent_passes_on_their_own_meshes() {
+        let client = "store-isolation-test".to_string();
+        let runs: Vec<_> = (0..16)
+            .map(|i| {
+                let client = client.clone();
+                std::thread::spawn(move || {
+                    let (bytes, expected) = if i % 2 == 0 {
+                        (tetrahedron(), 4)
+                    } else {
+                        (cube(), 12)
+                    };
+                    let store = mesh_store::global();
+                    let id = store.put(Owner::Frontend(client.clone()), Entry::Soup(bytes));
+
+                    let analysis =
+                        tauri::async_runtime::block_on(mesh_analyze_staged(Some(id.clone())))
+                            .expect("analysis ran");
+                    assert_eq!(
+                        triangle_count(&analysis),
+                        expected,
+                        "run {i} read another mesh"
+                    );
+
+                    let report_json = tauri::async_runtime::block_on(mesh_classify_staged(
+                        None,
+                        Some(id.clone()),
+                        None,
+                    ))
+                    .expect("classify ran");
+                    let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
+                    assert_eq!(report["pre"]["triangle_count"].as_u64(), Some(expected));
+                    let result_id = report["meshId"]
+                        .as_str()
+                        .expect("classify returns its result's id");
+                    assert_eq!(
+                        store.owner_of(result_id).unwrap(),
+                        Owner::Frontend(client.clone()),
+                        "a result belongs to its input's owner"
+                    );
+                    let result_analysis = tauri::async_runtime::block_on(mesh_analyze_staged(
+                        Some(result_id.to_string()),
+                    ))
+                    .expect("analysis of the result ran");
+                    assert_eq!(
+                        Some(triangle_count(&result_analysis)),
+                        report["post"]["triangle_count"].as_u64(),
+                        "run {i}: the result id does not hold the classified mesh"
+                    );
+                    store.drop_ids(&[id, result_id.to_string()]);
+                })
+            })
+            .collect();
+        for run in runs {
+            run.join().expect("a run panicked");
+        }
     }
 }

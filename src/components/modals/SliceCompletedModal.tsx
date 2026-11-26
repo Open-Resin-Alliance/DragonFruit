@@ -29,11 +29,11 @@ export function SliceCompletedModal({
   const fmt = useLocaleFormat();
   const [openDirectoryError, setOpenDirectoryError] = React.useState<string | null>(null);
 
-  React.useEffect(() => {
-    if (!isOpen) {
-      setOpenDirectoryError(null);
-    }
-  }, [isOpen]);
+  const [wasOpen, setWasOpen] = React.useState(isOpen);
+  if (wasOpen !== isOpen) {
+    setWasOpen(isOpen);
+    if (!isOpen) setOpenDirectoryError(null);
+  }
 
   const handleOpenDirectory = async () => {
     if (!filePath) return;

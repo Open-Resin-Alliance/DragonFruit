@@ -3,7 +3,17 @@ import { useLingui } from '@lingui/react';
 import { msg } from '@lingui/core/macro';
 import type { MessageDescriptor } from '@lingui/core';
 import * as THREE from 'three';
-import { loadTauriCore, refineCoarseFaces, shouldRefineCoarseFaces } from '@/utils/tauriMeshBridge';
+import { loadTauriCore } from '@/utils/tauriMeshBridge';
+import {
+  acknowledgeEditInPlace,
+  hasDisplayGeometryInFlight,
+  isDisplayGeometryPending,
+  requestDisplayGeometry,
+  settleDisplayGeometry,
+  settledDisplayGeometry,
+  subscribeDisplayGeometry,
+  wasEditedInPlace,
+} from './displayMesh';
 import { solidRemeshFromGeometry, tetSurfaceFromGeometry, type SolidRemeshProgressSink, type SolidRemeshOptions, type TetSurfaceProgressSink, type TetWrapOptions } from '@/utils/meshShrinkwrap';
 import { useLocaleFormat } from '@/hooks/useLocaleFormat';
 import { loadMeshGeometry, loadMeshGeometryFromRange, load3mfGeometryMergedWithSplitData, processGeometry, skipsNativePassForModelOnly, type GeometryWithBounds, type ProcessGeometryOptions } from '@/hooks/useStlGeometry';
@@ -13,14 +23,18 @@ import { computeFlatteningPlanes } from '@/features/placeOnFace/logic/computeFla
 import {
   DYNAMIC_PLATE_ORDERING,
   VOXL_PLATE_ORDERING_EXTENSION,
-  plateCascadeOffsetMm,
+  VOXL_PLATE_ORIGIN_EXTENSION,
   readPlateOrdering,
+  readPlateOriginMode,
   type PlateOrdering,
 } from '@/features/scene/plates/plateCascade';
 import {
   computePlateFrames,
   modelsOnPlate,
+  originModeShift,
   plateCanBeRemoved,
+  plateCenterFor,
+  plateFrameFor,
   plateLocalRect,
   relaidPlateShifts,
   resolveModelPlateId as plateIdForModel,
@@ -38,7 +52,7 @@ import type { ModelTransform } from '@/hooks/useModelTransform';
 import { forgetCenteredPositions } from '@/utils/modelBounds';
 import { releasePrepareMergedSupportsFor } from '@/supports/prepare/mergedSupportCache';
 import { releaseGeometryStorage as releaseGeometryStorageBase } from '@/utils/releaseGeometry';
-import { disposeSpilledSceneSnapshot, hasSpilledSceneSnapshot, pruneSpilledSceneSnapshots, rehydrateSceneSnapshotPair, spillSceneSnapshotPair, spilledSceneSnapshotBytes } from './sceneSnapshotSpill';
+import { disposeSpilledSceneSnapshot, hasSpilledSceneSnapshot, modelGeometries, pruneSpilledSceneSnapshots, rehydrateSceneSnapshotPair, spillSceneSnapshotPair, spilledSceneSnapshotBytes } from './sceneSnapshotSpill';
 import type { DragonfruitImportFormat, SupportMode, SupportState } from '@/supports/types';
 import { getBuiltinComplexPluginDefinitions } from '@/features/plugins/builtinComplexPlugins';
 import { getBuiltinComplexPluginFileTypeHandlers } from '@/features/plugins/builtinComplexPluginFileTypeHandlers';
@@ -53,7 +67,7 @@ import {
 import { accelerateGeometry, disposeGeometryBVH } from '@/utils/bvh';
 import { runWithConcurrency } from '@/utils/runWithConcurrency';
 import { logToNativeFile } from '@/utils/nativeLog';
-import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeAndAttachOcclusionForGeometry, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, isOcclusionUnavailable, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
+import { BAKED_OCCLUSION_ATTRIBUTE, DEFAULT_BAKED_OCCLUSION_INTENSITY, bakeAndAttachOcclusionForGeometry, bakeOcclusionForGeometry, bumpBakedOcclusionVersion, canBakeOcclusion, canBakeOcclusionAsync, isOcclusionUnavailable, setBakedOcclusionIntensity } from '@/features/scene/bakedOcclusion';
 import { computeProjectedFootprintSize } from '@/utils/modelFootprint';
 import { shelfPack, type ShelfItem } from '@/features/scene/arrange/shelfPack';
 import { eulerFromGlobalEuler, quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -155,7 +169,7 @@ import {
   unlinkModelsLabel,
 } from '@/features/scene/sceneHistoryLabels';
 import { registerMeshForAutoBrace, unregisterMeshForAutoBrace } from '@/supports/autoBracing/meshGeometryStore';
-import { MODEL_EDGE_OVERLAY_ENABLED, buildModelEdgeGeometry } from '@/hooks/useStlGeometry';
+import { MODEL_EDGE_OVERLAY_ENABLED, buildModelEdgeGeometry, displayGeometryOf } from '@/hooks/useStlGeometry';
 import { MESH_SHADER_TYPES, type MatcapVariant, type MeshShaderType } from '@/features/shaders/mesh';
 import {
   getSavedWorkspaceCameraSettings,
@@ -269,8 +283,8 @@ const AO_BAKE_CONCURRENCY = 2;
  *
  * Was two, on the reasoning that each build is a native round trip whose serial
  * phases want overlapping. Measured on the 13-model scene, two left both workers
- * stalled: the native load is only 0.17-0.25 s (`[load_mesh_bytes] parsed, refined
- * and encoded in …`) while the round trip a build waits on is 1.4-2.3 s, because
+ * stalled: the native load is only 0.17-0.25 s (`[load_mesh_bytes] parsed and
+ * encoded in …`, measured when it also refined) while the round trip a build waits on is 1.4-2.3 s, because
  * the wire (65-81 MB a model at ~125 MB/s) and the *single main thread* that
  * decodes, accelerates and computes planes for each model are shared resources. A
  * build's own work is ~1.2 s of that, so the rest is one worker waiting for the
@@ -663,15 +677,6 @@ function installLiveModelsProvider(provider: (() => LoadedModel[]) | null): void
 
 function installExtraRetainedGeometries(provider: (() => Iterable<THREE.BufferGeometry>) | null): void {
   extraRetainedGeometriesProvider = provider;
-}
-
-function modelGeometries(model: Pick<LoadedModel, 'geometry'>): THREE.BufferGeometry[] {
-  const geometries: THREE.BufferGeometry[] = [model.geometry.geometry];
-  if (model.geometry.edgeGeometry) geometries.push(model.geometry.edgeGeometry);
-  const defects = model.geometry.meshDefects;
-  if (defects?.supportSectionGeometry) geometries.push(defects.supportSectionGeometry);
-  if (defects?.modelSectionGeometry) geometries.push(defects.modelSectionGeometry);
-  return geometries;
 }
 
 /**
@@ -1175,16 +1180,26 @@ function writeRecentOpenedFilesToLocalStorage(entries: RecentOpenedFileEntry[]):
   }
 }
 
-function sanitizeImportedModelDisplayName(rawName: string): string {
-  const trimmed = rawName.trim();
-  if (!trimmed) return 'model';
+/** Extensions stripped from an imported display name, longest first so `.stl.gz` goes before `.gz`. */
+const IMPORTED_NAME_EXTENSIONS = ['.chitubox', '.ctp', '.3mf', '.stl', '.obj', '.ply', '.lys'];
 
-  let base = trimmed;
-  while (true) {
-    const dotIndex = base.lastIndexOf('.');
-    if (dotIndex <= 0) break;
-    base = base.slice(0, dotIndex).trim();
-    if (!base) return 'model';
+function sanitizeImportedModelDisplayName(rawName: string): string {
+  let base = rawName.trim();
+  if (!base) return 'model';
+
+  // Only known extensions come off, repeatedly for a doubled one ("part.stl.stl").
+  // A dot in the name itself is kept: a model called "lid_v1.2" is not "lid_v1".
+  for (let stripped = true; stripped;) {
+    stripped = false;
+    for (const extension of IMPORTED_NAME_EXTENSIONS) {
+      if (base.length <= extension.length) continue;
+      if (!base.toLowerCase().endsWith(extension)) continue;
+      const next = base.slice(0, -extension.length).trim();
+      if (!next) return 'model';
+      base = next;
+      stripped = true;
+      break;
+    }
   }
 
   return base;
@@ -2552,27 +2567,48 @@ export function useSceneCollectionManager(options?: {
   const [mode, setMode] = useState<SupportMode>('prepare');
 
   /**
+   * Every plate's world rect: its cascade offset, and the build volume it holds
+   * in world coordinates. Computed once here because the canvas, the placement
+   * search and the out-of-bounds check all have to agree about where a plate is,
+   * and three separate derivations is how they stop agreeing.
+   */
+  const plateFrames = useMemo<PlateFrame[]>(() => {
+    const { widthMm, depthMm, originMode } = view3dSettings;
+    return computePlateFrames({ plates, footprint: { widthMm, depthMm, originMode }, ordering: plateOrdering });
+  }, [plateOrdering, plates, view3dSettings]);
+
+  plateFramesRef.current = plateFrames;
+
+  /**
+   * The frames of `plateList` under the live ordering, for callbacks that read the plates
+   * from `platesRef` because they run before the render that refreshes `plateFrames`.
+   */
+  const liveFramesFor = useCallback((plateList: readonly { id: string }[]): PlateFrame[] => computePlateFrames({
+    plates: plateList,
+    footprint: {
+      widthMm: view3dSettings.widthMm,
+      depthMm: view3dSettings.depthMm,
+      originMode: view3dSettings.originMode,
+    },
+    ordering: plateOrderingRef.current,
+  }), [view3dSettings.widthMm, view3dSettings.depthMm, view3dSettings.originMode]);
+
+  /** The plate new work goes to: the active one, or the first when it is gone. */
+  const activePlateFrame = useMemo(
+    () => plateFrameFor({ frames: plateFrames, plateId: activePlateId }),
+    [activePlateId, plateFrames],
+  );
+
+  /**
    * Where new work goes: the middle of the **active** plate, in world
    * coordinates. The plate's own frame is what the app's rect maths speaks, so
    * the cascade offset is added here and in `isRectInsidePlate` rather than at
    * every caller.
    */
   const defaultImportCenterXY = useMemo(() => {
-    const { centerX: localX, centerY: localY } = plateLocalRect(view3dSettings);
-    const index = Math.max(0, plates.findIndex((plate) => plate.id === activePlateId));
-    const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
-      widthMm: view3dSettings.widthMm,
-      depthMm: view3dSettings.depthMm,
-    }, plates.length, plateOrdering);
-    return new THREE.Vector2(localX + dxMm, localY + dyMm);
-  }, [
-    activePlateId,
-    plateOrdering,
-    plates,
-    view3dSettings.depthMm,
-    view3dSettings.originMode,
-    view3dSettings.widthMm,
-  ]);
+    const { x, y } = plateCenterFor({ frames: plateFrames, plateId: activePlateId, footprint: view3dSettings });
+    return new THREE.Vector2(x, y);
+  }, [activePlateId, plateFrames, view3dSettings]);
 
   type Rect2D = { minX: number; maxX: number; minY: number; maxY: number };
 
@@ -2582,21 +2618,13 @@ export function useSceneCollectionManager(options?: {
 
   /** The active plate's build volume in world coordinates. */
   const activePlateRect = useMemo<Rect2D>(() => {
-    const index = Math.max(0, plates.findIndex((plate) => plate.id === activePlateId));
-    const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
-      widthMm: view3dSettings.widthMm,
-      depthMm: view3dSettings.depthMm,
-    }, plates.length, plateOrdering);
-    const local = plateLocalRect(view3dSettings);
-    const minX = local.minX + dxMm;
-    const minY = local.minY + dyMm;
-    return {
-      minX,
-      maxX: minX + view3dSettings.widthMm,
-      minY,
-      maxY: minY + view3dSettings.depthMm,
-    };
-  }, [activePlateId, plateOrdering, plates, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+    if (activePlateFrame) {
+      const { minX, maxX, minY, maxY } = activePlateFrame;
+      return { minX, maxX, minY, maxY };
+    }
+    const { minX, maxX, minY, maxY } = plateLocalRect(view3dSettings);
+    return { minX, maxX, minY, maxY };
+  }, [activePlateFrame, view3dSettings]);
 
   const isRectInsidePlate = useCallback((rect: Rect2D) => {
     return (
@@ -2667,7 +2695,7 @@ export function useSceneCollectionManager(options?: {
 
     const centerX = defaultImportCenterXY.x;
     const centerY = defaultImportCenterXY.y;
-    const activePlateOffset = plateOffsetForRef.current(activePlateIdRef.current);
+    const bedFrames = liveFramesFor(platesRef.current);
     // The search runs in world coordinates over the ACTIVE plate's volume, so a
     // model imported onto the second plate lands on the second plate.
     const { minX, maxX, minY, maxY } = activePlateRect;
@@ -2794,15 +2822,8 @@ export function useSceneCollectionManager(options?: {
       // Then the scene's other beds, in cascade order, each checked in its own frame. A paste has
       // always filled the beds that exist before adding one; an import used to give up after the
       // active plate and set the model down beside the plates.
-      for (const plate of platesRef.current) {
-        if (plate.id === activePlateIdRef.current) continue;
-        const { dxMm, dyMm } = plateOffsetForRef.current(plate.id);
-        const bedRect: Rect2D = {
-          minX: activePlateRect.minX - activePlateOffset.dxMm + dxMm,
-          maxX: activePlateRect.maxX - activePlateOffset.dxMm + dxMm,
-          minY: activePlateRect.minY - activePlateOffset.dyMm + dyMm,
-          maxY: activePlateRect.maxY - activePlateOffset.dyMm + dyMm,
-        };
+      for (const bedRect of bedFrames) {
+        if (bedRect.id === activePlateIdRef.current) continue;
         const fitsBed = (rect: Rect2D) => (
           rect.minX >= bedRect.minX && rect.maxX <= bedRect.maxX
           && rect.minY >= bedRect.minY && rect.maxY <= bedRect.maxY
@@ -2829,7 +2850,7 @@ export function useSceneCollectionManager(options?: {
     });
 
     return assignedCenters;
-  }, [activePlateRect, buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, estimateSupportBoundsForModel, intersectsRect, isRectInsidePlate]);
+  }, [activePlateRect, buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, estimateSupportBoundsForModel, intersectsRect, isRectInsidePlate, liveFramesFor]);
 
   const applySceneSnapshot = useCallback((snapshot: SceneSnapshot) => {
     if (snapshot.modifierRecord) {
@@ -2976,6 +2997,7 @@ export function useSceneCollectionManager(options?: {
         // overlay for each copy, which is O(triangles) and blocked the main
         // thread for most of a second on an 8-model duplicate.
         ...(source.edgeGeometry ? { edgeGeometry: source.edgeGeometry } : {}),
+        ...(source.displayGeometry ? { displayGeometry: source.displayGeometry } : {}),
       };
     }
 
@@ -2994,9 +3016,13 @@ export function useSceneCollectionManager(options?: {
     if (options?.accelerate ?? true) {
       accelerateGeometry(clonedGeometry);
     }
+    // The display mesh only draws (no BVH), and a clone may be edited on its own, so
+    // it gets its own copy — its AO included — rather than a stale share.
+    const clonedDisplay = source.displayGeometry?.clone();
 
     return {
       geometry: clonedGeometry,
+      ...(clonedDisplay ? { displayGeometry: clonedDisplay } : {}),
       bbox: source.bbox.clone(),
       center: source.center.clone(),
       size: source.size.clone(),
@@ -3078,6 +3104,7 @@ export function useSceneCollectionManager(options?: {
     || pendingFlatteningPlanesRef.current > 0
     || pendingAoBakeRef.current > 0
     || pendingAoQueueRef.current.length > 0
+    || hasDisplayGeometryInFlight()
   ), []);
 
   const processDeferredDisposalQueue = useCallback(() => {
@@ -3337,14 +3364,10 @@ export function useSceneCollectionManager(options?: {
     ): void => {
       if (!assignedCenter) return;
 
-      const { minX: localMinX, minY: localMinY } = plateLocalRect(view3dSettings);
-      const insideAnyBed = platesRef.current.some((plate) => {
-        const { dxMm, dyMm } = plateOffsetForRef.current(plate.id);
-        const minX = localMinX + dxMm;
-        const minY = localMinY + dyMm;
-        return assignedCenter.x >= minX && assignedCenter.x <= minX + view3dSettings.widthMm
-          && assignedCenter.y >= minY && assignedCenter.y <= minY + view3dSettings.depthMm;
-      });
+      const insideAnyBed = liveFramesFor(platesRef.current).some((frame) => (
+        assignedCenter.x >= frame.minX && assignedCenter.x <= frame.maxX
+        && assignedCenter.y >= frame.minY && assignedCenter.y <= frame.maxY
+      ));
       if (insideAnyBed) return;
 
       const placement = buildMeshPlacementOffsets(
@@ -3645,7 +3668,7 @@ export function useSceneCollectionManager(options?: {
         progress: null,
       });
     }
-  }, [_, buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, isActivePlateLocked, requestMeshRepairConfirmation, trackRecentOpenedFiles, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm, waitForUiYield]);
+  }, [_, buildMeshPlacementOffsets, defaultImportCenterXY.x, defaultImportCenterXY.y, emitSceneImportReport, findFreeSpotCentersForModels, getMeshExtension, isActivePlateLocked, liveFramesFor, requestMeshRepairConfirmation, trackRecentOpenedFiles, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm, waitForUiYield]);
 
   const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -4217,6 +4240,11 @@ export function useSceneCollectionManager(options?: {
        * that previewed its change on the model (Mirror) passes the state from before it.
        */
       historyBefore?: { transform?: ModelTransform; supportState?: SupportState };
+      /**
+       * The new mesh's display mesh, when the operation has it already (Mirror). It
+       * lands with the mesh, so no frame draws the model without its AO.
+       */
+      displayGeometry?: THREE.BufferGeometry;
     },
   ) => {
     const currentModels = modelsRef.current;
@@ -4247,6 +4275,10 @@ export function useSceneCollectionManager(options?: {
       flatteningPlanes: target.geometry.flatteningPlanes,
       ...(nextEdgeGeometry ? { edgeGeometry: nextEdgeGeometry } : {}),
     };
+    if (options?.displayGeometry) {
+      settleDisplayGeometry(nextBufferGeometry, options.displayGeometry);
+      nextGeometry.displayGeometry = options.displayGeometry;
+    }
 
     if (!options?.deferPostProcessing) {
       deferAccelerateGeometry([nextGeometry]);
@@ -4600,6 +4632,65 @@ export function useSceneCollectionManager(options?: {
   }, [higherContrastModelEdges, setModels]);
 
   /**
+   * Display meshes.
+   *
+   * Every model mesh — loaded, replaced by an operation, split by a cut, restored by
+   * undo — gets its display mesh here, the one place that asks for it, and has it
+   * attached when it lands. Keyed on the model mesh, so a mesh history already holds
+   * is not refined twice. See `displayMesh.ts`.
+   *
+   * Only while there is occlusion to draw on it: the display mesh exists for the AO
+   * and nothing else, so a machine without a discrete GPU, or with the AO turned
+   * down to nothing, draws every model's own mesh and holds no second one.
+   */
+  const [displayMeshVersion, setDisplayMeshVersion] = useState(0);
+  const [aoHardwareAvailable, setAoHardwareAvailable] = useState<boolean | null>(null);
+  useEffect(() => subscribeDisplayGeometry(() => setDisplayMeshVersion((version) => version + 1)), []);
+  useEffect(() => {
+    let cancelled = false;
+    void canBakeOcclusionAsync().then((available) => {
+      if (!cancelled) setAoHardwareAvailable(available);
+    });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    if (aoHardwareAvailable !== true || bakedAoIntensity <= 0) return;
+    const attach = new Map<THREE.BufferGeometry, THREE.BufferGeometry | undefined>();
+    const acknowledged: THREE.BufferGeometry[] = [];
+    for (const model of modelsRef.current) {
+      const real = model.geometry.geometry;
+      if (!real.getAttribute('position')) continue;
+      if (wasEditedInPlace(real)) {
+        // Its display mesh shows the shape from before the edit.
+        acknowledged.push(real);
+        if (model.geometry.displayGeometry) attach.set(real, undefined);
+        void requestDisplayGeometry(real);
+        continue;
+      }
+      const known = settledDisplayGeometry(real);
+      if (known === undefined) {
+        // An entry that arrived with one (a clone, a rehydrated snapshot) keeps it.
+        if (!model.geometry.displayGeometry) void requestDisplayGeometry(real);
+        continue;
+      }
+      const display = known ?? undefined;
+      if (model.geometry.displayGeometry !== display) attach.set(real, display);
+    }
+    for (const real of acknowledged) acknowledgeEditInPlace(real);
+    if (attach.size === 0) return;
+    setModels((prev) => prev.map((m) => {
+      const real = m.geometry.geometry;
+      if (!attach.has(real)) return m;
+      const display = attach.get(real);
+      if (m.geometry.displayGeometry === display) return m;
+      const geometry = { ...m.geometry };
+      if (display) geometry.displayGeometry = display;
+      else delete geometry.displayGeometry;
+      return { ...m, geometry };
+    }));
+  }, [models, displayMeshVersion, aoHardwareAvailable, bakedAoIntensity, setModels]);
+
+  /**
    * Baked ambient occlusion.
    *
    * One native bake per model, on an idle callback, off the main thread:
@@ -4622,7 +4713,12 @@ export function useSceneCollectionManager(options?: {
 
     const queue = modelsRef.current
       .filter((model) => {
-        const geometry = model.geometry.geometry;
+        // The bake lands on what the viewport draws: the display mesh when the model
+        // has one. Its values are per vertex of that mesh and nothing else reads them.
+        // Not before the display mesh has landed: baking the model mesh in the
+        // meantime is a bake thrown away.
+        if (isDisplayGeometryPending(model.geometry)) return false;
+        const geometry = displayGeometryOf(model.geometry);
         if (!geometry.getAttribute('position')) return false;
         // A geometry the hardware check skipped has no attribute by design; it
         // must not be re-queued on every model change.
@@ -4668,7 +4764,7 @@ export function useSceneCollectionManager(options?: {
       // work done in the first 200 ms.
       pendingAoBakeRef.current += 1;
       const model = modelsRef.current.find((m) => m.id === id);
-      const geometry = model?.geometry.geometry;
+      const geometry = model ? displayGeometryOf(model.geometry) : undefined;
       if (geometry) pendingAoGeometriesRef.current.add(geometry);
       try {
         if (geometry) {
@@ -4714,7 +4810,7 @@ export function useSceneCollectionManager(options?: {
       scheduleIdle(() => void bakeOne());
     }
     return () => { cancelled = true; };
-  }, [models, bakedAoIntensity]);
+  }, [models, bakedAoIntensity, displayMeshVersion]);
 
   const finalizeModelGeometryPostProcessing = useCallback((id: string) => {
     const target = modelsRef.current.find((m) => m.id === id);
@@ -6069,17 +6165,10 @@ export function useSceneCollectionManager(options?: {
     // plate 3 alongside a bed that is still half empty. What each one holds is known — they
     // are the same shape as this plate, and what stands on them is in `blockedRects` — so a
     // copy that fits needs no new bed at all.
-    for (const plate of platesRef.current) {
+    for (const bedRect of liveFramesFor(platesRef.current)) {
       if (pendingPlacements.length === 0) break;
-      if (plate.id === activePlateIdRef.current) continue;
+      if (bedRect.id === activePlateIdRef.current) continue;
 
-      const offset = plateOffsetForRef.current(plate.id);
-      const bedRect: Rect2D = {
-        minX: localPlateRect.minX + offset.dxMm,
-        maxX: localPlateRect.maxX + offset.dxMm,
-        minY: localPlateRect.minY + offset.dyMm,
-        maxY: localPlateRect.maxY + offset.dyMm,
-      };
       const bedPlacements = placeIntoBed(
         bedRect,
         { x: (bedRect.minX + bedRect.maxX) * 0.5, y: (bedRect.minY + bedRect.maxY) * 0.5 },
@@ -6090,10 +6179,10 @@ export function useSceneCollectionManager(options?: {
         // That bed's own millimetres, so it rides with the bed the way the active plate's
         // copies do.
         placedByEntry.set(entry.entryIndex, {
-          bedId: plate.id,
+          bedId: bedRect.id,
           slot: -1,
-          x: entry.x - offset.dxMm,
-          y: entry.y - offset.dyMm,
+          x: entry.x - bedRect.dxMm,
+          y: entry.y - bedRect.dyMm,
         });
       });
       pendingPlacements = bedPlacements.unplaced;
@@ -6251,7 +6340,7 @@ export function useSceneCollectionManager(options?: {
     }
 
     return createdIds;
-  }, [_, activeModelId, activePlateRect, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, footprintForTransform, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
+  }, [_, activeModelId, activePlateRect, cloneGeometryWithBounds, defaultImportCenterXY.x, defaultImportCenterXY.y, footprintForTransform, liveFramesFor, modelClipboard, models, pushSceneSnapshotHistory, selectedModelIds, view3dSettings.depthMm, view3dSettings.originMode, view3dSettings.widthMm]);
 
   const duplicateModelWithTransforms = useCallback((
     sourceId: string,
@@ -6493,13 +6582,9 @@ export function useSceneCollectionManager(options?: {
         { sourcePositionsBase64: string; sourcePositionCount: number }
       >();
       for (const normalized of normalizedPayloads) {
-        // The plugin built this geometry in the renderer, so it has not been
-        // through the native loaders that refine coarse faces. Refine it here, and
-        // keep the normals the command returns: it ships one per face, so there is
-        // nothing left for `computeVertexNormals` to derive.
         let geometry = normalized.geometry;
-        // Bake the cavity in first, so refine, classification and the BVH all
-        // describe the hollow solid rather than the shell that encloses it.
+        // Bake the cavity in first, so classification and the BVH describe the
+        // hollow solid rather than the shell that encloses it.
         if (bakeImportedHollowing) {
           const cavity = readPayloadCavity(normalized);
           if (cavity) {
@@ -6519,24 +6604,8 @@ export function useSceneCollectionManager(options?: {
             );
           }
         }
-        let skipComputeNormals = false;
-        // The mesh loaders already gate refinement on size. Plugin geometry
-        // takes this path directly, so apply the same ceiling here instead of
-        // sending a multi-million-triangle soup over IPC for a dense mesh.
-        if (shouldRefineCoarseFaces(geometry)) {
-          try {
-            const refined = await refineCoarseFaces(geometry);
-            if (refined) {
-              geometry = refined;
-              skipComputeNormals = true;
-            }
-          } catch (error) {
-            console.warn('[refine] plugin geometry left unrefined', error);
-          }
-        }
         const processed = await processGeometry(geometry, {
           center: false,
-          ...(skipComputeNormals ? { _skipComputeNormals: true } : {}),
           nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
           skipClassification: skipsNativePassForModelOnly(
             normalized.skipClassification === true,
@@ -7061,7 +7130,7 @@ export function useSceneCollectionManager(options?: {
       // Build every unique mesh, a couple at a time, before the placement loop.
       // Placement stays in order below because it depends on what is already on the
       // plate; building does not. Each build is a native round trip with serial
-      // phases (parse, refine, classify) around a parallel one, so two in flight let
+      // phases (parse, classify) around a parallel one, so two in flight let
       // one model's serial phase run during another's. The hash is computed here once
       // per model and reused by the loop, so neither the content hash nor the
       // integrity check is paid twice.
@@ -7078,9 +7147,6 @@ export function useSceneCollectionManager(options?: {
         nativeProcessingMode: autoRepairScenes ? 'auto' : 'none',
         assumeSupportGeometry: model.isSupportGeometry,
         skipClassification: model.isSupportGeometry,
-        // The payload is the scene's own mesh: refining it again changes the count and
-        // order every boundary indexes, and grows it on each round trip.
-        _refine: false,
       });
       const hashByModelId = new Map<string, string>();
       const uniqueBuilds = new Map<
@@ -7121,8 +7187,8 @@ export function useSceneCollectionManager(options?: {
         const buildCount = uniqueBuilds.size;
         // Every mesh's occlusion bake is left in flight rather than awaited per
         // model: it is the GPU's work (0.4-1.2 s a model on the scene this was
-        // measured against) while the remaining meshes are still being parsed,
-        // refined and classified, and running them one model at a time left the
+        // measured against) while the remaining meshes are still being parsed
+        // and classified, and running them one model at a time left the
         // GPU idle for most of the load. They are all awaited below, before any
         // model is placed, so each one's first frame still carries its occlusion
         // — the pop-in that baking after the fact produced.
@@ -7356,13 +7422,17 @@ export function useSceneCollectionManager(options?: {
       // stays centred on plate 2. The file's supports follow their models, because the shift
       // is the delta against the transforms captured above.
       const recordedLayoutMm = document.meta?.printer?.printer.buildVolumeMm;
+      // The origin the file's positions are measured from. A file that does not say is read
+      // in the viewer's own, as it always was.
+      const fileOriginMode = readPlateOriginMode(document.extensions?.[VOXL_PLATE_ORIGIN_EXTENSION])
+        ?? view3dSettings.originMode;
       if (recordedLayoutMm && scenePlates.plates.length > 1) {
         const filePlates = scenePlates.plates.map((plate) => ({ id: plate.id, name: plate.name ?? '' }));
         const shifted = modelsShiftedForRelaidPlates(filePlates, filePlates, importedModels, {
           laidOut: {
             widthMm: recordedLayoutMm.width,
             depthMm: recordedLayoutMm.depth,
-            originMode: view3dSettings.originMode,
+            originMode: fileOriginMode,
           },
           // The grid the file's beds were laid out on, which is what its model positions
           // are measured against. A file that does not say was written under the dynamic
@@ -7374,29 +7444,45 @@ export function useSceneCollectionManager(options?: {
         if (shifted !== importedModels) importedModels.splice(0, importedModels.length, ...shifted);
       }
 
+      // Saved under the other origin, every position is measured from another point of the
+      // bed: every model moves by how far the middle of a bed moves between the two frames,
+      // on one plate or many, and its supports follow it through the same delta.
+      const originShift = originModeShift({
+        was: {
+          widthMm: recordedLayoutMm?.width ?? view3dSettings.widthMm,
+          depthMm: recordedLayoutMm?.depth ?? view3dSettings.depthMm,
+          originMode: fileOriginMode,
+        },
+        now: {
+          widthMm: view3dSettings.widthMm,
+          depthMm: view3dSettings.depthMm,
+          originMode: view3dSettings.originMode,
+        },
+      });
+      if (originShift.dxMm !== 0 || originShift.dyMm !== 0) {
+        const offset = new THREE.Vector3(originShift.dxMm, originShift.dyMm, 0);
+        importedModels.splice(0, importedModels.length, ...importedModels.map((model) => ({
+          ...model,
+          transform: { ...model.transform, position: model.transform.position.clone().add(offset) },
+        })));
+      }
+
       // "Off-plate" means standing on none of the file's beds, not off the bed being worked
       // on: reading the active one alone called every model on any other bed out of bounds,
       // which in a multi-plate scene is the whole point of the file. A file that names no
       // plates of its own leaves the beds already here in place, so those are the ones.
-      const { minX: localBedMinX, minY: localBedMinY } = plateLocalRect(view3dSettings);
-      const bedRectAt = (index: number, count: number): Rect2D => {
-        const { dxMm, dyMm } = plateCascadeOffsetMm(index, {
+      const bedRectsFor = (bedPlates: readonly { id: string }[]): Rect2D[] => computePlateFrames({
+        plates: bedPlates,
+        footprint: {
           widthMm: view3dSettings.widthMm,
           depthMm: view3dSettings.depthMm,
-        }, count, plateOrderingRef.current);
-        return {
-          minX: localBedMinX + dxMm,
-          maxX: localBedMinX + dxMm + view3dSettings.widthMm,
-          minY: localBedMinY + dyMm,
-          maxY: localBedMinY + dyMm + view3dSettings.depthMm,
-        };
-      };
-      const importedBedRects: Rect2D[] = scenePlates.plates.map((plate, index) => (
-        bedRectAt(index, scenePlates.plates.length)
-      ));
-      const bedRectsForImport = importedBedRects.length > 0
-        ? importedBedRects
-        : platesRef.current.map((plate, index, all) => bedRectAt(index, all.length));
+          originMode: view3dSettings.originMode,
+        },
+        ordering: plateOrderingRef.current,
+      });
+      const bedRectsForImport = scenePlates.plates.length > 0
+        ? bedRectsFor(scenePlates.plates)
+        : bedRectsFor(platesRef.current);
       const offPlateImportedModels = importedModels.filter(
         (model) => !rectStandsOnAnyBed(modelFootprintRect(model), bedRectsForImport),
       );
@@ -8491,13 +8577,11 @@ export function useSceneCollectionManager(options?: {
    * plate is the origin, so a single-plate scene is exactly where it always was.
    */
   const plateOffsetFor = useCallback((plateId: string): { dxMm: number; dyMm: number } => {
-    const index = platesRef.current.findIndex((plate) => plate.id === plateId);
-    if (index <= 0) return { dxMm: 0, dyMm: 0 };
-    return plateCascadeOffsetMm(index, {
-      widthMm: view3dSettings.widthMm,
-      depthMm: view3dSettings.depthMm,
-    }, platesRef.current.length, plateOrderingRef.current);
-  }, [view3dSettings.widthMm, view3dSettings.depthMm]);
+    // From the refs, not `plateFrames`: a caller that has just added beds asks in the
+    // same tick, before the render that would refresh the memo.
+    const frame = plateFrameFor({ frames: liveFramesFor(platesRef.current), plateId });
+    return { dxMm: frame?.dxMm ?? 0, dyMm: frame?.dyMm ?? 0 };
+  }, [liveFramesFor]);
 
   /**
    * The batched bed insert and the offset lookup, for callers declared above them.
@@ -8728,7 +8812,6 @@ export function useSceneCollectionManager(options?: {
     offsets: Map<string, { dxMm: number; dyMm: number }>;
   } => {
     const current = platesRef.current;
-    const footprint = { widthMm: view3dSettings.widthMm, depthMm: view3dSettings.depthMm };
     const addedPlates: ScenePlate[] = count > 0
       ? Array.from({ length: count }, () => ({ id: uuidv4(), name: '' }))
       : [];
@@ -8739,12 +8822,10 @@ export function useSceneCollectionManager(options?: {
     if (addedPlates.length > 0) relayPlates(settled);
 
     const offsets = new Map<string, { dxMm: number; dyMm: number }>();
-    settled.forEach((plate, index) => {
-      offsets.set(plate.id, plateCascadeOffsetMm(index, footprint, settled.length, plateOrderingRef.current));
-    });
+    for (const { id, dxMm, dyMm } of liveFramesFor(settled)) offsets.set(id, { dxMm, dyMm });
 
     return { plates: settled, added: addedPlates, offsets };
-  }, [relayPlates, view3dSettings.depthMm, view3dSettings.widthMm]);
+  }, [liveFramesFor, relayPlates]);
   addPlatesRef.current = addPlates;
 
   /**
@@ -8789,19 +8870,6 @@ export function useSceneCollectionManager(options?: {
     setActivePlateId(plateId);
     setPlateViewRunId((id) => id + 1);
   }, []);
-
-  /**
-   * Every plate's world rect: its cascade offset, and the build volume it holds
-   * in world coordinates. Computed once here because the canvas, the placement
-   * search and the out-of-bounds check all have to agree about where a plate is,
-   * and three separate derivations is how they stop agreeing.
-   */
-  const plateFrames = useMemo<PlateFrame[]>(() => {
-    const { widthMm, depthMm, originMode } = view3dSettings;
-    return computePlateFrames({ plates, footprint: { widthMm, depthMm, originMode }, ordering: plateOrdering });
-  }, [plateOrdering, plates, view3dSettings]);
-
-  plateFramesRef.current = plateFrames;
 
   /** The plate a model stands on; the rule is `resolveModelPlateId` in plateLayout. */
   const resolveModelPlateId = useCallback(
@@ -8948,20 +9016,16 @@ export function useSceneCollectionManager(options?: {
    * coordinates happen to fall.
    */
   const moveModelsToPlate = useCallback((modelIds: string[], plateId: string) => {
-    const plateList = platesRef.current;
-    const targetIndex = plateList.findIndex((plate) => plate.id === plateId);
-    if (targetIndex < 0) return;
+    const frames = liveFramesFor(platesRef.current);
+    const target = frames.find((frame) => frame.id === plateId);
+    if (!target) return;
 
-    const footprint = { widthMm: view3dSettings.widthMm, depthMm: view3dSettings.depthMm };
-    const ordering = plateOrderingRef.current;
-    const target = plateCascadeOffsetMm(targetIndex, footprint, plateList.length, ordering);
     const wanted = new Set(modelIds);
 
     for (const model of modelsRef.current) {
       if (!wanted.has(model.id)) continue;
-      const sourcePlateId = modelPlateId(model);
-      const sourceIndex = Math.max(0, plateList.findIndex((plate) => plate.id === sourcePlateId));
-      const source = plateCascadeOffsetMm(sourceIndex, footprint, plateList.length, ordering);
+      const source = plateFrameFor({ frames, plateId: modelPlateId(model) });
+      if (!source) continue;
       const dx = target.dxMm - source.dxMm;
       const dy = target.dyMm - source.dyMm;
       if (dx === 0 && dy === 0) continue;
@@ -8976,7 +9040,7 @@ export function useSceneCollectionManager(options?: {
     }
 
     setModels((prev) => prev.map((model) => (wanted.has(model.id) ? { ...model, plateId } : model)));
-  }, [modelPlateId, updateModelTransform, view3dSettings.widthMm, view3dSettings.depthMm]);
+  }, [liveFramesFor, modelPlateId, updateModelTransform]);
 
   return {
     models,

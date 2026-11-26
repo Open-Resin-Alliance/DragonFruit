@@ -134,7 +134,7 @@ import { addTargetedStressBraces, buildAutoBracedSnapshot, BRACE_CANOPY_KEEP_OUT
 import { buildKickstandData } from '../SupportTypes/Kickstand/kickstandBuilder';
 import { pushSupportHistory } from '../history/supportHistory';
 import { SUPPORT_AUTO_PLACE } from '../history/actionTypes';
-import { getModelMesh } from './meshStore';
+import { getModelSourceMesh } from './meshStore';
 import {
     ALREADY_SUPPORTED_RADIUS_MM,
     GRIDLESS_MERGE_RADIUS_MM,
@@ -5096,7 +5096,7 @@ export function computeAutoSupportPlan(
 
     // The model mesh is needed by the grid phase (surface snapping) and the
     // placement pipeline (pathfinding + collision).
-    const resolvedMesh: THREE.Mesh | undefined = mesh ?? (getModelMesh(modelId) ?? undefined);
+    const resolvedMesh: THREE.Mesh | undefined = mesh ?? (getModelSourceMesh(modelId) ?? undefined);
     if (resolvedMesh) resolvedMesh.updateMatrixWorld();
 
     // Classify internal contacts before anything reads the islands: a tip on

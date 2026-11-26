@@ -41,7 +41,7 @@ export function MeshSmoothingBrushCursor() {
 
     // Convert screen pixels to world units at the cursor position.
     // This keeps the ring/dot thickness constant even when zooming.
-    if ((camera as any).isPerspectiveCamera) {
+    if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
       const perspective = camera as THREE.PerspectiveCamera;
       const dist = perspective.position.distanceTo(cursorPosition);
       const vFov = THREE.MathUtils.degToRad(perspective.fov);
@@ -49,7 +49,7 @@ export function MeshSmoothingBrushCursor() {
       return worldHeightAtDist / size.height;
     }
 
-    if ((camera as any).isOrthographicCamera) {
+    if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
       const ortho = camera as THREE.OrthographicCamera;
       const worldHeight = ortho.top - ortho.bottom;
       return worldHeight / size.height;
@@ -151,7 +151,7 @@ export function MeshSmoothingBrushCursor() {
     mesh.count = count;
     mesh.instanceMatrix.needsUpdate = true;
     lastMarkerInstanceCountRef.current = count;
-  }, [brushState.isStrokeActive, brushState.strokePreviewCount, brushState.strokePreviewVersion, markerDummy, markerSurfaceOffset, radius]);
+  }, [brushState.isStrokeActive, brushState.strokePreviewCount, brushState.strokePreviewVersion, brushState.strokePreviewPositions, brushState.strokePreviewNormals, markerDummy, markerSurfaceOffset, radius]);
 
   if (!hover) return null;
 
@@ -166,7 +166,11 @@ export function MeshSmoothingBrushCursor() {
       {/* Color pass with stencil: each pixel is shaded at most once (NO transparency stacking). */}
       <instancedMesh
         ref={markerRef}
-        args={[undefined as any, undefined as any, MAX_MARKER_INSTANCES]}
+        args={[undefined, undefined, MAX_MARKER_INSTANCES]}
+        // Born empty. The cursor mounts when the pointer first reaches the model, after
+        // the effect above has already run against no mesh; at the constructor's count
+        // every instance drew at the origin, a highlight-coloured disc at the plate centre.
+        count={0}
         renderOrder={99998}
         frustumCulled={false}
         onBeforeRender={() => {

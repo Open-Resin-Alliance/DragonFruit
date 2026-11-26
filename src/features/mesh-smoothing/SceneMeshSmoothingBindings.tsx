@@ -62,8 +62,7 @@ export function useMeshSmoothingSceneBindings({
       e.preventDefault();
       // Stop OrbitControls (and any other listeners) from zooming while Ctrl is held.
       // Capture-phase listener ensures we run before the Canvas/OrbitControls wheel handler.
-      // @ts-ignore
-      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+      e.stopImmediatePropagation();
       e.stopPropagation();
 
       const current = getMeshSmoothingSettings().brushSizeMm;
@@ -74,7 +73,7 @@ export function useMeshSmoothingSceneBindings({
 
     el.addEventListener('wheel', handleWheel, { passive: false, capture: true });
     return () => {
-      el.removeEventListener('wheel', handleWheel, { capture: true } as any);
+      el.removeEventListener('wheel', handleWheel, { capture: true });
     };
   }, [mode, transformMode, containerRef]);
 

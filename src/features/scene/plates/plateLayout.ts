@@ -59,6 +59,41 @@ export function plateLocalRect({ widthMm, depthMm, originMode }: PlateFootprint)
   };
 }
 
+/** How far in from each edge of a plate models are kept, in millimetres. */
+export interface PlateSafetyMargin {
+  front?: number;
+  back?: number;
+  left?: number;
+  right?: number;
+}
+
+/**
+ * Where models may go on one plate: its build volume, moved by `offsetMm` (a plate's
+ * cascade offset, or none for the plate's own frame), less the safety margin on each
+ * side. A negative margin keeps nothing clear.
+ */
+export function plateBuildArea({
+  footprint,
+  offsetMm,
+  safetyMarginMm,
+}: {
+  footprint: PlateFootprint;
+  offsetMm?: { dxMm: number; dyMm: number };
+  safetyMarginMm?: PlateSafetyMargin;
+}): PlateRect {
+  const local = plateLocalRect(footprint);
+  // Summed in this order on purpose: the packers' results are compared exactly, and this
+  // is the order they were written with.
+  const minX = local.minX + (offsetMm?.dxMm ?? 0);
+  const minY = local.minY + (offsetMm?.dyMm ?? 0);
+  return {
+    minX: minX + Math.max(0, safetyMarginMm?.left ?? 0),
+    maxX: minX + footprint.widthMm - Math.max(0, safetyMarginMm?.right ?? 0),
+    minY: minY + Math.max(0, safetyMarginMm?.front ?? 0),
+    maxY: minY + footprint.depthMm - Math.max(0, safetyMarginMm?.back ?? 0),
+  };
+}
+
 /** Every plate's world rect and cascade offset, in display order. */
 export function computePlateFrames({
   plates,
@@ -70,19 +105,98 @@ export function computePlateFrames({
   ordering: PlateOrdering;
 }): PlateFrame[] {
   const local = plateLocalRect(footprint);
-  return plates.map((plate, index) => {
-    const { dxMm, dyMm } = plateCascadeOffsetMm(index, footprint, plates.length, ordering);
-    return {
-      id: plate.id,
-      index,
-      dxMm,
-      dyMm,
-      minX: local.minX + dxMm,
-      minY: local.minY + dyMm,
-      maxX: local.maxX + dxMm,
-      maxY: local.maxY + dyMm,
-    };
-  });
+  return plates.map((plate, index) => ({
+    id: plate.id,
+    ...slotAt({ index, plateCount: plates.length, local, footprint, ordering }),
+  }));
+}
+
+/** Where the plate at `index` sits in a grid of `plateCount` plates. */
+function slotAt({
+  index,
+  plateCount,
+  local,
+  footprint,
+  ordering,
+}: {
+  index: number;
+  plateCount: number;
+  local: PlateRect;
+  footprint: PlateFootprint;
+  ordering: PlateOrdering;
+}): PlateSlot {
+  const { dxMm, dyMm } = plateCascadeOffsetMm(index, footprint, plateCount, ordering);
+  return {
+    index,
+    dxMm,
+    dyMm,
+    minX: local.minX + dxMm,
+    minY: local.minY + dyMm,
+    maxX: local.maxX + dxMm,
+    maxY: local.maxY + dyMm,
+  };
+}
+
+/** Where a plate that does not exist yet would sit: a frame with no id to name it. */
+export type PlateSlot = Omit<PlateFrame, 'id'>;
+
+/**
+ * Where `count` beds added after `plates` would sit, once they are there.
+ *
+ * The grid is numbered against the grown plate count, because that is where the new
+ * beds land. A preview of beds an action would add (the next-bed ghost, a duplicate
+ * that overflows onto new beds) reads them here, so it shows them where adding them
+ * puts them.
+ */
+export function appendedPlateSlots({
+  plates,
+  count,
+  footprint,
+  ordering,
+}: {
+  plates: readonly { id: string }[];
+  count: number;
+  footprint: PlateFootprint;
+  ordering: PlateOrdering;
+}): PlateSlot[] {
+  const local = plateLocalRect(footprint);
+  const plateCount = plates.length + Math.max(0, count);
+  return Array.from({ length: Math.max(0, count) }, (_, offset) => (
+    slotAt({ index: plates.length + offset, plateCount, local, footprint, ordering })
+  ));
+}
+
+/**
+ * The frame of the plate `plateId`, or the first plate's when no plate has that id:
+ * new work goes to the first plate when the one it names is gone. Undefined only
+ * when there are no frames.
+ */
+export function plateFrameFor({
+  frames,
+  plateId,
+}: {
+  frames: readonly PlateFrame[];
+  plateId: string | null | undefined;
+}): PlateFrame | undefined {
+  return frames.find((frame) => frame.id === plateId) ?? frames[0];
+}
+
+/**
+ * The middle of the plate `plateId` in world coordinates, or of the first plate when
+ * the id is gone: where new work lands, and where centring a selection puts it.
+ */
+export function plateCenterFor({
+  frames,
+  plateId,
+  footprint,
+}: {
+  frames: readonly PlateFrame[];
+  plateId: string | null | undefined;
+  footprint: PlateFootprint;
+}): { x: number; y: number } {
+  const { centerX, centerY } = plateLocalRect(footprint);
+  const frame = plateFrameFor({ frames, plateId });
+  return { x: centerX + (frame?.dxMm ?? 0), y: centerY + (frame?.dyMm ?? 0) };
 }
 
 /**
@@ -191,6 +305,29 @@ export function plateSliceScope<M extends PlateMember & { id: string }>({
 export interface PlateShift {
   dxMm: number;
   dyMm: number;
+}
+
+/**
+ * How far every model moves when a scene laid out under one origin mode is opened under
+ * another: by how far the middle of a bed moves between the two frames, so a model keeps
+ * its place on its bed. Every bed's frame moves by the same amount, so one shift serves
+ * every model, on every plate.
+ *
+ * `was` is the footprint and origin the file was laid out with, `now` the viewer's. With
+ * the same origin there is nothing to do here: a change of build volume alone is
+ * `relaidPlateShifts`'s, which keeps each model where it was from its plate's origin.
+ */
+export function originModeShift({
+  was,
+  now,
+}: {
+  was: PlateFootprint;
+  now: PlateFootprint;
+}): PlateShift {
+  if (was.originMode === now.originMode) return { dxMm: 0, dyMm: 0 };
+  const from = plateLocalRect(was);
+  const to = plateLocalRect(now);
+  return { dxMm: to.centerX - from.centerX, dyMm: to.centerY - from.centerY };
 }
 
 /**

@@ -107,13 +107,6 @@ export function decodeF32(bytes: ArrayBuffer | Uint8Array | number[], label: str
 /** Commands that return a raw little-endian f32 position payload. */
 export type MeshPositionReadCommand =
   | 'mesh_repair_read_positions'
-  | 'mesh_punch_read_positions'
-  | 'mesh_hollow_preview_read_positions'
-  | 'mesh_hollow_preview_read_infill_positions'
-  | 'mesh_hollow_preview_read_removed_voxel_centers'
-  | 'mesh_hollow_preview_read_blocked_voxel_centers'
-  | 'mesh_hollow_preview_read_cavity_positions'
-  | 'mesh_hollow_staged_read_cavity_positions'
   | 'mesh_organic_cut_read_geodesic'
   | 'mesh_organic_cut_read_membrane'
   | 'mesh_organic_cut_read_tenon';
@@ -339,65 +332,6 @@ export async function tetSurfaceStagedMesh(
 }
 
 /**
- * How large a mesh may be for [`refineCoarseFaces`] to be worth asking about.
- *
- * The command sends the whole soup and returns positions *and* normals, so it
- * costs twice the mesh in traffic. A mesh with faces too long for the field is a
- * mesh with few of them — the target is a fraction of the model's own diagonal,
- * so a coarse face is a big face — which is what makes this gate cheap in
- * practice: the meshes that need refining are the ones small enough to send.
- *
- * Above it, a mesh is left as it arrived. That is a real limit, and it is the
- * right way round: a dense mesh has nothing to split, and a *large* mesh with a
- * few huge faces is rarer than the import cost of treating every dense one as if
- * it were coarse.
- */
-export const REFINE_MAX_TRIANGLES = 400_000;
-
-/**
- * Whether a renderer-built geometry is small enough for the refine round trip.
- * The loader and the plugin scene bridge share this rule so a dense mesh is
- * never sent over IPC just to be left alone by the native refiner.
- */
-export function shouldRefineCoarseFaces(
-  geometry: THREE.BufferGeometry,
-  maxTriangles: number = REFINE_MAX_TRIANGLES,
-): boolean {
-  const triangles = (geometry.getIndex()?.count ?? geometry.getAttribute('position')?.count ?? 0) / 3;
-  return triangles > 0 && triangles <= maxTriangles;
-}
-
-/**
- * Ask the native side to refine geometry an importer built in the renderer.
- *
- * Only the importers that build geometry themselves need this: the native loaders
- * refine coarse faces as they read a file, but a plugin cannot call native code,
- * so LYS geometry never passes through them. Subdividing faces longer than a
- * fraction of the model's diagonal (bounded, longest first) is what stops a flat
- * panel interpolating its occlusion across a ten millimetre triangle.
- *
- * Returns a new geometry with the refined positions and one normal per face, or
- * `null` when there is no native side to ask (the web build) or the import
- * failed.
- */
-export async function refineCoarseFaces(
-  geometry: THREE.BufferGeometry,
-): Promise<THREE.BufferGeometry | null> {
-  const core = await loadTauriCore();
-  if (!core || !geometry.getAttribute('position')) return null;
-
-  const soup = expandGeometryToTriangleSoup(geometry);
-  const body = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
-  const payload = await core.invoke<ArrayBuffer | Uint8Array | number[]>(
-    'refine_mesh_soup',
-    body,
-    { headers: { 'Content-Type': 'application/octet-stream' } },
-  );
-
-  return parseRefinedMesh(payload);
-}
-
-/**
  * Load a mesh that sits at a known offset inside a file on disk.
  *
  * A VOXL stores each model's mesh as a packed STL chunk at a directory-recorded
@@ -415,13 +349,6 @@ export async function loadMeshRangeFromNativePath(request: {
   compressedSize: number;
   compression: number;
   classify?: boolean;
-  /**
-   * Whether the native side refines coarse faces before encoding. A VOXL's stored
-   * mesh is already the scene's refined geometry, and refining it again changes the
-   * triangle count and order the file's `classification` addresses — so the caller
-   * passes false for one it holds a classification for.
-   */
-  refine?: boolean;
 }): Promise<Uint8Array> {
   const core = await loadTauriCore();
   if (!core) {
@@ -433,41 +360,6 @@ export async function loadMeshRangeFromNativePath(request: {
     length: request.compressedSize,
     compression: request.compression,
     classify: request.classify ?? false,
-    refine: request.refine ?? true,
   });
   return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-}
-
-/**
- * Decode a `refine_mesh_soup` response: `[u32 triangle count][positions][normals]`,
- * both 9 floats per triangle, the normals one per face.
- * Returns `null` when the payload does not describe the same mesh the header
- * claims, rather than attaching slices of one mesh to another.
- */
-export function parseRefinedMesh(
-  payload: ArrayBuffer | Uint8Array | number[],
-): THREE.BufferGeometry | null {
-  const bytes = payload instanceof ArrayBuffer
-    ? new Uint8Array(payload)
-    : payload instanceof Uint8Array
-      ? payload
-      : new Uint8Array(payload);
-  if (bytes.byteLength < 4) return null;
-  const triangles = new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true);
-  if (triangles === 0 || bytes.byteLength !== 4 + triangles * 18 * 4) return null;
-
-  // Copy before viewing: the IPC buffer is not guaranteed to be aligned, and it
-  // may not outlive the call.
-  const copy = new Uint8Array(triangles * 72);
-  copy.set(bytes.subarray(4));
-  const refined = new THREE.BufferGeometry();
-  refined.setAttribute(
-    'position',
-    new THREE.BufferAttribute(new Float32Array(copy.buffer, 0, triangles * 9), 3),
-  );
-  refined.setAttribute(
-    'normal',
-    new THREE.BufferAttribute(new Float32Array(copy.buffer, triangles * 36, triangles * 9), 3),
-  );
-  return refined;
 }

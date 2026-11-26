@@ -54,7 +54,7 @@ msgstr ""
 
 #. placeholder {0}: scene.sceneImportHollowingPrompt.hollowedModelCount
 #. placeholder {1}: scene.sceneImportHollowingPrompt.modelCount
-#: src/components/organisms/modals/SceneFileModals.tsx:424
+#: src/components/organisms/modals/SceneFileModals.tsx:438
 msgid "{0} of {1, plural, one {# model carries an interior cavity.} other {# models carry an interior cavity.}}"
 msgstr ""
 
@@ -326,6 +326,10 @@ msgstr ""
 #. One row of the per-model breakdown when a scene is too large to save.
 #: src/app/page.tsx:545
 msgid "{name}: {megabytes} MB compressed"
+msgstr ""
+
+#: src/components/organisms/modals/SceneFileModals.tsx:93
+msgid "{offPlate} of {modelCount, plural, one {# model appears} other {# models appear}} outside the build plate."
 msgstr ""
 
 #: src/features/updater/updaterMessages.ts:19
@@ -604,16 +608,24 @@ msgstr ""
 msgid "<0>{recordedLabel}</0> has a build volume of {0} × {1} × {2} mm."
 msgstr ""
 
+#: src/components/organisms/modals/SceneFileModals.tsx:306
+msgid "<0>Auto-Arrange</0> will reposition imported models onto free space on the plate."
+msgstr ""
+
 #: src/components/scene/MeshRepairConfirmModal.tsx:131
 msgid "<0>Disclaimer:</0> Repair is recommended. Loading this mesh as-is may cause slicing errors or print failures, and successful output cannot be guaranteed."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:440
+#: src/components/organisms/modals/SceneFileModals.tsx:454
 msgid "<0>Import Solid</0> loads the outer shape only. The cavity is kept, so you can apply it later from the Hollowing panel."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:436
+#: src/components/organisms/modals/SceneFileModals.tsx:450
 msgid "<0>Keep Hollow</0> builds the stored cavity into each model, so it prints hollow exactly as authored."
+msgstr ""
+
+#: src/components/organisms/modals/SceneFileModals.tsx:310
+msgid "<0>Load As-Is</0> keeps scene coordinates exactly as stored in the file."
 msgstr ""
 
 #. Approximate estimated print time (the "~" marks it as a rough estimate). {hours}/{mins} are whole-number quantities.
@@ -1041,7 +1053,7 @@ msgstr ""
 msgid "Apply to All bakes the holes into every visible model when applicable. Or open the Hollow tool to review and apply holes individually."
 msgstr ""
 
-#: src/features/scene/arrange/useArrangeManager.ts:173
+#: src/features/scene/arrange/useArrangeManager.ts:174
 msgid "Applying Array Arrange…"
 msgstr ""
 
@@ -1131,7 +1143,7 @@ msgstr ""
 msgid "Arrange selected models only"
 msgstr ""
 
-#: src/features/scene/arrange/useArrangeManager.ts:182
+#: src/features/scene/arrange/useArrangeManager.ts:183
 msgid "Arranging Models…"
 msgstr ""
 
@@ -1256,8 +1268,7 @@ msgstr ""
 msgid "Auto Supports (Beta) Settings"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:296
-#: src/components/organisms/modals/SceneFileModals.tsx:315
+#: src/components/organisms/modals/SceneFileModals.tsx:329
 msgid "Auto-Arrange"
 msgstr ""
 
@@ -1769,7 +1780,7 @@ msgstr ""
 #: src/components/organisms/modals/PrintingModals.tsx:661
 #: src/components/organisms/modals/PrintingModals.tsx:903
 #: src/components/organisms/modals/PrintingModals.tsx:1997
-#: src/components/organisms/modals/SceneFileModals.tsx:516
+#: src/components/organisms/modals/SceneFileModals.tsx:530
 #: src/components/printers/PrinterVariantPickerModal.tsx:695
 #: src/components/settings/FleetManagement.tsx:442
 #: src/components/settings/LocalBackupsSettingsTab.tsx:984
@@ -1988,7 +1999,7 @@ msgstr ""
 msgid "Choose Folder"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:269
+#: src/components/organisms/modals/SceneFileModals.tsx:275
 msgid "Choose how to place imported models."
 msgstr ""
 
@@ -2013,11 +2024,11 @@ msgstr ""
 msgid "Choose upload target printer"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:641
+#: src/components/organisms/modals/SceneFileModals.tsx:657
 msgid "Choose where Ctrl+S should save this imported `.voxl` scene."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:402
+#: src/components/organisms/modals/SceneFileModals.tsx:416
 msgid "Choose whether to keep the hollow."
 msgstr ""
 
@@ -2202,7 +2213,7 @@ msgstr ""
 msgid "Close discard changes confirmation"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:571
+#: src/components/organisms/modals/SceneFileModals.tsx:585
 msgid "Close DragonFruit now?"
 msgstr ""
 
@@ -2252,7 +2263,7 @@ msgstr ""
 msgid "Close Plate"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:490
+#: src/components/organisms/modals/SceneFileModals.tsx:504
 msgid "Close plugin import warning"
 msgstr ""
 
@@ -2285,11 +2296,11 @@ msgstr ""
 msgid "Close save scene options"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:410
+#: src/components/organisms/modals/SceneFileModals.tsx:424
 msgid "Close scene import hollowing prompt"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:277
+#: src/components/organisms/modals/SceneFileModals.tsx:283
 msgid "Close scene import placement prompt"
 msgstr ""
 
@@ -2323,7 +2334,7 @@ msgstr ""
 msgid "Close the report"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:111
+#: src/components/organisms/modals/SceneFileModals.tsx:117
 msgid "Close unsaved changes modal"
 msgstr ""
 
@@ -2457,7 +2468,7 @@ msgstr ""
 msgid "Compression"
 msgstr ""
 
-#: src/features/scene/arrange/useArrangeManager.ts:184
+#: src/features/scene/arrange/useArrangeManager.ts:185
 msgid "Computing placements and resolving collisions."
 msgstr ""
 
@@ -2635,7 +2646,7 @@ msgstr ""
 #: src/app/page.tsx:11949
 #: src/components/layout/FirstRunOnboarding.tsx:287
 #: src/components/layout/TopBar.tsx:1181
-#: src/components/organisms/modals/SceneFileModals.tsx:528
+#: src/components/organisms/modals/SceneFileModals.tsx:542
 #: src/components/settings/PluginsSettingsTab.tsx:1201
 msgid "Continue"
 msgstr "Pokračovať"
@@ -3282,7 +3293,7 @@ msgstr ""
 msgid "Discard auto-support settings changes"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:130
+#: src/components/organisms/modals/SceneFileModals.tsx:136
 msgid "Discard Changes"
 msgstr ""
 
@@ -3344,7 +3355,7 @@ msgstr ""
 msgid "Distribution"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:508
+#: src/components/organisms/modals/SceneFileModals.tsx:522
 msgid "Do not remind again"
 msgstr ""
 
@@ -4440,11 +4451,11 @@ msgstr ""
 msgid "High-Precision"
 msgstr ""
 
-#: src/features/scene/arrange/useArrangeManager.ts:163
+#: src/features/scene/arrange/useArrangeManager.ts:164
 msgid "High-Precision Arrange Running…"
 msgstr ""
 
-#: src/features/scene/arrange/useArrangeManager.ts:153
+#: src/features/scene/arrange/useArrangeManager.ts:154
 msgid "High-Precision Fill Running…"
 msgstr ""
 
@@ -4719,7 +4730,7 @@ msgstr ""
 msgid "Import scene…"
 msgstr "Importovať Scénu…"
 
-#: src/components/organisms/modals/SceneFileModals.tsx:452
+#: src/components/organisms/modals/SceneFileModals.tsx:466
 msgid "Import Solid"
 msgstr ""
 
@@ -4743,8 +4754,8 @@ msgstr ""
 msgid "Imported {imported}/{total} scene files ({failed} failed)."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:286
-#: src/components/organisms/modals/SceneFileModals.tsx:419
+#: src/components/organisms/modals/SceneFileModals.tsx:292
+#: src/components/organisms/modals/SceneFileModals.tsx:433
 msgid "Imported scene"
 msgstr ""
 
@@ -5111,7 +5122,7 @@ msgstr ""
 msgid "Keep going without a printer. You can add one later."
 msgstr "Pokračuj bez tlačiarne. Môžeš ju pridať neskôr."
 
-#: src/components/organisms/modals/SceneFileModals.tsx:459
+#: src/components/organisms/modals/SceneFileModals.tsx:473
 msgid "Keep Hollow"
 msgstr ""
 
@@ -5239,14 +5250,14 @@ msgstr ""
 msgid "Layer {layer} • {height} • Right-click a handle to type an exact value • Double-click to turn the cross-section off"
 msgstr ""
 
-#: src/components/organisms/PrintingPreviewPane.tsx:58
+#: src/components/organisms/PrintingPreviewPane.tsx:60
 msgid "Layer {layer} preview"
 msgstr ""
 
 #. Print progress on a monitor card, e.g. "Layer 120/450".
 #. Print progress on a monitor card, e.g. "Layer 120/450".
 #: src/components/organisms/modals/PrintingModals.tsx:233
-#: src/components/organisms/PrintingPreviewPane.tsx:62
+#: src/components/organisms/PrintingPreviewPane.tsx:64
 msgid "Layer {layers}"
 msgstr ""
 
@@ -5273,7 +5284,7 @@ msgstr ""
 msgid "Layer height, bottom layer count and transition layers must match across tanks. Choose which material supplies all three."
 msgstr ""
 
-#: src/components/organisms/PrintingPreviewPane.tsx:126
+#: src/components/organisms/PrintingPreviewPane.tsx:128
 msgid "Layer Preview"
 msgstr ""
 
@@ -5430,8 +5441,7 @@ msgstr "Načítajte model v Príprave aby ste odomkli túto časť"
 msgid "Load a model to get an orientation suggestion."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:298
-#: src/components/organisms/modals/SceneFileModals.tsx:308
+#: src/components/organisms/modals/SceneFileModals.tsx:322
 #: src/components/scene/MeshRepairConfirmModal.tsx:72
 msgid "Load As-Is"
 msgstr ""
@@ -5457,7 +5467,7 @@ msgstr ""
 msgid "Load without materials"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:665
+#: src/components/organisms/modals/SceneFileModals.tsx:681
 msgid "Loaded file"
 msgstr ""
 
@@ -6421,7 +6431,7 @@ msgstr ""
 msgid "No other printer uses the same material settings and file format"
 msgstr ""
 
-#: src/components/organisms/PrintingPreviewPane.tsx:250
+#: src/components/organisms/PrintingPreviewPane.tsx:252
 msgid "No preview available yet."
 msgstr ""
 
@@ -7004,7 +7014,7 @@ msgstr ""
 msgid "Overwrite Existing Files?"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:689
+#: src/components/organisms/modals/SceneFileModals.tsx:705
 msgid "Overwrite Loaded Scene"
 msgstr ""
 
@@ -7255,11 +7265,11 @@ msgstr ""
 msgid "Please <0>save your scene and any unsaved progress</0> before continuing."
 msgstr ""
 
-#: src/features/scene/arrange/useArrangeManager.ts:156
+#: src/features/scene/arrange/useArrangeManager.ts:157
 msgid "Please be patient while we compute the densest valid fill."
 msgstr ""
 
-#: src/features/scene/arrange/useArrangeManager.ts:166
+#: src/features/scene/arrange/useArrangeManager.ts:167
 msgid "Please be patient while we process your models."
 msgstr ""
 
@@ -7267,8 +7277,8 @@ msgstr ""
 msgid "Please be patient while we rebuild the model."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:574
-#: src/components/organisms/modals/SceneFileModals.tsx:598
+#: src/components/organisms/modals/SceneFileModals.tsx:588
+#: src/components/organisms/modals/SceneFileModals.tsx:612
 msgid "Please ensure you have saved any important work."
 msgstr ""
 
@@ -7296,7 +7306,7 @@ msgstr ""
 msgid "Please wait a moment."
 msgstr ""
 
-#: src/features/scene/arrange/useArrangeManager.ts:185
+#: src/features/scene/arrange/useArrangeManager.ts:186
 msgid "Please wait."
 msgstr ""
 
@@ -7310,11 +7320,11 @@ msgstr ""
 msgid "Plugin details"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:481
+#: src/components/organisms/modals/SceneFileModals.tsx:495
 msgid "Plugin import experimental warning"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:485
+#: src/components/organisms/modals/SceneFileModals.tsx:499
 msgid "Plugin Import is Experimental"
 msgstr ""
 
@@ -7344,7 +7354,7 @@ msgctxt "LUT curve point"
 msgid "Position"
 msgstr ""
 
-#: src/features/scene/arrange/useArrangeManager.ts:175
+#: src/features/scene/arrange/useArrangeManager.ts:176
 msgid "Positioning models and validating placement."
 msgstr ""
 
@@ -8641,11 +8651,11 @@ msgstr ""
 msgid "Save"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:562
+#: src/components/organisms/modals/SceneFileModals.tsx:576
 msgid "Save & Close"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:586
+#: src/components/organisms/modals/SceneFileModals.tsx:600
 msgid "Save & New Scene"
 msgstr ""
 
@@ -8657,7 +8667,7 @@ msgstr ""
 msgid "Save current settings to this preset"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:202
+#: src/components/organisms/modals/SceneFileModals.tsx:208
 msgid "Save Error"
 msgstr ""
 
@@ -8665,7 +8675,7 @@ msgstr ""
 msgid "Save failed"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:638
+#: src/components/organisms/modals/SceneFileModals.tsx:654
 msgid "Save Loaded Scene"
 msgstr ""
 
@@ -8690,7 +8700,7 @@ msgstr "Uložiť Scénu"
 msgid "Save scene as…"
 msgstr "Uložiť Scénu Ako…"
 
-#: src/components/organisms/modals/SceneFileModals.tsx:622
+#: src/components/organisms/modals/SceneFileModals.tsx:638
 msgid "Save scene options"
 msgstr ""
 
@@ -8862,11 +8872,11 @@ msgstr ""
 msgid "Scene import failed: {message}"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:383
+#: src/components/organisms/modals/SceneFileModals.tsx:397
 msgid "Scene import hollowing decision"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:250
+#: src/components/organisms/modals/SceneFileModals.tsx:256
 msgid "Scene import placement decision"
 msgstr ""
 
@@ -8878,7 +8888,7 @@ msgstr ""
 msgid "Scene material"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:266
+#: src/components/organisms/modals/SceneFileModals.tsx:272
 msgid "Scene may be off-plate"
 msgstr ""
 
@@ -8891,7 +8901,7 @@ msgstr ""
 msgid "Scene mood overlay in thumbnail"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:399
+#: src/components/organisms/modals/SceneFileModals.tsx:413
 msgid "Scene was hollowed before export"
 msgstr ""
 
@@ -9784,7 +9794,7 @@ msgstr ""
 msgid "Standing Autosave Error"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:595
+#: src/components/organisms/modals/SceneFileModals.tsx:609
 msgid "Start a new scene now?"
 msgstr ""
 
@@ -10442,7 +10452,7 @@ msgstr ""
 msgid "This cannot be undone."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:487
+#: src/components/organisms/modals/SceneFileModals.tsx:501
 msgid "This feature is still under development."
 msgstr ""
 
@@ -10462,7 +10472,7 @@ msgstr ""
 msgid "This is a built-in profile, so its fields are fixed. Duplicate it and edit the copy — custom settings belong in a custom profile."
 msgstr ""
 
-#: src/features/scene/arrange/useArrangeManager.ts:165
+#: src/features/scene/arrange/useArrangeManager.ts:166
 msgid "This is a computationally expensive operation for dense packing."
 msgstr ""
 
@@ -10527,8 +10537,8 @@ msgstr ""
 msgid "This scene is aggressively unoccupied."
 msgstr "Táto scéna je agresívne prázdna."
 
-#: src/components/organisms/modals/SceneFileModals.tsx:561
-#: src/components/organisms/modals/SceneFileModals.tsx:585
+#: src/components/organisms/modals/SceneFileModals.tsx:575
+#: src/components/organisms/modals/SceneFileModals.tsx:599
 msgid "This scene is already saved."
 msgstr ""
 
@@ -10866,7 +10876,7 @@ msgstr ""
 msgid "Unpin"
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:105
+#: src/components/organisms/modals/SceneFileModals.tsx:111
 msgid "Unsaved changes"
 msgstr ""
 
@@ -10874,7 +10884,7 @@ msgstr ""
 msgid "Unsaved changes may be lost."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:106
+#: src/components/organisms/modals/SceneFileModals.tsx:112
 msgid "Unsaved Scene Changes"
 msgstr ""
 
@@ -11082,7 +11092,7 @@ msgstr ""
 msgid "Using Material Settings"
 msgstr ""
 
-#: src/features/scene/arrange/useArrangeManager.ts:155
+#: src/features/scene/arrange/useArrangeManager.ts:156
 msgid "Using SAT-based 2.5D nesting to pack duplicates onto the plate."
 msgstr ""
 
@@ -11498,8 +11508,8 @@ msgstr ""
 msgid "You can share materials with printers that use the same material settings and output format in Material Settings."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:560
-#: src/components/organisms/modals/SceneFileModals.tsx:584
+#: src/components/organisms/modals/SceneFileModals.tsx:574
+#: src/components/organisms/modals/SceneFileModals.tsx:598
 msgid "You have unsaved edits in this scene."
 msgstr ""
 
@@ -11512,11 +11522,11 @@ msgstr ""
 msgid "You shall not pass... until you load a model."
 msgstr "Neprejdeš… kým nenahráš model."
 
-#: src/components/organisms/modals/SceneFileModals.tsx:570
+#: src/components/organisms/modals/SceneFileModals.tsx:584
 msgid "You’re about to close DragonFruit with unsaved scene changes."
 msgstr ""
 
-#: src/components/organisms/modals/SceneFileModals.tsx:594
+#: src/components/organisms/modals/SceneFileModals.tsx:608
 msgid "You’re about to start a new scene with unsaved edits in this one."
 msgstr ""
 

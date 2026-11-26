@@ -7,6 +7,7 @@ import { buildSceneSaveContext } from '@/features/export/logic/sceneSaveContext'
 import { VoxlChunkCache } from '@/features/scene/voxl';
 import type { VoxlPrinterBundle } from '@/features/scene/voxl';
 import type { PlateOrdering } from '@/features/scene/plates/plateCascade';
+import type { PlateOriginMode } from '@/features/scene/plates/plateLayout';
 import type { LoadedModel, ScenePlate } from '@/features/scene/useSceneCollectionManager';
 
 // ---------------------------------------------------------------------------
@@ -353,6 +354,8 @@ export type UseSceneAutosaveOptions = {
   printer?: VoxlPrinterBundle;
   /** The grid the beds are laid out on, saved with the file. */
   plateOrdering?: PlateOrdering;
+  /** The origin the beds are laid out with, saved with the file. */
+  plateOriginMode?: PlateOriginMode;
   enabled?: boolean;
   debounceMs?: number;
   cooldownMs?: number;
@@ -398,6 +401,7 @@ export function useSceneAutosave({
   plateName,
   printer,
   plateOrdering,
+  plateOriginMode,
   enabled = true,
   debounceMs = AUTOSAVE_DEBOUNCE_MS,
   cooldownMs = AUTOSAVE_COOLDOWN_MS,
@@ -413,35 +417,42 @@ export function useSceneAutosave({
 
   // Keep stable refs so the debounce callback always sees fresh values
   const modelsRef = React.useRef(models);
-  modelsRef.current = models;
   const activeModelIdRef = React.useRef(activeModelId);
-  activeModelIdRef.current = activeModelId;
   const selectedModelIdsRef = React.useRef(selectedModelIds);
-  selectedModelIdsRef.current = selectedModelIds;
   const platesRef = React.useRef(plates);
-  platesRef.current = plates;
   const activePlateIdRef = React.useRef(activePlateId);
-  activePlateIdRef.current = activePlateId;
   const plateNameRef = React.useRef(plateName);
-  plateNameRef.current = plateName;
   const printerRef = React.useRef(printer);
-  printerRef.current = printer;
   const plateOrderingRef = React.useRef(plateOrdering);
-  plateOrderingRef.current = plateOrdering;
+  const plateOriginModeRef = React.useRef(plateOriginMode);
   const enabledRef = React.useRef(enabled);
-  enabledRef.current = enabled;
   const debounceMsRef = React.useRef(debounceMs);
-  debounceMsRef.current = debounceMs;
   const cooldownMsRef = React.useRef(cooldownMs);
-  cooldownMsRef.current = cooldownMs;
   const capMsRef = React.useRef(capMs);
-  capMsRef.current = capMs;
   const preferredSavePathRef = React.useRef(preferredSavePath);
-  preferredSavePathRef.current = preferredSavePath;
   const sceneFormatChunkedRef = React.useRef(sceneFormatChunked);
-  sceneFormatChunkedRef.current = sceneFormatChunked;
   const onSceneFormatUpgradedRef = React.useRef(onSceneFormatUpgraded);
-  onSceneFormatUpgradedRef.current = onSceneFormatUpgraded;
+
+  // Refresh after every commit, not during render (React Compiler rule).
+  // Timers and event handlers only read these after a commit.
+  React.useLayoutEffect(() => {
+    modelsRef.current = models;
+    activeModelIdRef.current = activeModelId;
+    selectedModelIdsRef.current = selectedModelIds;
+    platesRef.current = plates;
+    activePlateIdRef.current = activePlateId;
+    plateNameRef.current = plateName;
+    printerRef.current = printer;
+    plateOrderingRef.current = plateOrdering;
+    plateOriginModeRef.current = plateOriginMode;
+    enabledRef.current = enabled;
+    debounceMsRef.current = debounceMs;
+    cooldownMsRef.current = cooldownMs;
+    capMsRef.current = capMs;
+    preferredSavePathRef.current = preferredSavePath;
+    sceneFormatChunkedRef.current = sceneFormatChunked;
+    onSceneFormatUpgradedRef.current = onSceneFormatUpgraded;
+  });
 
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const capRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -499,6 +510,9 @@ export function useSceneAutosave({
     }, delay);
   }, [clearDeferredAutosave]);
 
+  // `performAutosave` re-arms itself from inside its own body; going through a
+  // ref avoids referencing the binding before it is declared.
+  const performAutosaveRef = React.useRef<((options?: { force?: boolean }) => Promise<void>) | null>(null);
   const performAutosave = React.useCallback(async (options?: { force?: boolean }) => {
     while (autosavePromiseRef.current) {
       await autosavePromiseRef.current;
@@ -535,7 +549,7 @@ export function useSceneAutosave({
           // Re-arm rather than drop. `scheduleDeferredAutosave` no-ops when the
           // scene is not dirty, so this cannot spin on a clean scene.
           scheduleDeferredAutosave(
-            () => { void performAutosave(); },
+            () => { void performAutosaveRef.current?.(); },
             Math.max(sceneAutosaveSuppressRef.current, cooldownUntilRef.current),
           );
         }
@@ -597,6 +611,7 @@ export function useSceneAutosave({
               plates: platesRef.current,
               activePlateId: activePlateIdRef.current,
               plateOrdering: plateOrderingRef.current,
+              plateOriginMode: plateOriginModeRef.current,
               plateName: plateNameRef.current,
               printer: printerRef.current,
             }),
@@ -694,7 +709,7 @@ export function useSceneAutosave({
             clearTimeout(capRef.current);
             capRef.current = null;
           }
-          scheduleDeferredAutosave(() => { void performAutosave(); }, cooldownUntilRef.current);
+          scheduleDeferredAutosave(() => { void performAutosaveRef.current?.(); }, cooldownUntilRef.current);
         }
         inFlightRef.current = false;
         setIsAutosaving(false);
@@ -711,6 +726,9 @@ export function useSceneAutosave({
       }
     }
   }, [clearDeferredAutosave, scheduleDeferredAutosave, shouldDeferAutosaveForNavigation]);
+  React.useLayoutEffect(() => {
+    performAutosaveRef.current = performAutosave;
+  }, [performAutosave]);
 
   const scheduleSave = React.useCallback(() => {
     if (!isDesktopRuntime()) return;

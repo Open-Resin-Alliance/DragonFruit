@@ -2,6 +2,9 @@
 
 mod mesh_minima;
 mod mesh_repair;
+mod hollow_source;
+mod mesh_store;
+mod mesh_store_ipc;
 mod mesh_refine;
 mod network;
 mod ao_vertex;
@@ -4764,22 +4767,11 @@ fn main() {
             mesh_repair::mesh_shrinkwrap_staged,
             mesh_repair::mesh_tet_surface_staged,
             mesh_repair::mesh_solid_remesh_staged,
-            mesh_repair::mesh_hollow_preview_capture_staged_source,
-            mesh_repair::mesh_hollow_preview_from_captured_source,
-            mesh_repair::mesh_hollow_apply_from_captured_source,
-            mesh_repair::mesh_hollow_preview_read_positions,
-            mesh_repair::mesh_hollow_preview_read_infill_positions,
-            mesh_repair::mesh_hollow_preview_read_removed_voxel_centers,
-            mesh_repair::mesh_hollow_preview_read_removed_voxel_indices,
-            mesh_repair::mesh_hollow_preview_read_blocked_voxel_centers,
-            mesh_repair::mesh_hollow_preview_read_blocked_voxel_indices,
-            mesh_repair::mesh_hollow_preview_select_removed_voxels_in_polygon,
-            mesh_repair::mesh_hollow_preview_read_cavity_positions,
-            mesh_repair::mesh_hollow_staged_read_cavity_positions,
+            mesh_repair::mesh_hollow_session_open,
+            mesh_repair::mesh_hollow_session_preview,
+            mesh_repair::mesh_hollow_session_apply,
+            mesh_repair::mesh_hollow_session_select_removed_voxels,
             mesh_repair::mesh_punch_staged,
-            mesh_repair::mesh_punch_capture_staged_source,
-            mesh_repair::mesh_punch_from_captured_source,
-            mesh_repair::mesh_punch_read_positions,
             mesh_repair::mesh_organic_cut_staged,
             mesh_repair::mesh_organic_cut_capture_staged_source,
             mesh_repair::mesh_organic_cut_from_captured_source,
@@ -4792,6 +4784,11 @@ fn main() {
             mesh_repair::mesh_organic_cut_read_membrane,
             mesh_repair::mesh_organic_cut_read_tenon,
             mesh_repair::mesh_repair_read_positions,
+            mesh_store_ipc::mesh_store_put,
+            mesh_store_ipc::mesh_store_read,
+            mesh_store_ipc::mesh_store_drop,
+            mesh_store_ipc::mesh_store_open_client,
+            mesh_store_ipc::mesh_store_stats,
             mesh_repair::load_mesh_file,
             mesh_repair::load_mesh_bytes,
             mesh_repair::load_mesh_range,

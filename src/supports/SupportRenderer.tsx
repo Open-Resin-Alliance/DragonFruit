@@ -3467,7 +3467,8 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
         ));
     }, [
         shaftBatchActive,
-        simpleRender, ghostTransparent, ghostOpacityClamped, sceneBatchedShaftRadialSegments,
+        simpleRender,
+        discsOnly, ghostTransparent, ghostOpacityClamped, sceneBatchedShaftRadialSegments,
         slimPickShaftsByBatch,
         isPointerInteractable, handleSceneBatchedShaftClick,
         handleSceneBatchedShaftPointerMove, handleSceneBatchedShaftPointerOut,

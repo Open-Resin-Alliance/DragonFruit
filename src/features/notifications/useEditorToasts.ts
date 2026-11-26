@@ -43,11 +43,9 @@ export type UseEditorToastsOptions = {
  */
 export function useTrailingMount(visible: boolean, tailMs = 240): boolean {
   const [mounted, setMounted] = React.useState(visible);
+  if (visible && !mounted) setMounted(true);
   React.useEffect(() => {
-    if (visible) {
-      setMounted(true);
-      return;
-    }
+    if (visible) return;
     const timeout = window.setTimeout(() => setMounted(false), tailMs);
     return () => window.clearTimeout(timeout);
   }, [tailMs, visible]);
@@ -158,10 +156,21 @@ export function useEditorToasts({
     };
   }, [clearPrintingMonitorErrorToastTimeouts]);
 
+  // Showing the toast is state derived from the save flags, so it is adjusted
+  // during render; the effect below only owns the timers and the enter frame.
+  const hasActiveSaveWork = isSceneSaveInProgress || (isAutosaving && !isPreSliceSceneSaveInProgress);
+  if (hasActiveSaveWork) {
+    const nextSaveToastMode = isSceneSaveInProgress ? 'saving' : 'autosaving';
+    if (saveToastMode !== nextSaveToastMode) setSaveToastMode(nextSaveToastMode);
+    if (!isSaveToastVisible) {
+      setIsSaveToastVisible(true);
+      setIsSaveToastAnimatedVisible(false);
+    }
+  }
+
   React.useEffect(() => {
     const MIN_SAVE_TOAST_VISIBLE_MS = 2000;
     const TOAST_ANIMATION_MS = 220;
-    const hasActiveSaveWork = isSceneSaveInProgress || (isAutosaving && !isPreSliceSceneSaveInProgress);
 
     if (hasActiveSaveWork) {
       if (saveToastHideTimeoutRef.current !== null) {
@@ -172,23 +181,15 @@ export function useEditorToasts({
         window.clearTimeout(saveToastClearTimeoutRef.current);
         saveToastClearTimeoutRef.current = null;
       }
-      if (saveToastEnterRafRef.current !== null) {
-        window.cancelAnimationFrame(saveToastEnterRafRef.current);
-        saveToastEnterRafRef.current = null;
-      }
-
-      setSaveToastMode(isSceneSaveInProgress ? 'saving' : 'autosaving');
-
-      if (!isSaveToastVisible) {
+      if (saveToastShownAtRef.current === null) {
         saveToastShownAtRef.current = Date.now();
-        setIsSaveToastVisible(true);
-        setIsSaveToastAnimatedVisible(false);
+      }
+      // Fade in on the next frame so the hidden state paints first.
+      if (!isSaveToastAnimatedVisible && saveToastEnterRafRef.current === null) {
         saveToastEnterRafRef.current = window.requestAnimationFrame(() => {
           saveToastEnterRafRef.current = null;
           setIsSaveToastAnimatedVisible(true);
         });
-      } else if (!isSaveToastAnimatedVisible) {
-        setIsSaveToastAnimatedVisible(true);
       }
       return;
     }
@@ -198,9 +199,14 @@ export function useEditorToasts({
       return;
     }
 
+    // The minimum stops a quick save from flashing past unread. But once this
+    // save's green "Saved to" toast is up, the blue one has nothing left to say
+    // and covers it (same slot, higher z-index), so it leaves straight away.
     const shownAt = saveToastShownAtRef.current ?? Date.now();
     const elapsed = Date.now() - shownAt;
-    const remaining = Math.max(0, MIN_SAVE_TOAST_VISIBLE_MS - elapsed);
+    const savedToastFollowsThisSave =
+      isExportSuccessToastVisible && exportSuccessToast !== null && exportSuccessToast.id >= shownAt;
+    const remaining = savedToastFollowsThisSave ? 0 : Math.max(0, MIN_SAVE_TOAST_VISIBLE_MS - elapsed);
 
     if (saveToastHideTimeoutRef.current !== null) {
       window.clearTimeout(saveToastHideTimeoutRef.current);
@@ -217,7 +223,7 @@ export function useEditorToasts({
         setIsSaveToastVisible(false);
       }, TOAST_ANIMATION_MS);
     }, remaining);
-  }, [isAutosaving, isPreSliceSceneSaveInProgress, isSaveToastAnimatedVisible, isSaveToastVisible, isSceneSaveInProgress]);
+  }, [exportSuccessToast, hasActiveSaveWork, isExportSuccessToastVisible, isSaveToastAnimatedVisible, isSaveToastVisible]);
 
   React.useEffect(() => {
     return () => {
@@ -236,17 +242,22 @@ export function useEditorToasts({
     };
   }, []);
 
+  // A new report shows the toast and a cleared one hides it; the effect below
+  // only schedules the fade.
+  const [shownSceneImportReport, setShownSceneImportReport] = React.useState<typeof sceneImportReport | undefined>(undefined);
+  if (shownSceneImportReport !== sceneImportReport) {
+    setShownSceneImportReport(sceneImportReport);
+    setIsSceneImportToastVisible(Boolean(sceneImportReport));
+  }
+
   React.useEffect(() => {
     if (!sceneImportReport) {
-      setIsSceneImportToastVisible(false);
       if (sceneImportToastFadeTimeoutRef.current !== null) {
         window.clearTimeout(sceneImportToastFadeTimeoutRef.current);
         sceneImportToastFadeTimeoutRef.current = null;
       }
       return;
     }
-
-    setIsSceneImportToastVisible(true);
 
     if (sceneImportToastFadeTimeoutRef.current !== null) {
       window.clearTimeout(sceneImportToastFadeTimeoutRef.current);

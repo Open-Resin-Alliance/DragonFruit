@@ -21,31 +21,40 @@ const DISMISS_KEY = 'df.gpu-performance-warning.v1.dismissed';
  * whose WebView2 runtime predates the switch, or whose driver still chooses the
  * integrated adapter.
  */
+/** `undefined` until probed; the probe creates a WebGL context, so run it once. */
+let slowRendererName: string | null | undefined;
+
+function detectSlowRenderer(): string | null {
+  if (slowRendererName !== undefined) return slowRendererName;
+  slowRendererName = null;
+  if (!isWindowsWebview()) return null;
+
+  try {
+    if (window.localStorage.getItem(DISMISS_KEY) === '1') return null;
+  } catch {
+    // Storage can be unavailable; showing the warning is still correct.
+  }
+
+  const name = readGpuRendererName();
+  if (!name) return null;
+
+  const kind = classifyGpuRenderer(name);
+  if (kind !== 'integrated' && kind !== 'software') return null;
+
+  slowRendererName = name;
+  return name;
+}
+
+const subscribeNever = () => () => {};
+
 export function GpuPerformanceWarningModal() {
   const { _ } = useLingui();
-  const [open, setOpen] = React.useState(false);
-  const [renderer, setRenderer] = React.useState<string | null>(null);
+  // Server snapshot is null, so prerender and hydration show nothing.
+  const renderer = React.useSyncExternalStore(subscribeNever, detectSlowRenderer, () => null);
+  const [dismissed, setDismissed] = React.useState(false);
+  const open = renderer !== null && !dismissed;
 
-  React.useEffect(() => {
-    if (!isWindowsWebview()) return;
-
-    try {
-      if (window.localStorage.getItem(DISMISS_KEY) === '1') return;
-    } catch {
-      // Storage can be unavailable; showing the warning is still correct.
-    }
-
-    const name = readGpuRendererName();
-    if (!name) return;
-
-    const kind = classifyGpuRenderer(name);
-    if (kind !== 'integrated' && kind !== 'software') return;
-
-    setRenderer(name);
-    setOpen(true);
-  }, []);
-
-  const dismiss = React.useCallback(() => setOpen(false), []);
+  const dismiss = React.useCallback(() => setDismissed(true), []);
 
   const dismissForever = React.useCallback(() => {
     try {
@@ -53,7 +62,8 @@ export function GpuPerformanceWarningModal() {
     } catch {
       // Ignore storage failures; the dialog still closes for this session.
     }
-    setOpen(false);
+    slowRendererName = null;
+    setDismissed(true);
   }, []);
 
   return (

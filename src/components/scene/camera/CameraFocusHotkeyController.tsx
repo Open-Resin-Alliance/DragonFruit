@@ -354,7 +354,7 @@ export function CameraFocusHotkeyController({
 
     const bestSphere = computeModelWorldBoundingSphere(bestModel);
     snapCameraToPoint(bestSphere.center, bestSphere.radius);
-  }, [activeModelId, hoveredModelId, isModelFocusable, models, orbitTarget, selectedModelIds, snapCameraToPoint]);
+  }, [activeModelId, hoverPointRef, hoveredModelId, isModelFocusable, models, orbitTarget, selectedModelIds, snapCameraToPoint]);
 
   useCameraFocusHotkey(runFocus);
 

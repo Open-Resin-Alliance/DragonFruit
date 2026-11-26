@@ -34,6 +34,7 @@ import {
   getThemeMeshHighlightColors,
   subscribeToThemeMeshHighlightColors,
 } from '@/components/settings/themeCustomizations';
+import { useMeshSmoothingGeometryReplacement } from '@/features/mesh-smoothing/useMeshSmoothingGeometryReplacement';
 import { useMirrorManager } from '@/features/mirror/useMirrorManager';
 import { useArrangeManager } from '@/features/scene/arrange/useArrangeManager';
 import { useHolePunchManager } from '@/features/hole-punching/useHolePunchManager';
@@ -252,8 +253,8 @@ import {
   type ArrangeModel as HighPrecisionArrangeModel,
 } from '@/features/scene/arrange/highPrecisionArrange';
 import { computeHighPrecisionArrangeResultWorker } from '@/features/scene/arrange/highPrecisionArrangeWorkerClient';
-import { plateCascadeOffsetMm } from '@/features/scene/plates/plateCascade';
-import { modelsOnPlate, plateCanBeRemoved } from '@/features/scene/plates/plateLayout';
+import { appendedPlateSlots, modelsOnPlate, plateBuildArea, plateCanBeRemoved, plateCenterFor, plateLocalRect } from '@/features/scene/plates/plateLayout';
+import { scrubPreviewScope } from '@/features/printing/scrubPreviewScope';
 
 // Domain Features
 import { useSceneCollectionManager, getSceneSnapshotRegistryBytes } from '@/features/scene/useSceneCollectionManager';
@@ -301,7 +302,8 @@ import {
   subscribeHistoryOperations,
   undo,
 } from '@/history/historyStore';
-import type { HistoryDebugEvent, HistoryOrigin } from '@/history/types';
+import type { HistoryDebugEvent, HistoryOrigin, HistorySelection } from '@/history/types';
+import { resolveHistorySelection, sameHistorySelection } from '@/features/scene/historySelection';
 import { getSavedCameraProjectionSettings, saveCameraProjectionSettings } from '@/components/settings/cameraProjectionPreferences';
 import {
   getSceneAutosaveSettingsServerSnapshot,
@@ -432,18 +434,6 @@ import { IslandVolumesHierarchyCard } from '@/volumeAnalysis/IslandVolumes/compo
 import { uploadPrintJobWithProgress, type PluginUploadProgressEvent } from '@/features/plugins/pluginUploadBridge';
 import { pluginNetworkFetch } from '@/utils/pluginNetworkBridge';
 import { fetchRtspRelayStatus } from '@/utils/rtspRelayBridge';
-import {
-  hollowApplyFromCapturedSource,
-  hollowFromGeometry,
-  hollowPreviewFromCapturedSource,
-  stageHollowPreviewSource,
-  type HollowReport,
-} from '@/utils/meshHollowing';
-import {
-  punchFromCapturedSource,
-  stagePunchSource,
-  type PunchOptions,
-} from '@/utils/meshPunching';
 import type {
   ModelMeshModifiers,
   ModelMeshModifiersHistoryOptions,
@@ -1255,6 +1245,8 @@ export default function Home() {
   }, [scene.mode, transformMgr.transformMode]);
   // Ref for the drag-wrapper group around supports/rafts (live gizmo transform)
   const supportDragGroupRef = React.useRef<THREE.Group | null>(null);
+  /** The supports and rafts of the plate the scrub preview is of, moved with its models (#867). */
+  const printingScrubSupportGroupRef = React.useRef<THREE.Group | null>(null);
   const supportDragResetRafRef = React.useRef<number | null>(null);
   const supportDragResetSecondRafRef = React.useRef<number | null>(null);
   const [holdSupportDragDeltaUntilSupportSync, setHoldSupportDragDeltaUntilSupportSync] = React.useState(false);
@@ -1432,6 +1424,7 @@ export default function Home() {
     plateName: scene.plateName,
     printer: scene.voxlPrinterBundle ?? undefined,
     plateOrdering: scene.plateOrdering,
+    plateOriginMode: scene.view3dSettings.originMode,
     enabled: sceneAutosaveEnabled,
     debounceMs: sceneAutosaveSettings.debounceMs,
     cooldownMs: sceneAutosaveSettings.cooldownMs,
@@ -3222,28 +3215,28 @@ export default function Home() {
   }, [completedSaveDestinationPath, completedSaveDirectory, completedSliceIntent, printingSlicingBenchmark?.totalElapsedMs]);
 
   /**
-   * What the fast scrub preview draws: the models of the bed being worked on, moved to the
-   * origin the way the slice itself is taken.
-   *
-   * The preview is a top-down look at one bed's build volume, drawn around the origin. Handed
-   * the scene as it stands, it shows the bed that sits at the origin — plate 1 — whatever bed
-   * the preview is really of, which is why scrubbing showed the wrong model on plate 2.
+   * What the fast scrub preview draws: the bed being worked on, which is the one the
+   * workspace shows the slice of, moved to the origin the way the slice itself is taken —
+   * its models, and through `printingScrubSupportGroupRef` its supports and rafts.
    */
-  const printingScrubPreviewModels = React.useMemo(() => {
-    const activeFrame = scene.plateFrames.find((frame) => frame.id === scene.activePlateId);
-    const onPlate = modelsOnPlate({ models: scene.models, plateId: scene.activePlateId, frames: scene.plateFrames });
-    if (!activeFrame || (activeFrame.dxMm === 0 && activeFrame.dyMm === 0)) return onPlate;
-
-    return onPlate.map((model) => ({
-      ...model,
-      transform: {
-        ...model.transform,
-        position: model.transform.position.clone().add(
-          new THREE.Vector3(-activeFrame.dxMm, -activeFrame.dyMm, 0),
-        ),
-      },
-    }));
-  }, [scene.activePlateId, scene.models, scene.plateFrames]);
+  const printingScrubScope = React.useMemo(
+    () => scrubPreviewScope({ models: scene.models, frames: scene.plateFrames, plateId: scene.activePlateId }),
+    [scene.activePlateId, scene.models, scene.plateFrames],
+  );
+  /**
+   * The scrub preview gathers the plate's support meshes once and cuts those. It gathers
+   * them again on a support edit, on another plate, and when a drag of the slider starts
+   * or ends, which by then sees whatever the canvas has drawn since.
+   */
+  const printingScrubSupportVersion = `${supportRenderRefreshNonce}|${scene.activePlateId}|${isPrintingLayerScrubbing ? 'scrub' : 'still'}`;
+  /** The canvas draws the plate's supports for the scrub preview only in the printing workspace. */
+  const printingPlateSupports = React.useMemo(() => (scene.mode === 'printing'
+    ? {
+        groupRef: printingScrubSupportGroupRef,
+        excludeModelIds: printingScrubScope.supportExcludeModelIds,
+        offsetMm: printingScrubScope.offsetMm,
+      }
+    : null), [printingScrubScope, scene.mode]);
 
   /**
    * The scene shot a plate's file carries, framed on that plate.
@@ -3302,14 +3295,15 @@ export default function Home() {
   const resinBuildVolumeBounds = React.useMemo(() => {
     if (!scene.view3dSettings.enabled) return null;
 
-    const width = scene.view3dSettings.widthMm;
-    const depth = scene.view3dSettings.depthMm;
-    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -width * 0.5;
-    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -depth * 0.5;
+    const { minX, minY, maxX, maxY } = plateLocalRect({
+      widthMm: scene.view3dSettings.widthMm,
+      depthMm: scene.view3dSettings.depthMm,
+      originMode: scene.view3dSettings.originMode,
+    });
 
     return new THREE.Box3(
       new THREE.Vector3(minX, minY, 0),
-      new THREE.Vector3(minX + width, minY + depth, scene.view3dSettings.maxZMm),
+      new THREE.Vector3(maxX, maxY, scene.view3dSettings.maxZMm),
     );
   }, [
     scene.view3dSettings.depthMm,
@@ -4594,6 +4588,7 @@ export default function Home() {
           plateName: scene.plateName,
           printer: scene.voxlPrinterBundle ?? undefined,
           plateOrdering: scene.plateOrdering,
+          plateOriginMode: scene.view3dSettings.originMode,
         },
         exportThumbnailPng,
       ),
@@ -4655,6 +4650,7 @@ export default function Home() {
     scene.plateOrdering,
     scene.plates,
     scene.selectedModelIds,
+    scene.view3dSettings.originMode,
     scene.voxlPrinterBundle,
     setExportSuccessToast,
     setIsExportSuccessToastVisible,
@@ -5983,6 +5979,14 @@ export default function Home() {
   // setters exist further down this component.
   const historyOriginRef = React.useRef<HistoryOrigin>({ appMode: 'prepare', transformMode: 'select' });
   const restoreHistoryOriginRef = React.useRef<(origin: HistoryOrigin) => void>(() => {});
+  /**
+   * The undone entry's selection, applied once the entry's own changes have rendered,
+   * and the selection when it was undone: an entry that restores its own (a scene
+   * snapshot) has moved it by then, and is left to it.
+   */
+  const pendingHistorySelectionRef = React.useRef<{ saved: HistorySelection | undefined; before: HistorySelection | undefined } | null>(null);
+  /** Set when an undo moved the selection, so the camera follows once it has. */
+  const historyFocusPendingRef = React.useRef(false);
 
   React.useEffect(() => setHistoryOriginProvider(() => historyOriginRef.current), []);
 
@@ -5993,6 +5997,10 @@ export default function Home() {
       // Transform gizmo is up should put the Cut tool back, not silently reshape
       // geometry the current tool can't even show.
       if (action.origin) restoreHistoryOriginRef.current(action.origin);
+      pendingHistorySelectionRef.current = {
+        saved: action.origin?.selection,
+        before: historyOriginRef.current.selection,
+      };
 
       pendingHistoryTransformResyncRef.current = true;
       invalidatePendingTransformHistory();
@@ -7511,14 +7519,15 @@ export default function Home() {
   const buildVolumeBounds = React.useMemo(() => {
     if (!scene.view3dSettings.enabled) return null;
 
-    const width = scene.view3dSettings.widthMm;
-    const depth = scene.view3dSettings.depthMm;
-    const minX = scene.view3dSettings.originMode === 'front_left' ? 0 : -width * 0.5;
-    const minY = scene.view3dSettings.originMode === 'front_left' ? 0 : -depth * 0.5;
+    const { minX, minY, maxX, maxY } = plateLocalRect({
+      widthMm: scene.view3dSettings.widthMm,
+      depthMm: scene.view3dSettings.depthMm,
+      originMode: scene.view3dSettings.originMode,
+    });
 
     return new THREE.Box3(
       new THREE.Vector3(minX, minY, 0),
-      new THREE.Vector3(minX + width, minY + depth, scene.view3dSettings.maxZMm),
+      new THREE.Vector3(maxX, maxY, scene.view3dSettings.maxZMm),
     );
   }, [
     scene.view3dSettings.depthMm,
@@ -7997,8 +8006,48 @@ export default function Home() {
   // always closes over today's mode — a stale closure would switch to the tool
   // that was current when the effect last ran.
   React.useEffect(() => {
-    historyOriginRef.current = { appMode: scene.mode, transformMode: transformMgr.transformMode };
-  }, [scene.mode, transformMgr.transformMode]);
+    historyOriginRef.current = {
+      appMode: scene.mode,
+      transformMode: transformMgr.transformMode,
+      selection: { activeModelId: scene.activeModelId, modelIds: [...scene.selectedModelIds] },
+    };
+  }, [scene.mode, transformMgr.transformMode, scene.activeModelId, scene.selectedModelIds]);
+
+  // Bring back the models the undone entry was made on. Run on the tick the history
+  // subscriber bumps, not in the subscriber: an undo that restores a deleted model
+  // only has it in `scene.models` once that render lands.
+  React.useEffect(() => {
+    const pending = pendingHistorySelectionRef.current;
+    pendingHistorySelectionRef.current = null;
+    if (!pending) return;
+    const current = { activeModelId: scene.activeModelId, modelIds: scene.selectedModelIds };
+    if (pending.before && !sameHistorySelection(pending.before, current)) {
+      historyFocusPendingRef.current = true;
+      return;
+    }
+    const byId = new Map(scene.models.map((model) => [model.id, model] as const));
+    const next = resolveHistorySelection(
+      pending.saved,
+      current,
+      (id) => {
+        const model = byId.get(id);
+        return Boolean(model) && !scene.isModelPlateLocked(model!);
+      },
+    );
+    if (!next) return;
+    scene.setSelectedModelIds(next.modelIds);
+    scene.setActiveModelId(next.activeModelId);
+    historyFocusPendingRef.current = true;
+    // Only the tick starts this; the rest is read as it stands when it fires.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyTransformResyncTick]);
+
+  // Then frame it, the way F does, once the camera controller has the new selection.
+  React.useEffect(() => {
+    if (!historyFocusPendingRef.current) return;
+    historyFocusPendingRef.current = false;
+    window.dispatchEvent(new Event('camera-fit-request'));
+  }, [scene.activeModelId, scene.selectedModelIds]);
 
   const historyOriginToolPendingRef = React.useRef(false);
 
@@ -9313,14 +9362,25 @@ export default function Home() {
       selectedModelIds: scene.selectedModelIds,
       activeModelId: scene.activeModelId,
     });
-    const targetCenter = scene.view3dSettings.originMode === 'front_left'
-      ? new THREE.Vector2(scene.view3dSettings.widthMm * 0.5, scene.view3dSettings.depthMm * 0.5)
-      : new THREE.Vector2(0, 0);
+    // The middle of the plate being worked on: on plate 3, centring the selection
+    // used to send it to the middle of plate 1.
+    const { x, y } = plateCenterFor({
+      frames: scene.plateFrames,
+      plateId: scene.activePlateId,
+      footprint: {
+        widthMm: scene.view3dSettings.widthMm,
+        depthMm: scene.view3dSettings.depthMm,
+        originMode: scene.view3dSettings.originMode,
+      },
+    });
+    const targetCenter = new THREE.Vector2(x, y);
     applySelectionPositionUpdates(buildCenterSelectionUpdates(scene.models, targetIds, targetCenter));
   }, [
     applySelectionPositionUpdates,
     scene.activeModelId,
+    scene.activePlateId,
     scene.models,
+    scene.plateFrames,
     scene.selectedModelIds,
     scene.view3dSettings.depthMm,
     scene.view3dSettings.originMode,
@@ -9781,15 +9841,10 @@ export default function Home() {
       // Spacing may be negative (nesting); clamp so a step never collapses.
       const spacing = Math.max(-Math.min(width, depth) + 0.1, duplicateSpacingMm);
 
-      const rawDupMinX = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.widthMm * 0.5;
-      const rawDupMaxX = rawDupMinX + scene.view3dSettings.widthMm;
-      const rawDupMinY = scene.view3dSettings.originMode === 'front_left' ? 0 : -scene.view3dSettings.depthMm * 0.5;
-      const rawDupMaxY = rawDupMinY + scene.view3dSettings.depthMm;
-      const dupSm = scene.view3dSettings.safetyMarginMm;
-      const minX = rawDupMinX + Math.max(0, dupSm?.left ?? 0);
-      const maxX = rawDupMaxX - Math.max(0, dupSm?.right ?? 0);
-      const minY = rawDupMinY + Math.max(0, dupSm?.front ?? 0);
-      const maxY = rawDupMaxY - Math.max(0, dupSm?.back ?? 0);
+      const { minX, maxX, minY, maxY } = plateBuildArea({
+        footprint: scene.view3dSettings,
+        safetyMarginMm: scene.view3dSettings.safetyMarginMm,
+      });
 
       const plateWidth = Math.max(1, maxX - minX);
       const plateDepth = Math.max(1, maxY - minY);
@@ -9891,17 +9946,17 @@ export default function Home() {
       const remaining = Math.max(0, totalCount - chosenCenters.length);
       const perBed = Math.max(1, maxCols * maxRows);
       const ghostBeds = remaining > 0 ? Math.ceil(remaining / perBed) : 0;
-      const footprint = { widthMm: scene.view3dSettings.widthMm, depthMm: scene.view3dSettings.depthMm };
       const ghostOffsets: Array<{ dxMm: number; dyMm: number }> = [];
       let placedOnGhostBeds = 0;
+      const ghostSlots = appendedPlateSlots({
+        plates: scene.plates,
+        count: ghostBeds,
+        footprint: scene.view3dSettings,
+        ordering: scene.plateOrdering,
+      });
 
-      for (let bed = 0; bed < ghostBeds; bed += 1) {
-        const offset = plateCascadeOffsetMm(
-          scene.plates.length + bed,
-          footprint,
-          scene.plates.length + ghostBeds,
-          scene.plateOrdering,
-        );
+      for (const { dxMm, dyMm } of ghostSlots) {
+        const offset = { dxMm, dyMm };
         ghostOffsets.push(offset);
 
         // Nearest the middle of that bed first, which is where the eye looks for them.
@@ -10561,6 +10616,7 @@ export default function Home() {
     activeGeometry: scene.activeModel?.geometry.geometry ?? null,
     activeGeometryKey: scene.activeModel?.id ?? null,
     activeModelId: scene.activeModel?.id ?? null,
+    activeModelScale: scene.activeModel ? scene.activeModel.transform.scale.toArray() : null,
     commitParts: React.useCallback((parts: THREE.BufferGeometry[]) => {
       const target = scene.activeModel;
       if (!target) {
@@ -10586,6 +10642,9 @@ export default function Home() {
   // click toggles a parity bit and applies a negative-scale transform — the GPU
   // renders the flip immediately. On exit we run one combined bake against the
   // accumulated parity bits and reset the scale to positive.
+  // A brush stroke over faces longer than the brush splits them and replaces the mesh.
+  useMeshSmoothingGeometryReplacement(scene);
+
   const mirror = useMirrorManager({
     scene,
     transformMgr,
@@ -11204,6 +11263,7 @@ export default function Home() {
             selectedTintStrength={effectiveSelectedTintStrengthForScene}
             supportsRef={supportsRef}
             supportDragGroupRef={supportDragGroupRef}
+            printingPlateSupports={printingPlateSupports}
             holdSupportDragDelta={holdSupportDragDeltaUntilSupportSync}
             supportDragTransactionId={supportDragTransactionId}
             customPrepareLassoSelection={{
@@ -11388,9 +11448,9 @@ export default function Home() {
             printingPreviewTargetResolution={printingPreviewTargetResolution}
             activePrinterProfile={activePrinterProfile}
             printingPreviewVisualTransform={printingPreviewVisualTransform}
-            models={printingScrubPreviewModels}
-            supportDragGroupRef={supportDragGroupRef}
-            supportRenderRefreshNonce={supportRenderRefreshNonce}
+            models={printingScrubScope.models}
+            supportGroupRef={printingScrubSupportGroupRef}
+            supportVersion={printingScrubSupportVersion}
             printingPreviewScrubUpscaleTransform={printingPreviewScrubUpscaleTransform}
             printingPreviewPngUrlForDisplay={printingPreviewPngUrlForDisplay}
             isPrintingPngLoaded={isPrintingPngLoaded}

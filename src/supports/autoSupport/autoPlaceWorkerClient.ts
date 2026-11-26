@@ -20,7 +20,7 @@ import { SUPPORT_TYPES, type SupportCollectionKey } from '../supportTypeRegistry
 import type { SupportState } from '../types';
 import { commitAutoPlacePlan, logAutoPlaceTimings, runAutoPlace } from './autoPlace';
 import * as THREE from 'three';
-import { getModelMesh } from './meshStore';
+import { getModelMesh, getModelSourceMesh } from './meshStore';
 import { resolvedSizingBandsForRun } from './parameterSizing';
 import type { AutoSupportSettings } from './settings';
 import type { AutoPlaceResult, AutoSupportPlan } from './types';
@@ -174,15 +174,18 @@ const encodeMeshForWorker = (
     targetModelId: string,
     mesh: THREE.Mesh | null | undefined,
 ): { mesh?: SerializedModelMesh; meshKey?: string } => {
-    if (!mesh) {
+    // Plan and place on the source mesh, never the display mesh: the latter may
+    // be decimated or AO-baked and must not change collision or contact data.
+    const sourceMesh = getModelSourceMesh(targetModelId) ?? mesh;
+    if (!sourceMesh) {
         confirmedMeshKeys.delete(targetModelId);
         return {};
     }
-    const meshKey = modelMeshKey(mesh);
+    const meshKey = modelMeshKey(sourceMesh);
     if (confirmedMeshKeys.get(targetModelId) === meshKey) {
         return { mesh: undefined, meshKey };
     }
-    const serialized = serializeModelMesh(mesh);
+    const serialized = serializeModelMesh(sourceMesh);
     confirmedMeshKeys.set(targetModelId, meshKey);
     return { mesh: serialized, meshKey };
 };

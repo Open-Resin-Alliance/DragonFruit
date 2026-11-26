@@ -25,15 +25,15 @@ import {
   computeVoxelResolution,
 } from '@/utils/geometryScaling';
 import {
-  hollowApplyFromCapturedSource,
+  applyHollowSession,
   hollowFromGeometry,
-  hollowPreviewFromCapturedSource,
+  openHollowSession,
+  previewHollowSession,
   selectRemovedVoxelsInPolygon,
-  stageHollowPreviewSource,
   type HollowOptions,
   type HollowReport,
 } from '@/utils/meshHollowing';
-import { centerCavityPositions } from '@/features/hollowing/cavityCentering';
+import { centerCavityPositions, uncenterCavityPositions } from '@/features/hollowing/cavityCentering';
 import { getRotationQuatTuple, resolveBlockedVoxelValidity } from '@/features/mesh-modifiers/hollowingGrid';
 import { toPersistedHolePunchPlacements } from '@/features/hole-punching/holePunchPersistence';
 import type { GeometryWithBounds } from '@/hooks/useStlGeometry';
@@ -286,13 +286,13 @@ export function useHollowingManager({
           rotationQuat: [applyQuat.x, applyQuat.y, applyQuat.z, applyQuat.w],
         };
         const sourceGeometryKey = buildGeometryVersionKey(sourceGeometry);
-        const staged = await stageHollowPreviewSource(
+        const sessionId = await openHollowSession(
           sourceGeometry,
           `${activeModel.id}::${sourceGeometryKey}`,
         );
 
-        const result = staged
-          ? await hollowApplyFromCapturedSource(options)
+        const result = sessionId
+          ? await applyHollowSession(sessionId, options)
           : await hollowFromGeometry(sourceGeometry, options);
         if (!result) {
           deps.current.showOperationError(hollowingDesktopOnlyMessage(_));
@@ -631,7 +631,7 @@ export function useHollowingManager({
         openFaceSelected: nextShellOpenFaceSelected,
       },
     }, { historyDescription: HOLLOWING_SETTINGS_LABEL, merge: true });
-  }, [blockedHollowVoxelIndices, hollowingState.mode, hollowingState.openFace, hollowingState.voxelSizeMm, isShellOpenFaceSelected, deps.current.persistActiveModelModifiers, rememberBakedHollowing, scene.activeModel]);
+  }, [blockedHollowVoxelIndices, hollowingEditMode, hollowingState.mode, hollowingState.openFace, hollowingState.shellThicknessMm, hollowingState.voxelSizeMm, isShellOpenFaceSelected, deps.current.persistActiveModelModifiers, rememberBakedHollowing, scene.activeModel]);
 
   const isHollowingApplied = React.useMemo(() => {
     const modifier = scene.activeModel?.meshModifiers?.hollowing;
@@ -1096,15 +1096,15 @@ export function useHollowingManager({
 
     hollowPreviewWarmupKeyRef.current = previewKey;
     try {
-      const staged = await stageHollowPreviewSource(
+      const sessionId = await openHollowSession(
         sourceGeometry,
         `${activeModel.id}::${sourceGeometryKey}`,
       );
-      if (!staged) {
+      if (!sessionId) {
         return;
       }
 
-      const result = await hollowPreviewFromCapturedSource(options);
+      const result = await previewHollowSession(sessionId, options);
       if (!result) {
         return;
       }
@@ -1196,18 +1196,18 @@ export function useHollowingManager({
         return;
       }
 
-      const staged = await stageHollowPreviewSource(
+      const sessionId = await openHollowSession(
         sourceGeometry,
         `${activeModel.id}::${sourceGeometryKey}`,
       );
-      if (!staged) {
+      if (!sessionId) {
         if (notifyUnavailable) {
           deps.current.showOperationError(hollowingPreviewDesktopOnlyMessage(_));
         }
         return;
       }
 
-      const result = await hollowPreviewFromCapturedSource(options);
+      const result = await previewHollowSession(sessionId, options);
       if (!result) {
         if (notifyUnavailable) {
           deps.current.showOperationError(hollowingPreviewDesktopOnlyMessage(_));
@@ -1363,8 +1363,12 @@ export function useHollowingManager({
       );
       if (view.length !== hollowing.cavityPositionCount * 3) continue;
 
-      const positions = new Float32Array(view.length);
-      positions.set(view);
+      // The persisted cavity is centered; the model geometry it is drawn with may
+      // not be (a model hollowed in this session keeps its raw frame).
+      const modelGeometry = model.geometry.geometry;
+      if (!modelGeometry.boundingBox) modelGeometry.computeBoundingBox();
+      const modelCenter = modelGeometry.boundingBox?.getCenter(new THREE.Vector3()) ?? new THREE.Vector3();
+      const positions = uncenterCavityPositions(view, modelCenter);
       const cavityGeometry = new THREE.BufferGeometry();
       cavityGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       cavityGeometry.computeVertexNormals();
@@ -1522,9 +1526,13 @@ export function useHollowingManager({
     // container pixels -> point-in-polygon); see meshHollowing.ts / hollowing.rs.
     const cameraProjection = helpers.getCameraProjection?.();
     if (cameraProjection) {
-      const { options } = buildHollowPreviewRequest(activeModel);
+      const { sourceGeometry, sourceGeometryKey, options } = buildHollowPreviewRequest(activeModel);
       try {
-        const removedIndices = await selectRemovedVoxelsInPolygon({
+        const sessionId = await openHollowSession(
+          sourceGeometry,
+          `${activeModel.id}::${sourceGeometryKey}`,
+        );
+        const removedIndices = sessionId ? await selectRemovedVoxelsInPolygon(sessionId, {
           polygon: polygon.map((point) => [point.x, point.y] as [number, number]),
           viewProj: cameraProjection.viewProj,
           rectWidth: cameraProjection.rectWidth,
@@ -1551,7 +1559,7 @@ export function useHollowingManager({
             activeModel.transform.position.z,
           ],
           options,
-        });
+        }) : null;
         if (removedIndices) {
           for (let i = 0; i < removedIndices.length; i += 1) {
             selected.push(String(removedIndices[i]));
