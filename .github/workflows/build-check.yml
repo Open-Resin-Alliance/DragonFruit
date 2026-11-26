@@ -39,8 +39,18 @@ concurrency:
 
 jobs:
   build:
-    name: Next.js build
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os == 'macos-latest' && 'Next.js build (macOS cache)' || 'Next.js build' }}
+    # The macOS leg is there for its cache, not as a gate. A pull request can only
+    # restore caches from its own merge ref and its base branch, and nothing on
+    # dev/main wrote a `next-macOS-*` entry: warm-rust-cache.yml builds the frontend
+    # on macOS but only runs for Rust changes, and release.yml only on a version
+    # bump. So every macOS build check started Next from nothing (PR #803: 70 s).
+    # Pull requests skip this leg, since their macOS check already builds and saves.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ github.event_name == 'push' && fromJSON('["ubuntu-latest", "macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
     timeout-minutes: 20
     steps:
       - name: Checkout
