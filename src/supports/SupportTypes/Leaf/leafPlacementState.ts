@@ -1,5 +1,5 @@
 import { createPlacementStore, usePlacementStoreState } from '../../interaction/shared/placement/placementStore';
-import { hostSnapTargetEq, hoverPositionEq, type HostSnapTarget } from '../../interaction/shared/placement/placementComparators';
+import { hostSnapTargetEq, hoverPositionEq, vecEq, type HostSnapTarget } from '../../interaction/shared/placement/placementComparators';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import type { Vec3 } from '../../types';
 
@@ -37,6 +37,12 @@ const initialState: LeafPlacementState = {
     junctionHubId: null,
     junctionHubIsNew: null,
 };
+
+function vec3ExactEq(a: Vec3 | null, b: Vec3 | null): boolean {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    return vecEq(a, b);
+}
 
 const store = createPlacementStore(initialState);
 
@@ -94,15 +100,24 @@ export const leafPlacementStore = {
         store.write({ ...state, junctionHubIsNew: null });
     },
 
-    /** Partial update where a null argument means "leave this field alone". */
+    /** Updates the live fanning tip/normal, clearing to `null` when passed `null` and preserving `modelId` when omitted. */
     updateFanningTip(tipPosition: Vec3 | null, surfaceNormal: Vec3 | null, modelId?: string) {
         const state = store.read();
-        const next = { ...state };
-        if (tipPosition !== null) next.tipPosition = tipPosition;
-        if (surfaceNormal !== null) next.surfaceNormal = surfaceNormal;
-        if (modelId !== undefined && modelId !== null) next.modelId = modelId;
+        const nextModelId = modelId !== undefined && modelId !== null ? modelId : state.modelId;
+        if (
+            vec3ExactEq(state.tipPosition, tipPosition)
+            && vec3ExactEq(state.surfaceNormal, surfaceNormal)
+            && state.modelId === nextModelId
+        ) {
+            return;
+        }
 
-        store.write(next);
+        store.write({
+            ...state,
+            tipPosition,
+            surfaceNormal,
+            modelId: nextModelId,
+        });
     },
 
     setTip(tipPosition: Vec3, surfaceNormal: Vec3, modelId: string, placementSurface?: PlacementSurface) {

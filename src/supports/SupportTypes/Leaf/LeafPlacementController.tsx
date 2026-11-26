@@ -24,7 +24,8 @@ import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearest
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
 import { previewVecKey, previewNormalKey, quantizePreviewValue } from '../shared/previewSignature';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
-import { findClosestMeshToPoint, calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
+import { findClosestMeshToPoint } from '../../PlacementLogic/PlacementUtils';
+import { resolveLeafPlacementMeshHit, syncSproutTipFromRaycast } from './leafFanningRaycast';
 import { markPlacementSurface } from '../../PlacementLogic/placementSurface';
 import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
 
@@ -199,43 +200,19 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
 
         setPickRayFromCamera(raycaster, pointer, camera);
 
-        let currentTipPos = tipPosition;
-        let currentNormal = surfaceNormal;
+        let finalTipPos = snap.tipPosition;
+        let finalNormal = snap.surfaceNormal;
 
         if (liveStage === 'awaitingSproutTip') {
-            const modelMeshes = modelMeshesRef.current;
-            if (modelMeshes.length > 0) {
-                const intersects = raycaster.intersectObjects(modelMeshes, false);
-                if (intersects.length > 0) {
-                    let hit = intersects[0];
-                    const { clipLower: cl, clipUpper: cu } = getClipBounds();
-                    const isClipped = (cu != null && hit.point.z > cu) || (cl != null && hit.point.z < cl);
-                    if (isClipped) {
-                        let fallback: THREE.Intersection | null = null;
-                        for (let i = 1; i < intersects.length; i++) {
-                            const h = intersects[i];
-                            if (cu != null && h.point.z > cu) continue;
-                            if (cl != null && h.point.z < cl) continue;
-                            fallback = h;
-                            break;
-                        }
-                        if (fallback) hit = fallback;
-                        else hit = null as any;
-                    }
-                    if (hit) {
-                        const nextTip = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
-                        const nextNormal = calculateSmoothedNormal(hit);
-                        currentTipPos = nextTip;
-                        currentNormal = nextNormal;
-                        const hitModelId = hit.object.userData?.modelId;
-                        leafPlacementStore.updateFanningTip(nextTip, nextNormal, typeof hitModelId === 'string' ? hitModelId : undefined);
-                    }
-                }
-            }
+            const { clipLower, clipUpper } = getClipBounds();
+            const synced = syncSproutTipFromRaycast(raycaster, modelMeshesRef.current, {
+                placementSurface: snap.placementSurface,
+                clipLower,
+                clipUpper,
+            });
+            finalTipPos = synced.tipPosition;
+            finalNormal = synced.surfaceNormal;
         }
-
-        const finalTipPos = currentTipPos as Vec3 | null;
-        const finalNormal = currentNormal as Vec3 | null;
 
         let knotPos: Vec3 | null = null;
         let segmentId = 'free';
@@ -367,36 +344,14 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 }
 
                 if (!hoveredSnapResolved) {
-                    const modelMeshes = modelMeshesRef.current;
-
-                    if (modelMeshes.length > 0) {
-                        const intersects = raycaster.intersectObjects(modelMeshes, false);
-                        if (intersects.length > 0) {
-                            let hit = intersects[0];
-
-                            // Skip hits in the clipped (hidden) zone to find the
-                            // visible inner wall in cross-section view.
-                            const { clipLower: cl, clipUpper: cu } = getClipBounds();
-                            const isClipped =
-                              (cu != null && hit.point.z > cu) ||
-                              (cl != null && hit.point.z < cl);
-                            if (isClipped) {
-                                let fallback: THREE.Intersection | null = null;
-                                for (let i = 1; i < intersects.length; i++) {
-                                    const h = intersects[i];
-                                    if (cu != null && h.point.z > cu) continue;
-                                    if (cl != null && h.point.z < cl) continue;
-                                    fallback = h;
-                                    break;
-                                }
-                                if (fallback) hit = fallback;
-                                else hit = null as any;
-                            }
-
-                            if (hit) {
-                                knotPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
-                            }
-                        }
+                    const { clipLower, clipUpper } = getClipBounds();
+                    const hit = resolveLeafPlacementMeshHit(raycaster, modelMeshesRef.current, {
+                        placementSurface: snap.placementSurface,
+                        clipLower,
+                        clipUpper,
+                    });
+                    if (hit) {
+                        knotPos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
                     }
 
                     if (!knotPos && finalTipPos) {
@@ -417,7 +372,10 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
         }
 
         if (!finalTipPos || !finalNormal) {
-            lastPreviewSignatureRef.current = null;
+            if (lastPreviewSignatureRef.current !== 'leaf:clear') {
+                lastPreviewSignatureRef.current = 'leaf:clear';
+                leafPlacementStore.setPreviewData(null);
+            }
             return;
         }
 
@@ -625,7 +583,9 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
 
             // Click 2+ (Sprout Leaf)
             if (stage === 'awaitingSproutTip') {
-                if (!snap.junctionHubId || !tipPosition || !surfaceNormal) return;
+                const liveTipPos = snap.tipPosition;
+                const liveNormal = snap.surfaceNormal;
+                if (!snap.junctionHubId || !liveTipPos || !liveNormal) return;
                 const parentKnot = getSnapshot().knots[snap.junctionHubId];
                 if (!parentKnot) return;
                 const hostDiameterMm = parentKnot.diameter;
@@ -634,29 +594,29 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 const settings = getSettings();
                 const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
                 const v = new THREE.Vector3(
-                    tipPosition.x - parentKnot.pos.x,
-                    tipPosition.y - parentKnot.pos.y,
-                    tipPosition.z - parentKnot.pos.z
+                    liveTipPos.x - parentKnot.pos.x,
+                    liveTipPos.y - parentKnot.pos.y,
+                    liveTipPos.z - parentKnot.pos.z
                 );
                 const angleFromUpDeg = v.lengthSq() < 0.000001 ? 0 : THREE.MathUtils.radToDeg(v.angleTo(new THREE.Vector3(0, 0, 1)));
 
                 const epsilonZ = 0.0001;
-                if (parentKnot.pos.z > tipPosition.z + epsilonZ) return;
+                if (parentKnot.pos.z > liveTipPos.z + epsilonZ) return;
                 if (angleFromUpDeg > maxAngleDeg) return;
 
                 const { leaf } = buildLeafData({
-                    tipPos: tipPosition,
-                    surfaceNormal,
-                    modelId,
+                    tipPos: liveTipPos,
+                    surfaceNormal: liveNormal,
+                    modelId: snap.modelId,
                     parentKnot,
                     hostDiameterMm,
-                    mesh: resolveTipMesh(tipPosition),
+                    mesh: resolveTipMesh(liveTipPos),
                 });
                 // The built leaf stamps its own `typeId`, so the controller reads
                 // it back rather than restating the name: the surface mark and the
                 // history action below both name the type the leaf declares.
                 const leafTypeId = resolveSupportTypeIdOf(leaf) ?? LEAF_PLACEMENT_OWNER;
-                const markedLeaf = markPlacementSurface(leafTypeId, leaf, placementSurface);
+                const markedLeaf = markPlacementSurface(leafTypeId, leaf, snap.placementSurface);
 
                 // Reload pattern: create new knot at the same position and lock junctionHubId to it
                 const newParentKnotId = uuidv4();
@@ -745,7 +705,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     addKnot(reloadKnot);
                     leafPlacementStore.setJunctionHub(reloadKnotId, true);
                     leafPlacementStore.setStage('awaitingSproutTip');
-                    leafPlacementStore.updateFanningTip(null as any, null as any);
+                    leafPlacementStore.updateFanningTip(null, null);
                     leafPlacementStore.finalize();
                 } else {
                     leafPlacementStore.finalize();
