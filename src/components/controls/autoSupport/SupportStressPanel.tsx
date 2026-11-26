@@ -673,55 +673,60 @@ function SupportStressPanelImpl({
     const refs = captureStructuralRefs(snapshot);
     const pose = poseKey ?? null;
     setAnalysis({ running: true, phase: 'Preparing model', done: 0, total: 1, error: null });
-    try {
-      const result = await analyzeSupportState(
-        activeModelId,
-        islandsRef.current ?? [],
-        {
-          poseDragMomentMm3,
-          toppleCoverageNeeded,
-          areaPerSupportMm2: getSettings().autoSupport.areaPerSupportMm2,
-        },
-        (progress) => {
-          if (analysisSeqRef.current !== seq) return;
-          setAnalysis({
-            running: true,
-            phase: progress.phase,
-            done: progress.done,
-            total: progress.total,
-            error: null,
-          });
-        },
-      );
-      if (analysisSeqRef.current !== seq) return;
-      const currentRefs = captureStructuralRefs(getSnapshot());
-      if (!sameStructuralRefs(currentRefs, refs) || (poseKey ?? null) !== pose) {
-        // A newer edit or pose change already owns the panel; its result lands.
-        return;
-      }
-      lastSolvedRefsRef.current = currentRefs;
-      const nextReport: SupportFrameStressReport = reinforcedCount !== undefined
-        ? {
-            ...result.frame,
-            reinforcedCount: (lastOwnReportRef.current?.reinforcedCount ?? 0) + reinforcedCount,
-          }
-        : result.frame;
-      lastOwnReportRef.current = nextReport;
-      setModelFrameStress(activeModelId, nextReport);
-      setModelPrintability(activeModelId, result.printability);
-      if (result.topple) setModelToppleRisk(activeModelId, result.topple);
-      else clearModelToppleRisk(activeModelId);
-      setAnalysis({ running: false, phase: '', done: 0, total: 0, error: null });
-    } catch (error) {
-      if (analysisSeqRef.current !== seq) return;
+    // Keep the async failure path out of a try/catch: the compiler skips a
+    // component that owns one, which would drop the whole panel's memoisation.
+    const outcome = await analyzeSupportState(
+      activeModelId,
+      islandsRef.current ?? [],
+      {
+        poseDragMomentMm3,
+        toppleCoverageNeeded,
+        areaPerSupportMm2: getSettings().autoSupport.areaPerSupportMm2,
+      },
+      (progress) => {
+        if (analysisSeqRef.current !== seq) return;
+        setAnalysis({
+          running: true,
+          phase: progress.phase,
+          done: progress.done,
+          total: progress.total,
+          error: null,
+        });
+      },
+    ).then(
+      (result) => ({ result, error: null as unknown }),
+      (error: unknown) => ({ result: null, error }),
+    );
+    if (analysisSeqRef.current !== seq) return;
+    if (!outcome.result) {
       setAnalysis({
         running: false,
         phase: '',
         done: 0,
         total: 0,
-        error: error instanceof Error ? error.message : String(error),
+        error: outcome.error instanceof Error ? outcome.error.message : String(outcome.error),
       });
+      return;
     }
+    const result = outcome.result;
+    const currentRefs = captureStructuralRefs(getSnapshot());
+    if (!sameStructuralRefs(currentRefs, refs) || (poseKey ?? null) !== pose) {
+      // A newer edit or pose change already owns the panel; its result lands.
+      return;
+    }
+    lastSolvedRefsRef.current = currentRefs;
+    const nextReport: SupportFrameStressReport = reinforcedCount !== undefined
+      ? {
+          ...result.frame,
+          reinforcedCount: (lastOwnReportRef.current?.reinforcedCount ?? 0) + reinforcedCount,
+        }
+      : result.frame;
+    lastOwnReportRef.current = nextReport;
+    setModelFrameStress(activeModelId, nextReport);
+    setModelPrintability(activeModelId, result.printability);
+    if (result.topple) setModelToppleRisk(activeModelId, result.topple);
+    else clearModelToppleRisk(activeModelId);
+    setAnalysis({ running: false, phase: '', done: 0, total: 0, error: null });
   }, [activeModelId, poseKey, poseDragMomentMm3, toppleCoverageNeeded]);
 
   // Evaluate the model, pose, or scan on the worker; support edits go through

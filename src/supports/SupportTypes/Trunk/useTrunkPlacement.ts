@@ -255,9 +255,13 @@ export function useTrunkPlacementV2() {
     const previewDataRef = useRef(previewData);
     const previewErrorRef = useRef(previewError);
     const previewWarningRef = useRef(previewWarning);
-    previewDataRef.current = previewData;
-    previewErrorRef.current = previewError;
-    previewWarningRef.current = previewWarning;
+    // Mirror after commit, not during render: the compiler treats a ref write
+    // in the render body as impure and skips the whole hook.
+    useEffect(() => {
+        previewDataRef.current = previewData;
+        previewErrorRef.current = previewError;
+        previewWarningRef.current = previewWarning;
+    }, [previewData, previewError, previewWarning]);
     const { isPlacementHardDisabled } = useInteractionStatus();
     const hoverFrameRef = useRef<number | null>(null);
     const latestHoverRef = useRef<THREE.Intersection | null>(null);
