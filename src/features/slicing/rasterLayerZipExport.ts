@@ -1383,53 +1383,6 @@ function buildWorldTriangles(models: LoadedModel[]): WorldTriangle[] {
 }
 
 /**
- * Transform unique vertices of an indexed geometry once (`matrix * (v - center)`),
- * avoiding 3-6x redundant matrix multiplications per shared vertex while keeping
- * bit-identical f32 coordinates.
- */
-function transformIndexedVerticesOnce(
-  position: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
-  center: THREE.Vector3,
-  matrix: THREE.Matrix4,
-): Float32Array {
-  const vertexCount = position.count;
-  const out = new Float32Array(vertexCount * 3);
-  const cx = center.x;
-  const cy = center.y;
-  const cz = center.z;
-  const e = matrix.elements;
-  const e0 = e[0], e1 = e[1], e2 = e[2];
-  const e4 = e[4], e5 = e[5], e6 = e[6];
-  const e8 = e[8], e9 = e[9], e10 = e[10];
-  const e12 = e[12], e13 = e[13], e14 = e[14];
-
-  if (position instanceof THREE.BufferAttribute && position.itemSize === 3 && position.array instanceof Float32Array) {
-    const src = position.array;
-    for (let i = 0; i < vertexCount; i += 1) {
-      const o = i * 3;
-      const x = src[o] - cx;
-      const y = src[o + 1] - cy;
-      const z = src[o + 2] - cz;
-      out[o] = e0 * x + e4 * y + e8 * z + e12;
-      out[o + 1] = e1 * x + e5 * y + e9 * z + e13;
-      out[o + 2] = e2 * x + e6 * y + e10 * z + e14;
-    }
-    return out;
-  }
-
-  for (let i = 0; i < vertexCount; i += 1) {
-    const x = position.getX(i) - cx;
-    const y = position.getY(i) - cy;
-    const z = position.getZ(i) - cz;
-    const o = i * 3;
-    out[o] = e0 * x + e4 * y + e8 * z + e12;
-    out[o + 1] = e1 * x + e5 * y + e9 * z + e13;
-    out[o + 2] = e2 * x + e6 * y + e10 * z + e14;
-  }
-  return out;
-}
-
-/**
  * Appends one 3MF body as model geometry, in the merged model's own space: the
  * bodies were processed in that space, so the same centre subtraction and model
  * matrix place them exactly where the merged mesh would.
@@ -1447,23 +1400,6 @@ function appendBodyTrianglesInModelSpace(
   const position = geometry.getAttribute('position');
   const index = geometry.getIndex();
   if (!position) return;
-
-  if (index) {
-    const idx = index.array;
-    const verts = transformIndexedVerticesOnce(position, center, matrix);
-    for (let i = 0; i + 2 < idx.length; i += 3) {
-      const a = Number(idx[i]) * 3;
-      const b = Number(idx[flipWinding ? i + 2 : i + 1]) * 3;
-      const c = Number(idx[flipWinding ? i + 1 : i + 2]) * 3;
-      collector.pushTriangle(
-        verts[a], verts[a + 1], verts[a + 2],
-        verts[b], verts[b + 1], verts[b + 2],
-        verts[c], verts[c + 1], verts[c + 2],
-        tank,
-      );
-    }
-    return;
-  }
 
   const v0 = new THREE.Vector3();
   const v1 = new THREE.Vector3();
@@ -1483,11 +1419,21 @@ function appendBodyTrianglesInModelSpace(
       : collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z, tank)
   );
 
-  for (let i = 0; i + 2 < position.count; i += 3) {
-    readVertex(i, v0);
-    readVertex(i + 1, v1);
-    readVertex(i + 2, v2);
-    push();
+  if (index) {
+    const idx = index.array;
+    for (let i = 0; i + 2 < idx.length; i += 3) {
+      readVertex(Number(idx[i]), v0);
+      readVertex(Number(idx[i + 1]), v1);
+      readVertex(Number(idx[i + 2]), v2);
+      push();
+    }
+  } else {
+    for (let i = 0; i + 2 < position.count; i += 3) {
+      readVertex(i, v0);
+      readVertex(i + 1, v1);
+      readVertex(i + 2, v2);
+      push();
+    }
   }
 }
 
@@ -1513,48 +1459,6 @@ function appendModelTrianglesInRange(
   const index = geometry.getIndex();
   if (!position) return;
 
-  if (index) {
-    const idx = index.array;
-    const triStart = startTri * 3;
-    const triEnd = Math.min(endTri * 3, idx.length);
-    if (triStart >= triEnd) return;
-    // Transform unique vertices once when iterating more corners than unique vertices.
-    if (triEnd - triStart > position.count) {
-      const verts = transformIndexedVerticesOnce(position, center, matrix);
-      for (let i = triStart; i + 2 < triEnd; i += 3) {
-        const a = Number(idx[i]) * 3;
-        const b = Number(idx[flipWinding ? i + 2 : i + 1]) * 3;
-        const c = Number(idx[flipWinding ? i + 1 : i + 2]) * 3;
-        collector.pushTriangle(
-          verts[a], verts[a + 1], verts[a + 2],
-          verts[b], verts[b + 1], verts[b + 2],
-          verts[c], verts[c + 1], verts[c + 2],
-          tank,
-        );
-      }
-      return;
-    }
-    const v0 = new THREE.Vector3();
-    const v1 = new THREE.Vector3();
-    const v2 = new THREE.Vector3();
-    const readVertex = (vertexIndex: number, target: THREE.Vector3) => {
-      target.set(
-        position.getX(vertexIndex) - center.x,
-        position.getY(vertexIndex) - center.y,
-        position.getZ(vertexIndex) - center.z,
-      );
-      target.applyMatrix4(matrix);
-      return target;
-    };
-    for (let i = triStart; i + 2 < triEnd; i += 3) {
-      readVertex(Number(idx[i]), v0);
-      readVertex(Number(idx[flipWinding ? i + 2 : i + 1]), v1);
-      readVertex(Number(idx[flipWinding ? i + 1 : i + 2]), v2);
-      collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z, tank);
-    }
-    return;
-  }
-
   const v0 = new THREE.Vector3();
   const v1 = new THREE.Vector3();
   const v2 = new THREE.Vector3();
@@ -1569,13 +1473,30 @@ function appendModelTrianglesInRange(
     return target;
   };
 
-  const triStart = startTri * 3;
-  const triEnd = Math.min(endTri * 3, position.count);
-  for (let i = triStart; i + 2 < triEnd; i += 3) {
-    readVertex(i, v0);
-    readVertex(flipWinding ? i + 2 : i + 1, v1);
-    readVertex(flipWinding ? i + 1 : i + 2, v2);
-    collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z, tank);
+  const push = () =>
+    flipWinding
+      ? collector.pushTriangle(v0.x, v0.y, v0.z, v2.x, v2.y, v2.z, v1.x, v1.y, v1.z, tank)
+      : collector.pushTriangle(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z, tank);
+
+  if (index) {
+    const idx = index.array;
+    const triStart = startTri * 3;
+    const triEnd = Math.min(endTri * 3, idx.length);
+    for (let i = triStart; i < triEnd; i += 3) {
+      readVertex(Number(idx[i]), v0);
+      readVertex(Number(idx[i + 1]), v1);
+      readVertex(Number(idx[i + 2]), v2);
+      push();
+    }
+  } else {
+    const triStart = startTri * 3;
+    const triEnd = Math.min(endTri * 3, position.count);
+    for (let i = triStart; i < triEnd; i += 3) {
+      readVertex(i, v0);
+      readVertex(i + 1, v1);
+      readVertex(i + 2, v2);
+      push();
+    }
   }
 }
 

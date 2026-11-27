@@ -63,8 +63,8 @@ All transform/vector numbers must be finite IEEE 754 values.
 Everything that indexes a mesh in this format is an index into **one order**, and the order
 survives every hop of the pipeline. State it once; do not re-derive it per consumer.
 
-- Rust hands geometry to TypeScript in `IndexedMesh.triangles` order
-  (`dragonfruit-mesh-core`, `mesh.rs`): indexed `DFMX` bodies (`write_indexed_body`) and the
+- Rust hands geometry to TypeScript as a corner soup in `IndexedMesh.triangles` order
+  (`dragonfruit-mesh-core`, `mesh.rs`): `DFMX` bodies, the writer's `write_soup` and the
   `MESH` chunk's STL bytes all carry that order unchanged. A `MESH` payload is the scene
   geometry translated by `-geometry.center`; nothing else about it is reordered.
 - A classification boundary (`model_triangle_count`), the baked-occlusion attribute

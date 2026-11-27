@@ -1176,8 +1176,8 @@ the import, wrong twice over: they paint a smooth surface over the triangulation
 the file describes, so a scan's facets and an imported edge both come out soft, and
 they disagreed with the geometry a repair pass hands back — the renderer recomputes
 *that* per face, so the same model changed its shading the moment it was repaired.
-The viewport shades each triangle with its own geometric face normal via GPU
-`flatShading` over the indexed DFMX v3 mesh (`dfmx_v3_preserves_indexed_vertices_and_triangles_bit_exactly`). The
+The encoder writes each triangle's own geometric normal onto its three corners
+again, which `imported_normals_are_each_face_own_geometric_normal` pins. The
 ambient-occlusion bake is untouched: it derives its own welded normals for the probe
 fan (`vertex_occlusion`), and it was the only consumer that ever wanted an average.
 

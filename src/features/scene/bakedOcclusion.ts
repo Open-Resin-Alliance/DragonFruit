@@ -130,25 +130,17 @@ export async function bakeOcclusionForGeometry(
   const token = meshTokenForGeometry(geometry);
   if (token) {
     try {
-      const requestPerVertex = indexAtRequest !== null;
       const byToken = await invoke<ArrayBuffer | Uint8Array | number[]>(
         'bake_vertex_occlusion',
-        {
-          meshToken: token.token,
-          expectedCorners: cornerCount(geometry),
-          ...(requestPerVertex ? { expectedVertices: positions.count, perVertex: true } : {}),
-        },
+        { meshToken: token.token, expectedCorners: cornerCount(geometry) },
         { headers: {} },
       );
       const fromLoader = toCornerValues(byToken);
       if (fromLoader) {
-        if (geometry.getAttribute('position') !== positions) {
-          console.warn('[ao] geometry changed while its token bake was in flight; dropping the values');
-          return null;
-        }
-        const values = requestPerVertex
-          ? (fromLoader.length === positions.count ? fromLoader : null)
-          : mapCornerValuesToVertices(fromLoader, positions.count, null);
+        // The values are in the loader's mesh triangle order, which is this
+        // geometry's corner order (a range-loaded geometry is a soup; the BVH's index
+        // over one is the identity), so the mapping is the identity.
+        const values = mapCornerValuesToVertices(fromLoader, cornerCount(geometry), null);
         if (values) {
           const note = `[ao] baked via the loader's mesh (token ${token.token}, ${values.length} vertices)`;
           console.log(note);
@@ -351,7 +343,7 @@ export function meshTokenForGeometry(
 
 /** How many corners the bake's token request claims, for the native guard. */
 function cornerCount(geometry: THREE.BufferGeometry): number {
-  return geometry.getIndex()?.count ?? geometry.getAttribute('position')?.count ?? 0;
+  return geometry.getAttribute('position')?.count ?? 0;
 }
 
 /**

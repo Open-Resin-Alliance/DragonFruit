@@ -17,7 +17,6 @@
  * the WASM Manifold repair path.
  */
 import * as THREE from 'three';
-import { compactGeometryToIndexed } from './compactIndexedGeometry';
 import { loadTauriCore } from './tauriMeshBridge';
 import {
   openNativeMeshClient,
@@ -554,7 +553,6 @@ export function applyRepairedPositions(
   }
   geometry.deleteAttribute('position');
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  compactGeometryToIndexed(geometry);
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
 }

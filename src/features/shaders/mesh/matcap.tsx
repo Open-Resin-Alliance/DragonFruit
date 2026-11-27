@@ -99,7 +99,6 @@ export function MatcapMaterial({
       matcap={matcap}
       clippingPlanes={clippingPlanes}
       side={THREE.FrontSide}
-      flatShading
     />
   );
 }

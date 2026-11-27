@@ -1,9 +1,7 @@
 import * as THREE from 'three';
 import { base64ToBytes, bytesToBase64 } from '@/utils/base64';
-import { compactGeometryToIndexed } from '@/utils/compactIndexedGeometry';
-import { expandGeometryToTriangleSoup } from '@/utils/tauriMeshBridge';
 
-/** Capture a geometry's triangle-soup positions as a base64 snapshot (for history/undo). */
+/** Capture a geometry's position buffer as a base64 snapshot (for history/undo). */
 export function snapshotGeometryPositions(geometry: THREE.BufferGeometry): {
   sourcePositionsBase64: string;
   sourcePositionCount: number;
@@ -13,7 +11,9 @@ export function snapshotGeometryPositions(geometry: THREE.BufferGeometry): {
     throw new Error('Geometry has no position attribute.');
   }
 
-  const floatArray = expandGeometryToTriangleSoup(geometry);
+  const floatArray = position.array instanceof Float32Array
+    ? position.array
+    : new Float32Array(position.array);
   const bytes = new Uint8Array(
     floatArray.buffer,
     floatArray.byteOffset,
@@ -22,7 +22,7 @@ export function snapshotGeometryPositions(geometry: THREE.BufferGeometry): {
 
   return {
     sourcePositionsBase64: bytesToBase64(bytes),
-    sourcePositionCount: floatArray.length / 3,
+    sourcePositionCount: position.count,
   };
 }
 
@@ -56,7 +56,7 @@ export function geometryFromSnapshot(snapshot: {
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  compactGeometryToIndexed(geometry);
+  geometry.computeVertexNormals();
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   return geometry;

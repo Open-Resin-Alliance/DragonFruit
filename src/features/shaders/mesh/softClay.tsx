@@ -67,7 +67,7 @@ export function SoftClayMaterial({
       envMapIntensity={0.34}
       clippingPlanes={clippingPlanes}
       side={THREE.FrontSide}
-      flatShading={true}
+      flatShading={false}
       onBeforeCompile={(shader) => {
         shader.uniforms.uFakeAoStrength = { value: AO_STRENGTH };
         shader.uniforms.uFakeLightDir = { value: FAKE_LIGHT_DIRECTION.clone() };
