@@ -1,7 +1,7 @@
 import { VoxelFootprintBuilder, cellKey, footprintBounds, footprintToPoints, footprintX, footprintY, footprintZ, type VoxelFootprint } from '@/volumeAnalysis/Islands/voxelFootprint';
 import * as THREE from 'three';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
-import type { CandidatePoint } from './types';
+import type { CandidatePoint, PlacementNormalSynthesisMode } from './types';
 import {
     OVERHANG_SELF_SUPPORT_ANGLE_DEG,
     GRID_SPACING_MIN_FACTOR,
@@ -11,10 +11,46 @@ import {
     OVERHANG_GRID_MIN_SPAN_MM,
     INTERIOR_CAVITY_SPACING_SCALE,
 } from './constants';
-import type { AutoSupportSettings } from './settings';
+import { resolveEffectiveAutoNormalSynthesis, type AutoSupportSettings } from './settings';
 import { applyContactTipCaps } from './contactTipCap';
 import { isSupportBlockedContact } from './supportBlockers';
 import { activeSizingBand } from './parameterSizing';
+import { getSettings } from '../Settings/state';
+import {
+    synthesizePlacementNormal,
+    type PlacementNormalSynthesisOptions,
+    type PlacementNormalSynthesisResult,
+} from '../PlacementLogic/PlacementNormalSynthesis';
+
+const _gridSynthResult: PlacementNormalSynthesisResult = {
+    normal: new THREE.Vector3(),
+    regime: 'raw',
+    acceptedSphereTris: 0,
+};
+
+/** Build BVH placement normal synthesis options from an active mode, band tip diameter, and gated DevTools overrides. */
+export function buildPlacementNormalSynthesisOptions(
+    mode: PlacementNormalSynthesisMode,
+    contactDiameterMm: number,
+): PlacementNormalSynthesisOptions | undefined {
+    if (mode === 'raw') return undefined;
+    const appSettings = getSettings();
+    const devTools = appSettings.devToolsEnabled === true ? appSettings.devTools : undefined;
+    return {
+        mode,
+        contactRadiusMm: contactDiameterMm * 0.5,
+        ...(devTools
+            ? {
+                sampleRadiusScale: devTools.normalSampleRadiusScale,
+                flatThresholdDeg: devTools.normalFlatThresholdDeg,
+                ...(devTools.normalCreaseThresholdDeg > 0
+                    ? { creaseThresholdDeg: devTools.normalCreaseThresholdDeg }
+                    : {}),
+                deadbandScale: devTools.normalDeadbandScale,
+            }
+            : {}),
+    };
+}
 
 const FOOTPRINT_TOLERANCE_MM = 0.25;
 
@@ -928,6 +964,8 @@ export function generateGridCandidates(
     const bandTipDia = activeSizingBand(settings).tipContactDiameterMm;
     const targetInsetMm = computePerimeterInsetMm(bandTipDia);
     const extraLoopInsetMm = Math.max(0, targetInsetMm - SCAN_PERIMETER_BASE_INSET_MM);
+    const effective = resolveEffectiveAutoNormalSynthesis(settings);
+    const synthesisOpts = buildPlacementNormalSynthesisOptions(effective.mode, bandTipDia);
 
     const meshZ = (modelMinZ === undefined || baseWindowMm === undefined)
         ? meshWorldZBounds(mesh)
@@ -985,13 +1023,18 @@ export function generateGridCandidates(
 
         const emitPoint = (x: number, y: number, z: number, kind: 'grid' | 'fill', faceIndex?: number | null) => {
             if (z > anchorBandTop) return;
-            // The contact leans into the face it actually lands on; the
-            // region-wide normal is only the fallback (voxel sampler, blockers).
-            const tipNormal = (mesh && faceIndex != null ? faceNormalAt(mesh, faceIndex) : null) ?? surfaceNormal;
             // Support blockers: refuse contacts painted as nogo. Lattice and
             // ring points carry the sampler's face for free; voxel-fallback
             // points resolve it with one raycast. Empty mask → no raycasts.
             if (modelId && mesh && isSupportBlockedContact(modelId, mesh, x, y, z, faceIndex)) return;
+            // The contact leans into the face it actually lands on; the
+            // region-wide normal is only the fallback (voxel sampler, blockers).
+            const faceNormal = mesh && faceIndex != null ? faceNormalAt(mesh, faceIndex) : null;
+            let tipNormal = faceNormal ?? surfaceNormal;
+            if (mesh && faceIndex != null && faceNormal && synthesisOpts) {
+                const synth = synthesizePlacementNormal(mesh, { x, y, z }, faceNormal, synthesisOpts, _gridSynthResult);
+                tipNormal = { x: synth.normal.x, y: synth.normal.y, z: synth.normal.z };
+            }
             emittedForRegion++;
             candidates.push({
                 id: `${kind}-${island.id}-${x.toFixed(2)}-${y.toFixed(2)}`,

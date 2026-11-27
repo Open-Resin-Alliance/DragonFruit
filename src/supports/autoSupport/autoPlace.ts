@@ -26,17 +26,17 @@ import { quantizeToScale } from '@/utils/math';
  */
 const round2Mm = (v: number): number => quantizeToScale(v, 100);
 import type { ContactCone } from '../SupportPrimitives/ContactCone/types';
-import type { AttachmentKind, CandidatePoint, AutoPlaceResult, AutoPlaceStatus, AutoPlaceAnalytics, RejectReason, AutoSupportPlan, PlacementDiagnostics, FanLeafRefusal, ForestLedgerEntry, ForestReport, ForestTree, OrphanInfo, PlacementOutcomeKind, PlacementNormalSynthesisMode } from './types';
+import type { AttachmentKind, CandidatePoint, AutoPlaceResult, AutoPlaceStatus, AutoPlaceAnalytics, RejectReason, AutoSupportPlan, PlacementDiagnostics, FanLeafRefusal, ForestLedgerEntry, ForestReport, ForestTree, OrphanInfo, PlacementOutcomeKind } from './types';
 import { isLedgerKind } from './types';
 import { computeNormalSynthesisMetrics } from './normalSynthesisTelemetry';
 import type { Branch, Segment, SupportState, SupportOrigin, Vec3 } from '../types';
 import type { AutoSupportSettings, SizingPreset } from './settings';
 import type { AutoPlaceTimings } from './types';
-import { normalizeAutoSupportSettings, AUTO_SUPPORT_CONSTRAINTS, MIN_CONTACT_TIP_DIAMETER_MM } from './settings';
+import { normalizeAutoSupportSettings, resolveEffectiveAutoNormalSynthesis, AUTO_SUPPORT_CONSTRAINTS, MIN_CONTACT_TIP_DIAMETER_MM } from './settings';
 import { activeSizingBand, applySizingOverridesToSettings, estimateHostCount, TIP_CONTACT_MIN_SHAFT_RATIO } from './parameterSizing';
 import { candidateFromIsland, generateCandidates, deduplicateCandidates } from './candidateGeneration';
 import { applyContactTipCaps } from './contactTipCap';
-import { baseOverhangWindowMm, generateGridCandidates, meshWorldZBounds, shouldUseDensityGrid } from './gridPlacement';
+import { baseOverhangWindowMm, buildPlacementNormalSynthesisOptions, generateGridCandidates, meshWorldZBounds, shouldUseDensityGrid } from './gridPlacement';
 import { computeStabilizationAnchors } from './stabilization';
 import { computeMinimaReinforcementPoints } from './minimaReinforcement';
 import {
@@ -132,6 +132,11 @@ import type { BranchBuildInput, BranchBuildResult } from '../SupportTypes/Branch
 import { buildLeafData } from '../SupportTypes/Leaf/leafBuilder';
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
 import { calculateRawWorldNormal } from '../PlacementLogic/PlacementUtils';
+import {
+    synthesizePlacementNormal,
+    type PlacementNormalSynthesisOptions,
+    type PlacementNormalSynthesisResult,
+} from '../PlacementLogic/PlacementNormalSynthesis';
 import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
 import { addTargetedStressBraces, buildAutoBracedSnapshot, BRACE_CANOPY_KEEP_OUT_MM, type StressBraceRequest } from '../autoBracing/autoBrace';
 import { buildKickstandData } from '../SupportTypes/Kickstand/kickstandBuilder';
@@ -534,9 +539,16 @@ function makeResult(
  * moment a hole was punched through it, because the upward ray escaped and
  * the downward fallback landed on the cavity floor with a flipped normal.
  */
+const _surfaceSynthResult: PlacementNormalSynthesisResult = {
+    normal: new THREE.Vector3(),
+    regime: 'raw',
+    acceptedSphereTris: 0,
+};
+
 function resolveSurfaceNormal(
     tipPos: CandidatePoint['tipPos'],
     mesh: THREE.Mesh | undefined,
+    synthesisOptions?: PlacementNormalSynthesisOptions,
 ): { point: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number }; hit: boolean } {
     if (!mesh) {
         return { point: tipPos, normal: { x: 0, y: 0, z: -1 }, hit: false };
@@ -577,9 +589,15 @@ function resolveSurfaceNormal(
     // Primary: upward ray from just below the tip (underside contact).
     const upHit = castFromDisc(1);
     if (upHit) {
+        const raw = calculateRawWorldNormal(upHit);
+        let normal = raw;
+        if (synthesisOptions && synthesisOptions.mode !== 'raw') {
+            const synth = synthesizePlacementNormal(mesh, upHit.point, raw, synthesisOptions, _surfaceSynthResult);
+            normal = { x: synth.normal.x, y: synth.normal.y, z: synth.normal.z };
+        }
         return {
             point: { x: upHit.point.x, y: upHit.point.y, z: upHit.point.z },
-            normal: calculateRawWorldNormal(upHit),
+            normal,
             hit: true,
         };
     }
@@ -588,10 +606,14 @@ function resolveSurfaceNormal(
     // so the support still grows away from the face.
     const downHit = castFromDisc(-1);
     if (downHit) {
-        const smoothed = calculateRawWorldNormal(downHit);
+        const raw = calculateRawWorldNormal(downHit);
+        // Synthesize on the outward normal (z > 0) BEFORE negating inward.
+        const outward = (synthesisOptions && synthesisOptions.mode !== 'raw')
+            ? synthesizePlacementNormal(mesh, downHit.point, raw, synthesisOptions, _surfaceSynthResult).normal
+            : raw;
         return {
             point: { x: downHit.point.x, y: downHit.point.y, z: downHit.point.z },
-            normal: { x: -smoothed.x, y: -smoothed.y, z: -smoothed.z },
+            normal: { x: -outward.x, y: -outward.y, z: -outward.z },
             hit: true,
         };
     }
@@ -1480,6 +1502,7 @@ function startContactCandidates(
     mesh: THREE.Mesh | undefined,
     modelId: string,
     areaPerSupportMm2: number,
+    synthesisOptions?: PlacementNormalSynthesisOptions,
 ): CandidatePoint[] {
     const points: Array<{ x: number; y: number }> = [{ x: island.contact.x, y: island.contact.y }];
     const voxels = island.contactVoxels;
@@ -1525,8 +1548,8 @@ function startContactCandidates(
         if (seen.has(key)) continue;
         seen.add(key);
         const normal = island.surfaceNormal ?? (mesh
-            ? closestSurfaceNormal(mesh, new THREE.Vector3(point.x, point.y, island.baseZ))
-                ?? resolveSurfaceNormal({ x: point.x, y: point.y, z: island.baseZ }, mesh).normal
+            ? closestSurfaceNormal(mesh, new THREE.Vector3(point.x, point.y, island.baseZ), synthesisOptions)
+                ?? resolveSurfaceNormal({ x: point.x, y: point.y, z: island.baseZ }, mesh, synthesisOptions).normal
             : { x: 0, y: 0, z: -1 });
         candidates.push({
             id: `start-${island.id}-${candidates.length}`,
@@ -1591,6 +1614,7 @@ function placeOneCandidate(
     preResolvedCandidates?: WeakSet<CandidatePoint>,
     deferUnstableRoutedTrunk = false,
     cavity?: CavityTester,
+    synthesisOptions?: PlacementNormalSynthesisOptions,
 ): { kind: PlacementOutcomeKind; draft: SupportState; rejectedReason?: RejectReason; preset?: 'detail' | 'structure' | 'anchor'; entityId?: string; stickCount?: number; fanRefusal?: FanLeafRefusal; mergeRefusal?: 'noHost' | 'rejected'; cavityFanRefusal?: string; gridFallback?: boolean } {
     const supportSettings = getSettings();
     const auto: Partial<AutoSupportSettings> = autoSettings ?? supportSettings.autoSupport ?? {};
@@ -1605,7 +1629,7 @@ function placeOneCandidate(
     const resolved = (preResolvedCandidates?.has(candidate)
         || (candidate.gridPoint && candidate.tipNormal && candidate.tipNormal.z < 0))
         ? { point: candidate.tipPos, normal: candidate.tipNormal }
-        : resolveSurfaceNormal(candidate.tipPos, mesh);
+        : resolveSurfaceNormal(candidate.tipPos, mesh, synthesisOptions);
     const tipPos = resolved.point;
     const tipNormal = resolved.normal;
 
@@ -4076,7 +4100,11 @@ export function fanLeafToHost(
     let cachedSurfaceNormal: ResolvedSurfaceNormal | null = null;
     const getResolvedSurfaceNormal = (): ResolvedSurfaceNormal => {
         if (!cachedSurfaceNormal) {
-            const resolved = resolveSurfaceNormal(target, mesh ?? undefined);
+            const fanSynthesisOpts = buildPlacementNormalSynthesisOptions(
+                resolveEffectiveAutoNormalSynthesis(autoSettings ?? getSettings().autoSupport).mode,
+                fanBand.tipContactDiameterMm,
+            );
+            const resolved = resolveSurfaceNormal(target, mesh ?? undefined, fanSynthesisOpts);
             cachedSurfaceNormal = {
                 point: { x: resolved.point.x, y: resolved.point.y, z: resolved.point.z },
                 normal: { x: resolved.normal.x, y: resolved.normal.y, z: resolved.normal.z },
@@ -5106,23 +5134,15 @@ export function computeAutoSupportPlan(
         ? Object.fromEntries(Object.entries(settingsOverride).filter(([, v]) => v !== undefined))
         : {};
     const liveAutoSupport = getSettings().autoSupport;
-    const rawNormalSynthesisMode = settingsOverride?.normalSynthesisMode ?? liveAutoSupport?.normalSynthesisMode;
-    const rawLeafCapOrbit = settingsOverride?.leafCapOrbit ?? liveAutoSupport?.leafCapOrbit;
-    const normalSynthesisMode: PlacementNormalSynthesisMode =
-        rawNormalSynthesisMode === 'bisector'
-        || rawNormalSynthesisMode === 'crease-lock'
-        || rawNormalSynthesisMode === 'macro-smooth'
-            ? rawNormalSynthesisMode
-            : 'raw';
-    const leafCapOrbit = rawLeafCapOrbit === true;
-    const autoSettings: AutoSupportSettings = {
-        ...normalizeAutoSupportSettings({
-            ...(liveAutoSupport ?? {}),
-            ...definedOverrides,
-        }),
-        ...(rawNormalSynthesisMode !== undefined ? { normalSynthesisMode } : {}),
-        ...(rawLeafCapOrbit !== undefined ? { leafCapOrbit } : {}),
-    };
+    const autoSettings: AutoSupportSettings = normalizeAutoSupportSettings({
+        ...(liveAutoSupport ?? {}),
+        ...definedOverrides,
+    });
+    const effective = resolveEffectiveAutoNormalSynthesis(autoSettings);
+    const synthesisOpts = buildPlacementNormalSynthesisOptions(
+        effective.mode,
+        activeSizingBand(autoSettings).tipContactDiameterMm,
+    );
 
     if (!autoSettings.enabled) {
         return null;
@@ -5164,8 +5184,8 @@ export function computeAutoSupportPlan(
             rejectionReasons: {},
             areaCoverage: 0,
             normalSynthesisMetrics: computeNormalSynthesisMetrics(draft, modelId, {
-                mode: normalSynthesisMode,
-                leafCapOrbit,
+                mode: effective.mode,
+                leafCapOrbit: effective.leafCapOrbit,
             }),
         },
         result,
@@ -5485,7 +5505,7 @@ export function computeAutoSupportPlan(
     if (resolvedMesh) {
         for (const c of candidates) {
             if (!(c.gridPoint && c.tipNormal && c.tipNormal.z < 0)) {
-                const resolved = resolveSurfaceNormal(c.tipPos, resolvedMesh);
+                const resolved = resolveSurfaceNormal(c.tipPos, resolvedMesh, synthesisOpts);
                 c.tipNormal = resolved.normal;
                 if (resolved.hit) {
                     c.tipPos = resolved.point;
@@ -5529,7 +5549,7 @@ export function computeAutoSupportPlan(
         if (resolvedMesh) {
             for (const c of candidates) {
                 if (!preResolvedCandidates.has(c)) {
-                    const resolved = resolveSurfaceNormal(c.tipPos, resolvedMesh);
+                    const resolved = resolveSurfaceNormal(c.tipPos, resolvedMesh, synthesisOpts);
                     c.tipNormal = resolved.normal;
                     if (resolved.hit) {
                         c.tipPos = resolved.point;
@@ -5649,7 +5669,7 @@ export function computeAutoSupportPlan(
 
     const placeOne = (candidate: CandidatePoint, deferTrunkError = false): string => {
         try {
-            const result = placeOneCandidate(candidate, draft, autoSettings, gridHostIds, resolvedMesh, modelCtx, false, preResolvedCandidates, deferTrunkError, cavityTester);
+            const result = placeOneCandidate(candidate, draft, autoSettings, gridHostIds, resolvedMesh, modelCtx, false, preResolvedCandidates, deferTrunkError, cavityTester, synthesisOpts);
             if (deferTrunkError && result.kind === 'reject' && result.rejectedReason === 'trunk_build_error') {
                 return 'defer_rescue';
             }
@@ -6493,6 +6513,7 @@ export function computeAutoSupportPlan(
                         resolvedMesh,
                         modelId,
                         autoSettings.areaPerSupportMm2,
+                        synthesisOpts,
                     );
                 } else {
                     candidates = buildGapFillCandidates([island], autoSettings, eligible, 0.05, resolvedMesh, {
@@ -6512,7 +6533,7 @@ export function computeAutoSupportPlan(
                         id: `${isStart ? 'start' : 'island'}-${island.id}-point`,
                         tipPos: { x: island.contact.x, y: island.contact.y, z: island.contact.z },
                         tipNormal: island.surfaceNormal
-                            ?? resolveSurfaceNormal(island.contact, resolvedMesh ?? undefined).normal,
+                            ?? resolveSurfaceNormal(island.contact, resolvedMesh ?? undefined, synthesisOpts).normal,
                         modelId,
                         source: island.source,
                         islandAreaMm2: autoSettings.areaPerSupportMm2,
@@ -6539,7 +6560,7 @@ export function computeAutoSupportPlan(
                 // candidate before placement, the same way a click does.
                 if (!island.surfaceNormal && resolvedMesh) {
                     for (const candidate of candidates) {
-                        candidate.tipNormal = resolveSurfaceNormal(candidate.tipPos, resolvedMesh).normal;
+                        candidate.tipNormal = resolveSurfaceNormal(candidate.tipPos, resolvedMesh, synthesisOpts).normal;
                     }
                 }
                 applyContactTipCaps(candidates, resolvedMesh, autoSettings.tipContactMarginScale, autoSettings);
@@ -6973,7 +6994,7 @@ export function computeAutoSupportPlan(
             const fanCandidate = candidateFromIsland(island);
             fanCandidate.modelId = modelId;
             if (resolvedMesh) {
-                const resolvedFan = resolveSurfaceNormal(fanCandidate.tipPos, resolvedMesh);
+                const resolvedFan = resolveSurfaceNormal(fanCandidate.tipPos, resolvedMesh, synthesisOpts);
                 fanCandidate.tipNormal = resolvedFan.normal;
                 if (resolvedFan.hit) {
                     fanCandidate.tipPos = resolvedFan.point;
@@ -7180,7 +7201,7 @@ export function computeAutoSupportPlan(
                     );
                     if (tooClose) continue;
                     const bm: THREE.Mesh | undefined = resolvedMesh ?? undefined;
-                    const resolved = resolveSurfaceNormal({ x: gx, y: gy, z: cellZ }, bm);
+                    const resolved = resolveSurfaceNormal({ x: gx, y: gy, z: cellZ }, bm, synthesisOpts);
                     const standaloneCandidate: CandidatePoint = {
                         id: `detached-plate-${island.id}-${r}-${c}`,
                         tipPos: resolved.point,
@@ -7207,7 +7228,7 @@ export function computeAutoSupportPlan(
 
                 try {
                     const bm: THREE.Mesh | undefined = resolvedMesh ?? undefined;
-                    const resolved = resolveSurfaceNormal({ x: gx, y: gy, z: cellZ }, bm);
+                    const resolved = resolveSurfaceNormal({ x: gx, y: gy, z: cellZ }, bm, synthesisOpts);
                     // The id carries the host: without it two writers share a
                     // knot id and the earlier branch re-parents onto the later
                     // host (the "dozens of branches on one host" report).
@@ -8304,8 +8325,8 @@ export function computeAutoSupportPlan(
     logAutoPlaceTimings(timings);
 
     analytics.normalSynthesisMetrics = computeNormalSynthesisMetrics(draft, modelId, {
-        mode: normalSynthesisMode,
-        leafCapOrbit,
+        mode: effective.mode,
+        leafCapOrbit: effective.leafCapOrbit,
         consolidationLeafIds,
         consolidationCandidates: consolidationAttemptedHosts.size,
         consolidationConvertedLeaves,

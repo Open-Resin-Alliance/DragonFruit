@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 
+import {
+    synthesizePlacementNormal,
+    type PlacementNormalSynthesisOptions,
+} from '../PlacementLogic/PlacementNormalSynthesis';
+
 type ClosestPointTarget = {
     point: THREE.Vector3;
     distance: number;
@@ -28,6 +33,7 @@ type BvhLike = {
 export function closestSurfaceNormal(
     mesh: THREE.Mesh,
     worldPoint: THREE.Vector3,
+    synthesisOptions?: PlacementNormalSynthesisOptions,
 ): THREE.Vector3 | null {
     const geometry = mesh.geometry;
     const bvh = (geometry as THREE.BufferGeometry & { boundsTree?: BvhLike }).boundsTree;
@@ -58,5 +64,12 @@ export function closestSurfaceNormal(
         .normalize();
 
     const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
-    return normal.applyMatrix3(normalMatrix).normalize();
+    const worldNormal = normal.applyMatrix3(normalMatrix).normalize();
+
+    if (synthesisOptions && synthesisOptions.mode !== 'raw') {
+        const surfaceWorldPoint = target.point.clone().applyMatrix4(mesh.matrixWorld);
+        return synthesizePlacementNormal(mesh, surfaceWorldPoint, worldNormal, synthesisOptions).normal;
+    }
+
+    return worldNormal;
 }

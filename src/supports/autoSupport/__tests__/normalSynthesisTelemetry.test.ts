@@ -7,10 +7,15 @@ import type { DetectedIsland } from '../../../volumeAnalysis/Islands/types';
 import { accelerateGeometry, initializeBVH } from '../../../utils/bvh';
 import { clearHistory } from '../../../history/historyStore';
 import { resetKickstandsInState, resetStore } from '../../state';
+import { getSettings, setSettings } from '../../Settings/state';
+import { createDefaultSettings } from '../../Settings/types';
 import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
 import type { SupportState, Vec3 } from '../../types';
-import { computeAutoSupportPlan } from '../autoPlace';
+import { collectFanShaftPoints, computeAutoSupportPlan, fanLeafToHost } from '../autoPlace';
+import { closestSurfaceNormal } from '../closestSurfaceNormal';
+import { generateGridCandidates } from '../gridPlacement';
 import { computeNormalSynthesisMetrics } from '../normalSynthesisTelemetry';
+import { createDefaultAutoSupportSettings } from '../settings';
 import type { NormalSynthesisSupportKind } from '../types';
 import { parseArgs } from '../../../../scripts/bench-auto-supports';
 
@@ -365,104 +370,459 @@ test('bench-auto-supports parseArgs handles defaults, order independence, and in
     assert.throws(() => parseArgs(['--leaf-cap-orbit']), /needs a value/);
 });
 
-test('computeAutoSupportPlan preserves Arm 0 placement across normalSynthesisMode/leafCapOrbit and emits telemetry', () => {
+function collectBottomTriangleIds(mesh: THREE.Mesh, minDownDot = 0.9): number[] {
+    const geom = mesh.geometry;
+    const pos = geom.getAttribute('position');
+    const index = geom.getIndex();
+    const triCount = index ? index.count / 3 : pos.count / 3;
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const c = new THREE.Vector3();
+    const n = new THREE.Vector3();
+    const ids: number[] = [];
+    for (let f = 0; f < triCount; f++) {
+        const i0 = index ? index.getX(f * 3) : f * 3;
+        const i1 = index ? index.getX(f * 3 + 1) : f * 3 + 1;
+        const i2 = index ? index.getX(f * 3 + 2) : f * 3 + 2;
+        a.fromBufferAttribute(pos, i0);
+        b.fromBufferAttribute(pos, i1);
+        c.fromBufferAttribute(pos, i2);
+        n.crossVectors(b.clone().sub(a), c.clone().sub(a)).applyMatrix3(normalMatrix).normalize();
+        if (-n.z >= minDownDot) ids.push(f);
+    }
+    return ids;
+}
+
+function makeOpenBentSheetMesh(): THREE.Mesh {
+    // Open 2-triangle sheet facing +Z (flat x in [-5, 0] at z=12) meeting a 60°-sloped flank
+    // (x in [0, 2.5] dropping to z = 12 - 2.5*sqrt(3)): upward rays pass from behind -> downHit runs.
+    const dropZ = 2.5 * Math.sqrt(3);
+    const positions = new Float32Array([
+        // Flat triangle 1: (-5,-5,12) -> (0,-5,12) -> (0,5,12), normal (0,0,1)
+        -5, -5, 12,
+        0, -5, 12,
+        0, 5, 12,
+        // Flat triangle 2: (-5,-5,12) -> (0,5,12) -> (-5,5,12), normal (0,0,1)
+        -5, -5, 12,
+        0, 5, 12,
+        -5, 5, 12,
+        // 60° flank triangle 1: (0,-5,12) -> (2.5,-5,12-dropZ) -> (2.5,5,12-dropZ), normal (sqrt(3)/2, 0, 0.5)
+        0, -5, 12,
+        2.5, -5, 12 - dropZ,
+        2.5, 5, 12 - dropZ,
+        // 60° flank triangle 2: (0,-5,12) -> (2.5,5,12-dropZ) -> (0,5,12), normal (sqrt(3)/2, 0, 0.5)
+        0, -5, 12,
+        2.5, 5, 12 - dropZ,
+        0, 5, 12,
+    ]);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.computeVertexNormals();
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld(true);
+    return mesh;
+}
+
+test('computeAutoSupportPlan --normal-synthesis raw matches Arm 0 placement/metrics while default resolves to bisector', () => {
+    const prevSettings = getSettings();
+    setSettings(createDefaultSettings());
     resetStore();
     resetKickstandsInState();
     clearHistory();
     initializeBVH();
 
-    const geometry = new THREE.BoxGeometry(12, 12, 6);
-    geometry.translate(0, 0, 15);
-    accelerateGeometry(geometry);
-    const mesh = new THREE.Mesh(geometry);
-    mesh.updateMatrixWorld(true);
+    try {
+        const geometry = new THREE.BoxGeometry(12, 12, 6);
+        geometry.translate(0, 0, 15);
+        accelerateGeometry(geometry);
+        const mesh = new THREE.Mesh(geometry);
+        mesh.updateMatrixWorld(true);
 
-    const points: { x: number; y: number }[] = [];
-    for (let x = -5; x <= 5; x += 0.5) {
-        for (let y = -5; y <= 5; y += 0.5) {
-            points.push({ x, y });
+        const points: { x: number; y: number }[] = [];
+        for (let x = -5; x <= 5; x += 0.5) {
+            for (let y = -5; y <= 5; y += 0.5) {
+                points.push({ x, y });
+            }
         }
+        const islands: DetectedIsland[] = [
+            {
+                id: 'slab-1',
+                source: 'overhang',
+                contact: new THREE.Vector3(0, 0, 12),
+                baseZ: 12,
+                areaMm2: 144,
+                surfaceNormal: { x: 0, y: 0, z: -1 },
+                contactVoxels: footprintFromPoints(points),
+            },
+        ];
+
+        const planDefault = computeAutoSupportPlan(islands, 'arm0-m', { debugSkipAutoBracing: true }, undefined, mesh);
+        const planRaw = computeAutoSupportPlan(
+            islands,
+            'arm0-m',
+            { debugSkipAutoBracing: true, normalSynthesisMode: 'raw', leafCapOrbit: false },
+            undefined,
+            mesh,
+        );
+        const planUiOff = computeAutoSupportPlan(
+            islands,
+            'arm0-m',
+            { debugSkipAutoBracing: true, smoothContactNormals: false },
+            undefined,
+            mesh,
+        );
+        const planNoopDefault = computeAutoSupportPlan([], 'arm0-m', {}, undefined, mesh);
+        const planNoopOverride = computeAutoSupportPlan([], 'arm0-m', { normalSynthesisMode: 'crease-lock', leafCapOrbit: true }, undefined, mesh);
+
+        assert.ok(planDefault && planRaw && planUiOff && planNoopDefault && planNoopOverride);
+        assert.ok(planDefault.analytics.normalSynthesisMetrics);
+        assert.ok(planRaw.analytics.normalSynthesisMetrics);
+        assert.ok(planUiOff.analytics.normalSynthesisMetrics);
+        assert.ok(planNoopDefault.analytics.normalSynthesisMetrics);
+        assert.ok(planNoopOverride.analytics.normalSynthesisMetrics);
+
+        assert.equal(planDefault.analytics.normalSynthesisMetrics.mode, 'bisector');
+        assert.equal(planDefault.analytics.normalSynthesisMetrics.leafCapOrbit, false);
+
+        assert.equal(planRaw.analytics.normalSynthesisMetrics.mode, 'raw');
+        assert.equal(planRaw.analytics.normalSynthesisMetrics.leafCapOrbit, false);
+        assert.ok(planRaw.analytics.normalSynthesisMetrics.overall.count > 0);
+        assert.equal(
+            planRaw.analytics.normalSynthesisMetrics.surfaceLeanFromDownDeg.downward0To30Count,
+            planRaw.analytics.normalSynthesisMetrics.overall.count,
+        );
+        assert.equal(planRaw.analytics.normalSynthesisMetrics.surfaceLeanFromDownDeg.oblique30To60Count, 0);
+
+        assert.equal(planUiOff.analytics.normalSynthesisMetrics.mode, 'raw');
+        assert.equal(planUiOff.analytics.normalSynthesisMetrics.leafCapOrbit, false);
+        assert.deepEqual(planUiOff.result.placed, planRaw.result.placed);
+        assert.deepEqual(planUiOff.analytics.normalSynthesisMetrics, planRaw.analytics.normalSynthesisMetrics);
+
+        assert.equal(planNoopDefault.analytics.normalSynthesisMetrics.mode, 'bisector');
+        assert.equal(planNoopDefault.analytics.normalSynthesisMetrics.leafCapOrbit, false);
+        assert.equal(planNoopDefault.analytics.normalSynthesisMetrics.overall.count, 0);
+
+        assert.equal(planNoopOverride.analytics.normalSynthesisMetrics.mode, 'crease-lock');
+        assert.equal(planNoopOverride.analytics.normalSynthesisMetrics.leafCapOrbit, true);
+        assert.equal(planNoopOverride.analytics.normalSynthesisMetrics.overall.count, 0);
+    } finally {
+        setSettings(prevSettings);
     }
-    const islands: DetectedIsland[] = [
-        {
-            id: 'slab-1',
+});
+
+test('bisector synthesizes normals across multi-triangle features (upHit, downHit outward-before-negate, and closestSurfaceNormal)', () => {
+    const prevSettings = getSettings();
+    setSettings(createDefaultSettings());
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    initializeBVH();
+
+    try {
+        // 1) Underside upHit near 90° box crease: x=4.95 is 0.05 mm from +X wall at x=5.
+        const boxGeo = new THREE.BoxGeometry(10, 10, 10).toNonIndexed();
+        boxGeo.translate(0, 0, 17);
+        boxGeo.computeVertexNormals();
+        accelerateGeometry(boxGeo);
+        const boxMesh = new THREE.Mesh(boxGeo);
+        boxMesh.updateMatrixWorld(true);
+
+        const edgeUpIsland: DetectedIsland[] = [
+            {
+                id: 'edge-up',
+                source: 'voxel',
+                class: 'voxelOnly',
+                isDetached: true,
+                contact: new THREE.Vector3(4.95, 0, 12),
+                baseZ: 12,
+                areaMm2: 0.5,
+            },
+        ];
+
+        const baseOverride = {
+            debugSkipAutoBracing: true,
+            stabilizationEnabled: false,
+            minimaReinforcementEnabled: false,
+        };
+        const planRaw = computeAutoSupportPlan(
+            edgeUpIsland,
+            'feat-up',
+            { ...baseOverride, normalSynthesisMode: 'raw', leafCapOrbit: false },
+            undefined,
+            boxMesh,
+        );
+        const planBisector = computeAutoSupportPlan(
+            edgeUpIsland,
+            'feat-up',
+            { ...baseOverride, normalSynthesisMode: 'bisector', leafCapOrbit: false },
+            undefined,
+            boxMesh,
+        );
+
+        assert.ok(planRaw && planBisector);
+        const rawMetrics = planRaw.analytics.normalSynthesisMetrics!;
+        const bisMetrics = planBisector.analytics.normalSynthesisMetrics!;
+        assert.equal(rawMetrics.mode, 'raw');
+        assert.equal(bisMetrics.mode, 'bisector');
+
+        const rawTrunk = Object.values(planRaw.support.trunks)[0];
+        const bisTrunk = Object.values(planBisector.support.trunks)[0];
+        assert.ok(rawTrunk?.contactCone?.surfaceNormal && bisTrunk?.contactCone?.surfaceNormal);
+        assert.ok(Math.abs(rawTrunk.contactCone.surfaceNormal.x) < 1e-6, 'raw keeps flat bottom normal');
+        assert.ok(rawTrunk.contactCone.surfaceNormal.z < -0.99);
+        assert.ok(
+            bisTrunk.contactCone.surfaceNormal.x > 0.5 && bisTrunk.contactCone.surfaceNormal.z < -0.5,
+            `bisector must tilt ~45° toward +X wall, got (${bisTrunk.contactCone.surfaceNormal.x.toFixed(3)}, ${bisTrunk.contactCone.surfaceNormal.y.toFixed(3)}, ${bisTrunk.contactCone.surfaceNormal.z.toFixed(3)})`,
+        );
+        assert.equal(rawMetrics.surfaceLeanFromDownDeg.oblique30To60Count, 0);
+        assert.ok(bisMetrics.surfaceLeanFromDownDeg.oblique30To60Count >= 1);
+
+        // 2) Top-surface downHit via fanLeafToHost (L4079): synthesize outward (z > 0) BEFORE negating.
+        const sheetMesh = makeOpenBentSheetMesh();
+        const hostState = emptySupportState();
+        hostState.roots['r-sheet'] = {
+            id: 'r-sheet',
+            modelId: 'feat-down',
+            transform: { pos: { x: -2, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0, w: 1 } },
+            diameter: 2,
+            diskHeight: 0.5,
+            coneHeight: 1.0,
+        };
+        hostState.trunks['t-sheet'] = {
+            id: 't-sheet',
+            modelId: 'feat-down',
+            rootId: 'r-sheet',
+            segments: [
+                {
+                    id: 'seg-sheet',
+                    diameter: 1.0,
+                    bottomJoint: { id: 'j0', pos: { x: -2, y: 0, z: 1.5 }, diameter: 1.0 },
+                    topJoint: { id: 'j1', pos: { x: -2, y: 0, z: 10 }, diameter: 1.0 },
+                },
+            ],
+            contactCone: makeCone('c-sheet', { x: 0, y: 0, z: -1 }, { x: 0, y: 0, z: -1 }),
+        };
+        const sheetPool = collectFanShaftPoints(hostState);
+        const fanDownRaw = fanLeafToHost(
+            { x: -0.05, y: 0, z: 12 },
+            'feat-down',
+            sheetPool,
+            new Set(),
+            'k-down-raw',
+            6,
+            6,
+            45,
+            6,
+            hostState,
+            sheetMesh,
+            'island',
+            'steepest',
+            undefined,
+            undefined,
+            { ...createDefaultAutoSupportSettings(), normalSynthesisMode: 'raw' },
+        );
+        const fanDownBis = fanLeafToHost(
+            { x: -0.05, y: 0, z: 12 },
+            'feat-down',
+            sheetPool,
+            new Set(),
+            'k-down-bis',
+            6,
+            6,
+            45,
+            6,
+            hostState,
+            sheetMesh,
+            'island',
+            'steepest',
+            undefined,
+            undefined,
+            { ...createDefaultAutoSupportSettings(), normalSynthesisMode: 'bisector' },
+        );
+        assert.equal(fanDownRaw.ok, true);
+        assert.equal(fanDownBis.ok, true);
+        if (fanDownRaw.ok && fanDownBis.ok && fanDownRaw.kind === 'leaf' && fanDownBis.kind === 'leaf') {
+            const rawLeafSn = fanDownRaw.draft.leaves[fanDownRaw.entityId]?.contactCone?.surfaceNormal;
+            const bisLeafSn = fanDownBis.draft.leaves[fanDownBis.entityId]?.contactCone?.surfaceNormal;
+            assert.ok(rawLeafSn && bisLeafSn);
+            assert.ok(Math.abs(rawLeafSn.x) < 1e-6 && rawLeafSn.z < -0.99);
+            // Outward raw (0,0,1) bisected with 60° flank (sqrt(3)/2, 0, 0.5) -> outward (0.5, 0, sqrt(3)/2),
+            // then negated to (-0.5, 0, -sqrt(3)/2).
+            assert.ok(
+                bisLeafSn.x < -0.35 && bisLeafSn.z < -0.7,
+                `downHit must synthesize outward normal before negating, got (${bisLeafSn.x.toFixed(3)}, ${bisLeafSn.y.toFixed(3)}, ${bisLeafSn.z.toFixed(3)})`,
+            );
+        }
+
+        // 3) closestSurfaceNormal defaults to raw when omitted and synthesizes when options provided.
+        const rawClosest = closestSurfaceNormal(boxMesh, new THREE.Vector3(4.95, 0, 12));
+        const bisClosest = closestSurfaceNormal(boxMesh, new THREE.Vector3(4.95, 0, 12), {
+            mode: 'bisector',
+            contactRadiusMm: 0.2,
+        });
+        assert.ok(rawClosest && bisClosest);
+        assert.ok(Math.abs(rawClosest.x) < 1e-6 && rawClosest.z < -0.99);
+        assert.ok(bisClosest.x > 0.5 && bisClosest.z < -0.5);
+    } finally {
+        setSettings(prevSettings);
+    }
+});
+
+test('gridPlacement.generateGridCandidates synthesizes grid tipNormals when bisector is active and gates devTools', () => {
+    const prevSettings = getSettings();
+    setSettings(createDefaultSettings());
+    initializeBVH();
+
+    try {
+        const geometry = new THREE.BoxGeometry(10, 10, 6).toNonIndexed();
+        geometry.translate(0, 0, 15);
+        geometry.computeVertexNormals();
+        accelerateGeometry(geometry);
+        const mesh = new THREE.Mesh(geometry);
+        mesh.updateMatrixWorld(true);
+
+        const bottomTriIds = collectBottomTriangleIds(mesh);
+        assert.ok(bottomTriIds.length >= 2);
+
+        const points: { x: number; y: number }[] = [];
+        for (let x = -5; x <= 5; x += 0.25) {
+            for (let y = -5; y <= 5; y += 0.25) {
+                points.push({ x, y });
+            }
+        }
+        const island: DetectedIsland = {
+            id: 'grid-box',
             source: 'overhang',
             contact: new THREE.Vector3(0, 0, 12),
             baseZ: 12,
-            areaMm2: 144,
+            areaMm2: 100,
             surfaceNormal: { x: 0, y: 0, z: -1 },
+            triangleIds: bottomTriIds,
             contactVoxels: footprintFromPoints(points),
-        },
-    ];
+        };
 
-    const planDefault = computeAutoSupportPlan(islands, 'arm0-m', { debugSkipAutoBracing: true }, undefined, mesh);
-    const planRawOff = computeAutoSupportPlan(
-        islands,
-        'arm0-m',
-        { debugSkipAutoBracing: true, normalSynthesisMode: 'raw', leafCapOrbit: false },
-        undefined,
-        mesh,
-    );
-    const planBisectorOn = computeAutoSupportPlan(
-        islands,
-        'arm0-m',
-        { debugSkipAutoBracing: true, normalSynthesisMode: 'bisector', leafCapOrbit: true },
-        undefined,
-        mesh,
-    );
-    const planNoop = computeAutoSupportPlan([], 'arm0-m', { normalSynthesisMode: 'bisector', leafCapOrbit: true }, undefined, mesh);
+        const rawCands = generateGridCandidates(
+            [island],
+            { ...createDefaultAutoSupportSettings(), normalSynthesisMode: 'raw' },
+            mesh,
+        );
+        assert.ok(rawCands.length > 0);
+        for (const c of rawCands) {
+            assert.ok(Math.hypot(c.tipNormal.x, c.tipNormal.y) < 1e-6 && c.tipNormal.z < -0.99);
+        }
 
-    assert.ok(planDefault && planRawOff && planBisectorOn && planNoop);
-    assert.ok(planDefault.analytics.normalSynthesisMetrics, 'default run emits normalSynthesisMetrics');
-    assert.ok(planRawOff.analytics.normalSynthesisMetrics, 'raw/off run emits normalSynthesisMetrics');
-    assert.ok(planBisectorOn.analytics.normalSynthesisMetrics, 'bisector/on run emits normalSynthesisMetrics');
-    assert.ok(planNoop.analytics.normalSynthesisMetrics, 'noopPlan emits normalSynthesisMetrics');
+        const bisCands = generateGridCandidates(
+            [island],
+            { ...createDefaultAutoSupportSettings(), smoothContactNormals: true, normalSynthesisPreset: 'bisector' },
+            mesh,
+        );
+        assert.equal(bisCands.length, rawCands.length);
+        const tilted = bisCands.filter((c) => Math.hypot(c.tipNormal.x, c.tipNormal.y) > 0.05);
+        assert.ok(tilted.length > 0, 'boundary grid candidates near 90° walls must synthesize tilted tipNormals under bisector');
 
-    assert.equal(planDefault.analytics.normalSynthesisMetrics.mode, 'raw');
-    assert.equal(planDefault.analytics.normalSynthesisMetrics.leafCapOrbit, false);
-    assert.equal(planRawOff.analytics.normalSynthesisMetrics.mode, 'raw');
-    assert.equal(planRawOff.analytics.normalSynthesisMetrics.leafCapOrbit, false);
-    assert.equal(planBisectorOn.analytics.normalSynthesisMetrics.mode, 'bisector');
-    assert.equal(planBisectorOn.analytics.normalSynthesisMetrics.leafCapOrbit, true);
+        // devTools overrides must apply ONLY when devToolsEnabled === true
+        const defaults = createDefaultSettings();
+        setSettings({
+            ...defaults,
+            devToolsEnabled: false,
+            devTools: { ...defaults.devTools, normalCreaseThresholdDeg: 60 },
+        });
+        const devOffCands = generateGridCandidates(
+            [island],
+            { ...createDefaultAutoSupportSettings(), smoothContactNormals: true, normalSynthesisPreset: 'bisector' },
+            mesh,
+        );
+        assert.ok(
+            devOffCands.some((c) => Math.hypot(c.tipNormal.x, c.tipNormal.y) > 0.05),
+            'normalCreaseThresholdDeg=60 ignored when devToolsEnabled=false',
+        );
 
-    assert.equal(planNoop.analytics.normalSynthesisMetrics.mode, 'bisector');
-    assert.equal(planNoop.analytics.normalSynthesisMetrics.leafCapOrbit, true);
-    assert.equal(planNoop.analytics.normalSynthesisMetrics.overall.count, 0);
+        setSettings({
+            ...defaults,
+            devToolsEnabled: true,
+            devTools: { ...defaults.devTools, normalCreaseThresholdDeg: 60 },
+        });
+        const devOnCands = generateGridCandidates(
+            [island],
+            { ...createDefaultAutoSupportSettings(), smoothContactNormals: true, normalSynthesisPreset: 'bisector' },
+            mesh,
+        );
+        for (const c of devOnCands) {
+            assert.ok(
+                Math.hypot(c.tipNormal.x, c.tipNormal.y) < 1e-6,
+                'normalCreaseThresholdDeg=60 rejects 90° wall when devToolsEnabled=true',
+            );
+        }
+    } finally {
+        setSettings(prevSettings);
+    }
+});
 
-    // Arm 0 placement invariance: placed counts and cone telemetry match identically across flags
-    assert.deepEqual(planBisectorOn.result.placed, planRawOff.result.placed);
-    assert.deepEqual(planDefault.result.placed, planRawOff.result.placed);
-    assert.ok(planRawOff.analytics.normalSynthesisMetrics.overall.count > 0);
-    assert.deepEqual(
-        planBisectorOn.analytics.normalSynthesisMetrics.overall,
-        planRawOff.analytics.normalSynthesisMetrics.overall,
-    );
-    assert.deepEqual(
-        planBisectorOn.analytics.normalSynthesisMetrics.byKind,
-        planRawOff.analytics.normalSynthesisMetrics.byKind,
-    );
-    assert.deepEqual(
-        planBisectorOn.analytics.normalSynthesisMetrics.coneDeviationFromSurfaceDeg,
-        planRawOff.analytics.normalSynthesisMetrics.coneDeviationFromSurfaceDeg,
-    );
-    assert.deepEqual(
-        planBisectorOn.analytics.normalSynthesisMetrics.surfaceLeanFromDownDeg,
-        planRawOff.analytics.normalSynthesisMetrics.surfaceLeanFromDownDeg,
-    );
-    assert.equal(
-        planBisectorOn.analytics.normalSynthesisMetrics.consolidationCandidates,
-        planRawOff.analytics.normalSynthesisMetrics.consolidationCandidates,
-    );
-    assert.equal(
-        planBisectorOn.analytics.normalSynthesisMetrics.consolidationConvertedLeaves,
-        planRawOff.analytics.normalSynthesisMetrics.consolidationConvertedLeaves,
-    );
-    assert.equal(
-        planBisectorOn.analytics.normalSynthesisMetrics.consolidationConvertedBranches,
-        planRawOff.analytics.normalSynthesisMetrics.consolidationConvertedBranches,
-    );
-    assert.equal(
-        planBisectorOn.analytics.normalSynthesisMetrics.consolidationBlockedCount,
-        planRawOff.analytics.normalSynthesisMetrics.consolidationBlockedCount,
-    );
+test('autoPlace L5225 self-support wall filter stays invariant between raw and macro-smooth', () => {
+    const prevSettings = getSettings();
+    setSettings(createDefaultSettings());
+    resetStore();
+    resetKickstandsInState();
+    clearHistory();
+    initializeBVH();
+
+    try {
+        // Box rotated +50° around X: original bottom face (-Z) tilts to 50° inclination (>45.5° self-supporting),
+        // meeting original -Y face (40° inclination) at a 90° crease.
+        // Contact 0.15 mm onto the 50° flank sits well inside macro-smooth radius (0.75-2.5 mm), so synthesizing
+        // inside L5225 would average 50° and 40° to ~5° and falsely keep the island.
+        const geo = new THREE.BoxGeometry(10, 10, 10).toNonIndexed();
+        geo.rotateX(THREE.MathUtils.degToRad(50));
+        geo.translate(0, 0, 15);
+        geo.computeVertexNormals();
+        accelerateGeometry(geo);
+        const mesh = new THREE.Mesh(geo);
+        mesh.updateMatrixWorld(true);
+
+        const rad50 = THREE.MathUtils.degToRad(50);
+        const yLocal = -4.85;
+        const zLocal = -5;
+        const contactY = yLocal * Math.cos(rad50) - zLocal * Math.sin(rad50);
+        const contactZ = yLocal * Math.sin(rad50) + zLocal * Math.cos(rad50) + 15;
+
+        const steepFlankIsland: DetectedIsland = {
+            id: 'steep-50',
+            source: 'voxel',
+            class: 'voxelOnly',
+            isDetached: false,
+            interior: false,
+            contact: new THREE.Vector3(0, contactY, contactZ),
+            baseZ: contactZ,
+            areaMm2: 0.5,
+        };
+
+        const overrideBase = {
+            debugSkipAutoBracing: true,
+            stabilizationEnabled: false,
+            minimaReinforcementEnabled: false,
+        };
+        const planRaw = computeAutoSupportPlan(
+            [steepFlankIsland],
+            'wall-raw',
+            { ...overrideBase, normalSynthesisMode: 'raw', leafCapOrbit: false },
+            undefined,
+            mesh,
+        );
+        const planMacro = computeAutoSupportPlan(
+            [steepFlankIsland],
+            'wall-macro',
+            { ...overrideBase, normalSynthesisMode: 'macro-smooth', leafCapOrbit: false },
+            undefined,
+            mesh,
+        );
+
+        assert.ok(planRaw && planMacro);
+        assert.equal(planRaw.result.status, 'no-candidates');
+        assert.equal(planMacro.result.status, 'no-candidates');
+        assert.deepEqual(planMacro.result.placed, planRaw.result.placed);
+    } finally {
+        setSettings(prevSettings);
+    }
 });
