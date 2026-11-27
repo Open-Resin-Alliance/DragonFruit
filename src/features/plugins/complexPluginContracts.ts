@@ -138,6 +138,18 @@ export type PluginMonitoringUiPolicy = {
     webcamFailureCooldownMs?: number;
 };
 
+/** One finished (or given-up) job of a printer's print history (monitoring `history` operation). */
+export type PluginPrintHistoryEntryContract = {
+    fileName: string;
+    /** Unix seconds; null when the printer did not know the time. */
+    startedAt: number | null;
+    durationSec: number | null;
+    /** done | stopped | error | lost (power loss), or a printer's own word. */
+    result: string;
+    layersDone: number | null;
+    totalLayers: number | null;
+};
+
 export type PluginMonitoringUiAdapterContract = {
     mode: string;
     pluginId: string | null;
@@ -157,6 +169,12 @@ export type PluginMonitoringUiAdapterContract = {
         resume: string;
         cancel: string;
         emergencyStop: string;
+        /**
+         * Optional: the printer's print history. The operation answers
+         * `{ ok, entries: PluginPrintHistoryEntryContract[] }`, newest first; the
+         * printing monitor shows a History panel when it is set.
+         */
+        history?: string;
     } | null;
     parseStatusPayload: (payload: unknown, contextKey?: string) => PluginMonitoringSnapshotContract;
     parseWebcamInfoPayload: (payload: unknown, host: string, port: number) => PluginMonitoringWebcamInfoContract;

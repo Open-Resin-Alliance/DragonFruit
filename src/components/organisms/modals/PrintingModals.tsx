@@ -11,6 +11,7 @@ import { SliceCompletedModal } from '@/components/modals/SliceCompletedModal';
 import { UvToolsLaunchingModal } from '@/components/modals/UvToolsLaunchingModal';
 import { PrintingResliceModal } from '@/components/modals/PrintingResliceModal';
 import { RtspRelayCanvasPlayer } from '@/components/monitoring/RtspRelayCanvasPlayer';
+import { PrintHistoryPanel } from '@/components/printers/PrintHistoryPanel';
 import { launchExternalProcess } from '@/features/slicing/tauri/nativeSlicerBridge';
 import { getSavedUvToolsSettings, resolveUvToolsExecutablePath } from '@/components/settings/uvToolsPreferences';
 import { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
@@ -1873,6 +1874,16 @@ export function PrintingModals({
                     </div>
                   </div>
                 </div>
+
+                {printingMonitoringAdapter.pluginId && printingMonitoringAdapter.operations?.history && monitoringDevice?.ipAddress ? (
+                  <PrintHistoryPanel
+                    pluginId={printingMonitoringAdapter.pluginId}
+                    operation={printingMonitoringAdapter.operations.history}
+                    host={monitoringDevice.ipAddress}
+                    port={monitoringDevice.port || 80}
+                    refreshKey={printingMonitorSnapshot?.finished ? `done-${printingMonitorSnapshot.jobName ?? ''}` : printingMonitorSnapshot?.isPrinting ? 'printing' : 'idle'}
+                  />
+                ) : null}
 
                 <div className="rounded-md border p-3 space-y-3" style={{ borderColor: 'var(--border-subtle)', background: 'color-mix(in srgb, var(--surface-1), #000 4%)' }}>
                   <div className="flex items-center justify-between gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
