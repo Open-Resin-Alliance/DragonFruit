@@ -183,11 +183,14 @@ export function computeSupportAndRaftResinMl({
       topRadiusByRootId.set(rootId, Math.max(MIN_PRIMITIVE_RADIUS_MM, firstDiameter / 2));
     }
   };
-  for (const trunk of Object.values(supportState.trunks)) {
-    rememberRootShaft(trunk.rootId, trunk.segments[0]?.diameter);
-  }
-  for (const kickstand of Object.values(supportState.kickstands)) {
-    rememberRootShaft(kickstand.rootId, kickstand.segments[0]?.diameter);
+  for (const descriptor of SUPPORT_TYPES) {
+    if (!descriptor.ownsRoot) continue;
+    const owners = supportState[descriptor.location.key] as
+      | Record<string, { rootId: string; segments?: { diameter?: number }[] }>
+      | undefined;
+    for (const entity of Object.values(owners ?? {})) {
+      rememberRootShaft(entity.rootId, entity.segments?.[0]?.diameter);
+    }
   }
 
   let supportMl = 0;
@@ -283,25 +286,35 @@ export function computeSupportAndRaftResinMl({
     }
   }
 
-  // A brace's printed diameter is derived from the knots it joins, not from its
-  // profile: profile.diameter is the display width.
-  for (const brace of Object.values(supportState.braces)) {
-    if (!visibleModelIds.has(brace.modelId)) continue;
-    const startKnot = supportState.knots[brace.startKnotId];
-    const endKnot = supportState.knots[brace.endKnotId];
-    if (!startKnot || !endKnot) continue;
+  // A type spanning two knots with no shaft prints as one bar between them. Its
+  // printed diameter comes from those knots, not from `profile.diameter`, which
+  // is the display width.
+  for (const descriptor of SUPPORT_TYPES) {
+    const spanEdges = descriptor.edges.filter((edge) => edge.to === 'knots');
+    if (descriptor.hasSegments || spanEdges.length < 2) continue;
+    const collection = supportState[descriptor.location.key as SupportCollectionKey] as unknown as
+      Record<string, EntityRecord> | undefined;
 
-    const profileDiameter = Math.max(0.001, brace.profile?.diameter ?? 1);
-    const startHostDiameter = Math.max(MIN_PRIMITIVE_RADIUS_MM, (startKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
-    const endHostDiameter = Math.max(MIN_PRIMITIVE_RADIUS_MM, (endKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
+    for (const entity of Object.values(collection ?? {})) {
+      if (!visibleModelIds.has(entity.modelId)) continue;
+      const knotIdAt = (position: number) =>
+        (entity as unknown as Record<string, unknown>)[spanEdges[position].field] as string;
+      const startKnot = supportState.knots[knotIdAt(0)];
+      const endKnot = supportState.knots[knotIdAt(1)];
+      if (!startKnot || !endKnot) continue;
 
-    const length = brace.curve?.type === 'bezier'
-      ? sampleBezierLengthMm(startKnot.pos, brace.curve.controlPoint1!, brace.curve.controlPoint2!, endKnot.pos, brace.curve.resolution ?? 16)
-      : distanceMm(startKnot.pos, endKnot.pos);
-    supportMl += mm3ToMl(cylinderVolumeMm3(
-      Math.max(0.001, (startHostDiameter + endHostDiameter) * 0.5 / 2),
-      length,
-    ));
+      const profileDiameter = Math.max(0.001, entity.profile?.diameter ?? 1);
+      const startHostDiameter = Math.max(MIN_PRIMITIVE_RADIUS_MM, (startKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
+      const endHostDiameter = Math.max(MIN_PRIMITIVE_RADIUS_MM, (endKnot.diameter ?? (profileDiameter + 0.1)) - 0.1);
+
+      const length = entity.curve?.type === 'bezier'
+        ? sampleBezierLengthMm(startKnot.pos, entity.curve.controlPoint1!, entity.curve.controlPoint2!, endKnot.pos, entity.curve.resolution ?? 16)
+        : distanceMm(startKnot.pos, endKnot.pos);
+      supportMl += mm3ToMl(cylinderVolumeMm3(
+        Math.max(0.001, (startHostDiameter + endHostDiameter) * 0.5 / 2),
+        length,
+      ));
+    }
   }
 
   let raftMl = 0;
