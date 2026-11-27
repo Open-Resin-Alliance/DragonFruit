@@ -167,12 +167,14 @@ export interface AutoSupportSettings {
     smoothContactNormals: boolean;
     /** Active Q3 normal synthesis preset when smoothContactNormals is on. */
     normalSynthesisPreset: NormalSynthesisPreset;
-    /** Wave D knot-weighted leaf cap orbit (must stay false in Wave C). */
+    /** Wave D knot-weighted leaf cap orbit. */
     knotWeightedLeafNormals: boolean;
     /** Optional A/B placement normal synthesis mode (never in defaults). */
     normalSynthesisMode?: PlacementNormalSynthesisMode;
     /** Optional A/B leaf cap orbit toggle (never in defaults). */
     leafCapOrbit?: boolean;
+    /** Optional CLI/diagnostic leaf cap rim slack in degrees [0, 35] (never in defaults). */
+    leafRimSlackDeg?: number;
 }
 
 /**
@@ -321,7 +323,7 @@ export function createDefaultAutoSupportSettings(): AutoSupportSettings {
         minimaReinforcementEnabled: true,
         smoothContactNormals: true,
         normalSynthesisPreset: 'bisector',
-        knotWeightedLeafNormals: false,
+        knotWeightedLeafNormals: true,
     };
 }
 
@@ -336,6 +338,9 @@ export function normalizeAutoSupportSettings(input?: Partial<AutoSupportSettings
         : undefined;
     const cliLeafCapOrbit = input?.leafCapOrbit !== undefined && typeof source.leafCapOrbit === 'boolean'
         ? source.leafCapOrbit
+        : undefined;
+    const cliRimSlack = typeof source.leafRimSlackDeg === 'number' && Number.isFinite(source.leafRimSlackDeg)
+        ? Math.min(35, Math.max(0, source.leafRimSlackDeg))
         : undefined;
 
     return {
@@ -379,14 +384,17 @@ export function normalizeAutoSupportSettings(input?: Partial<AutoSupportSettings
         ),
         ...(cliMode !== undefined ? { normalSynthesisMode: cliMode } : {}),
         ...(cliLeafCapOrbit !== undefined ? { leafCapOrbit: cliLeafCapOrbit } : {}),
+        ...(cliRimSlack !== undefined ? { leafRimSlackDeg: cliRimSlack } : {}),
     };
 }
 
-/** Resolve effective placement normal synthesis mode and leaf cap orbit, letting 2C CLI fields override UI toggles. */
+/** Resolve effective placement normal synthesis mode, leaf cap orbit, and rim slack, letting CLI fields and gated DevTools override UI defaults. */
 export function resolveEffectiveAutoNormalSynthesis(
     settings?: Partial<AutoSupportSettings> | null,
-): { mode: PlacementNormalSynthesisMode; leafCapOrbit: boolean } {
-    const uiMode: PlacementNormalSynthesisMode = (settings?.smoothContactNormals ?? true)
+    devTools?: { enabled?: boolean; leafRimSlackDeg?: number } | null,
+): { mode: PlacementNormalSynthesisMode; leafCapOrbit: boolean; leafRimSlackDeg: number } {
+    const smoothContactNormals = settings?.smoothContactNormals ?? true;
+    const uiMode: PlacementNormalSynthesisMode = smoothContactNormals
         ? normalizeNormalSynthesisPresetValue(settings?.normalSynthesisPreset, 'bisector')
         : 'raw';
     const mode = isPlacementNormalSynthesisMode(settings?.normalSynthesisMode)
@@ -394,8 +402,18 @@ export function resolveEffectiveAutoNormalSynthesis(
         : uiMode;
     const leafCapOrbit = typeof settings?.leafCapOrbit === 'boolean'
         ? settings.leafCapOrbit
-        : Boolean(settings?.knotWeightedLeafNormals);
-    return { mode, leafCapOrbit };
+        : Boolean(smoothContactNormals && (settings?.knotWeightedLeafNormals ?? true));
+    let leafRimSlackDeg = 0;
+    if (typeof settings?.leafRimSlackDeg === 'number' && Number.isFinite(settings.leafRimSlackDeg)) {
+        leafRimSlackDeg = Math.min(35, Math.max(0, settings.leafRimSlackDeg));
+    } else if (
+        devTools?.enabled === true
+        && typeof devTools.leafRimSlackDeg === 'number'
+        && Number.isFinite(devTools.leafRimSlackDeg)
+    ) {
+        leafRimSlackDeg = Math.min(35, Math.max(0, devTools.leafRimSlackDeg));
+    }
+    return { mode, leafCapOrbit, leafRimSlackDeg };
 }
 
 export function applyAutoSupportSettingsPatch(

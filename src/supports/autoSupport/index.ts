@@ -7,6 +7,8 @@ export type {
   ForestReport,
   ForestTree,
   ForestLedgerEntry,
+  LeafCapRegimeSummary,
+  LeafCapSplitMetrics,
 } from "./types";
 
 export {

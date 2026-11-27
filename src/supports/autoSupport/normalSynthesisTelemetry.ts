@@ -4,11 +4,41 @@ import type { SupportState, Vec3 } from '../types';
 import type {
     AngularDeviationSummary,
     DiskThicknessDistribution,
+    LeafCapRegimeSummary,
+    LeafCapSplitMetrics,
     NormalSynthesisMetrics,
     NormalSynthesisSupportKind,
     PlacementNormalSynthesisMode,
     SurfaceLeanBuckets,
 } from './types';
+
+interface ConeCapAnchorLike {
+    nMean: Vec3;
+    baseNormal: Vec3;
+    thetaSpreadRad: number;
+    thetaCapRad: number;
+    isConcave: boolean;
+}
+
+interface CapRegimeAccumulator {
+    count: number;
+    flushCount: number;
+    angleDrivenCount: number;
+    collisionDrivenCount: number;
+    capReachableCount: number;
+    orbitedCount: number;
+    concaveCount: number;
+    orbitShiftSumDeg: number;
+    maxOrbitShiftDeg: number;
+}
+
+interface ClassifiedDiskCone {
+    sn: Vec3;
+    cn: Vec3;
+    effective: number;
+    isCollisionDriven: boolean;
+    isAngleDriven: boolean;
+}
 
 export interface ComputeNormalSynthesisMetricsOptions {
     mode?: PlacementNormalSynthesisMode;
@@ -132,6 +162,47 @@ function leanFromDownDeg(sn: Vec3): number {
     return (Math.acos(Math.max(-1, Math.min(1, -(sn.z / len)))) * 180) / Math.PI;
 }
 
+function createCapRegimeAccumulator(): CapRegimeAccumulator {
+    return {
+        count: 0,
+        flushCount: 0,
+        angleDrivenCount: 0,
+        collisionDrivenCount: 0,
+        capReachableCount: 0,
+        orbitedCount: 0,
+        concaveCount: 0,
+        orbitShiftSumDeg: 0,
+        maxOrbitShiftDeg: 0,
+    };
+}
+
+function finalizeCapRegime(acc: CapRegimeAccumulator): LeafCapRegimeSummary {
+    return {
+        count: acc.count,
+        flushCount: acc.flushCount,
+        angleDrivenCount: acc.angleDrivenCount,
+        collisionDrivenCount: acc.collisionDrivenCount,
+        capReachableCount: acc.capReachableCount,
+        orbitedCount: acc.orbitedCount,
+        concaveCount: acc.concaveCount,
+        meanOrbitShiftDeg: acc.count > 0 ? round6(acc.orbitShiftSumDeg / acc.count) : 0,
+        maxOrbitShiftDeg: round6(acc.maxOrbitShiftDeg),
+    };
+}
+
+function classifyDiskCone(cone: ContactCone): ClassifiedDiskCone | null {
+    if (cone.profile?.type !== 'disk') return null;
+    const sn = cone.surfaceNormal ?? cone.normal;
+    const cn = cone.normal;
+    const minThickness = calculateDiskThickness(sn, sn, cone.profile);
+    const angleThickness = calculateDiskThickness(sn, cn, cone.profile);
+    const effective = cone.diskLengthOverride ?? angleThickness;
+    const isCollisionDriven =
+        cone.diskLengthOverride !== undefined && cone.diskLengthOverride > angleThickness + 1e-5;
+    const isAngleDriven = !isCollisionDriven && angleThickness > minThickness + 1e-5;
+    return { sn, cn, effective, isCollisionDriven, isAngleDriven };
+}
+
 /**
  * Compute pre-constraint normal-synthesis and disk-thickness telemetry (H1-H4)
  * strictly for entities belonging to `modelId` (excluding disk-only twigs).
@@ -158,18 +229,15 @@ export function computeNormalSynthesisMetrics(
         steep60To90Count: 0,
         upwardOver90Count: 0,
     };
+    const flatOrSmoothAcc = createCapRegimeAccumulator();
+    const ridgeOrCornerAcc = createCapRegimeAccumulator();
+    let hasLeafCapAnchor = false;
 
-    const recordCone = (cone: ContactCone | undefined, kind: NormalSynthesisSupportKind): void => {
-        if (!cone || cone.profile?.type !== 'disk') return;
-        const sn = cone.surfaceNormal ?? cone.normal;
-        const cn = cone.normal;
-        const minThickness = calculateDiskThickness(sn, sn, cone.profile);
-        const angleThickness = calculateDiskThickness(sn, cn, cone.profile);
-        const effective = cone.diskLengthOverride ?? angleThickness;
-
-        const isCollisionDriven =
-            cone.diskLengthOverride !== undefined && cone.diskLengthOverride > angleThickness + 1e-5;
-        const isAngleDriven = !isCollisionDriven && angleThickness > minThickness + 1e-5;
+    const recordCone = (cone: ContactCone | undefined, kind: NormalSynthesisSupportKind): ClassifiedDiskCone | null => {
+        if (!cone) return null;
+        const classified = classifyDiskCone(cone);
+        if (!classified) return null;
+        const { sn, cn, effective, isCollisionDriven, isAngleDriven } = classified;
         const isOver025 = effective > 0.25 + 1e-6;
         const isClamped035 = effective >= 0.35 - 1e-4;
 
@@ -192,6 +260,33 @@ export function computeNormalSynthesisMetrics(
         else if (lean < 60) leanBuckets.oblique30To60Count++;
         else if (lean <= 90) leanBuckets.steep60To90Count++;
         else leanBuckets.upwardOver90Count++;
+
+        return classified;
+    };
+
+    const recordLeafCap = (cone: ContactCone | undefined, classified: ClassifiedDiskCone | null): void => {
+        const capAnchor = (cone as { capAnchor?: ConeCapAnchorLike } | undefined)?.capAnchor;
+        if (capAnchor !== undefined) hasLeafCapAnchor = true;
+        if (!classified) return;
+        const { sn, cn, isCollisionDriven, isAngleDriven } = classified;
+        const thetaSpreadDeg = capAnchor ? (capAnchor.thetaSpreadRad * 180) / Math.PI : 0;
+        const acc = thetaSpreadDeg >= 15 - 1e-9 ? ridgeOrCornerAcc : flatOrSmoothAcc;
+        acc.count++;
+        if (isCollisionDriven) acc.collisionDrivenCount++;
+        else if (isAngleDriven) acc.angleDrivenCount++;
+        else acc.flushCount++;
+
+        if (capAnchor) {
+            if (capAnchor.isConcave) acc.concaveCount++;
+            const orbitShiftDeg = angleBetweenDeg(capAnchor.baseNormal, sn);
+            if (orbitShiftDeg > 0.5) acc.orbitedCount++;
+            acc.orbitShiftSumDeg += orbitShiftDeg;
+            if (orbitShiftDeg > acc.maxOrbitShiftDeg) acc.maxOrbitShiftDeg = orbitShiftDeg;
+            const maxCapAngleDeg = 45 + (capAnchor.thetaCapRad * 180) / Math.PI + 1e-6;
+            if (angleBetweenDeg(capAnchor.nMean, cn) <= maxCapAngleDeg) {
+                acc.capReachableCount++;
+            }
+        }
     };
 
     for (const trunk of Object.values(draft.trunks ?? {})) {
@@ -205,7 +300,8 @@ export function computeNormalSynthesisMetrics(
             const kind: NormalSynthesisSupportKind = options?.consolidationLeafIds?.has(leaf.id)
                 ? 'consolidationLeaf'
                 : 'leaf';
-            recordCone(leaf.contactCone, kind);
+            const classified = recordCone(leaf.contactCone, kind);
+            recordLeafCap(leaf.contactCone, classified);
         }
     }
     for (const stump of Object.values(draft.stumps ?? {})) {
@@ -222,6 +318,12 @@ export function computeNormalSynthesisMetrics(
         SUPPORT_KINDS.map((kind) => [kind, finalizeDistribution(byKindAcc[kind])]),
     ) as Record<NormalSynthesisSupportKind, DiskThicknessDistribution>;
 
+    const shouldIncludeCapSplit = options?.leafCapOrbit === true || hasLeafCapAnchor;
+    const capSplit: LeafCapSplitMetrics = {
+        flatOrSmooth: finalizeCapRegime(flatOrSmoothAcc),
+        ridgeOrCorner: finalizeCapRegime(ridgeOrCornerAcc),
+    };
+
     return {
         mode: options?.mode ?? 'raw',
         leafCapOrbit: options?.leafCapOrbit ?? false,
@@ -233,5 +335,6 @@ export function computeNormalSynthesisMetrics(
         consolidationConvertedLeaves: options?.consolidationConvertedLeaves ?? 0,
         consolidationConvertedBranches: options?.consolidationConvertedBranches ?? 0,
         consolidationBlockedCount: options?.consolidationBlockedCount ?? 0,
+        ...(shouldIncludeCapSplit ? { capSplit } : {}),
     };
 }

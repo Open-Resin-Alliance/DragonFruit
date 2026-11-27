@@ -38,6 +38,9 @@ import {
     normalizeAutoSupportSettings,
     resolveEffectiveAutoNormalSynthesis,
 } from '../autoSupport/settings';
+import { computeNormalSynthesisMetrics } from '../autoSupport/normalSynthesisTelemetry';
+import type { SupportState, Vec3 } from '../types';
+import * as benchAutoSupports from '../../../scripts/bench-auto-supports';
 
 function installMemoryLocalStorage(seed: Record<string, string> = {}): Map<string, string> {
     const store = new Map<string, string>(Object.entries(seed));
@@ -237,9 +240,10 @@ test('AutoSupportSettings defaults, normalizeAutoSupportSettings, and diagnostic
     const defaults = createDefaultAutoSupportSettings();
     assert.equal(defaults.smoothContactNormals, true);
     assert.equal(defaults.normalSynthesisPreset, 'bisector');
-    assert.equal(defaults.knotWeightedLeafNormals, false, 'must stay false in Wave C');
+    assert.equal(defaults.knotWeightedLeafNormals, true, 'Wave D flips Leaf Cap Orbiting default on');
     assert.equal('normalSynthesisMode' in defaults, false);
     assert.equal('leafCapOrbit' in defaults, false);
+    assert.equal('leafRimSlackDeg' in defaults, false);
 
     assert.equal((DIAGNOSTIC_AUTO_SUPPORT_KEYS as readonly string[]).includes('smoothContactNormals'), false);
     assert.equal((DIAGNOSTIC_AUTO_SUPPORT_KEYS as readonly string[]).includes('normalSynthesisPreset'), false);
@@ -248,26 +252,34 @@ test('AutoSupportSettings defaults, normalizeAutoSupportSettings, and diagnostic
     const normalizedEmpty = normalizeAutoSupportSettings({});
     assert.equal(normalizedEmpty.smoothContactNormals, true);
     assert.equal(normalizedEmpty.normalSynthesisPreset, 'bisector');
-    assert.equal(normalizedEmpty.knotWeightedLeafNormals, false);
+    assert.equal(normalizedEmpty.knotWeightedLeafNormals, true);
     assert.equal('normalSynthesisMode' in normalizedEmpty, false, 'must omit normalSynthesisMode when absent');
     assert.equal('leafCapOrbit' in normalizedEmpty, false, 'must omit leafCapOrbit when absent');
+    assert.equal('leafRimSlackDeg' in normalizedEmpty, false, 'must omit leafRimSlackDeg when absent');
 
     const normalizedInvalid = normalizeAutoSupportSettings({
         smoothContactNormals: 'nope' as unknown as boolean,
         normalSynthesisPreset: 'bogus' as unknown as NormalSynthesisPreset,
         knotWeightedLeafNormals: 1 as unknown as boolean,
+        leafRimSlackDeg: Number.NaN,
     });
     assert.equal(normalizedInvalid.smoothContactNormals, true);
     assert.equal(normalizedInvalid.normalSynthesisPreset, 'bisector');
-    assert.equal(normalizedInvalid.knotWeightedLeafNormals, false);
+    assert.equal(normalizedInvalid.knotWeightedLeafNormals, true);
     assert.equal('normalSynthesisMode' in normalizedInvalid, false);
+    assert.equal('leafRimSlackDeg' in normalizedInvalid, false);
 
     const withCli = normalizeAutoSupportSettings({
         normalSynthesisMode: 'crease-lock',
         leafCapOrbit: true,
+        leafRimSlackDeg: 14,
     });
     assert.equal(withCli.normalSynthesisMode, 'crease-lock');
     assert.equal(withCli.leafCapOrbit, true);
+    assert.equal(withCli.leafRimSlackDeg, 14);
+
+    assert.equal(normalizeAutoSupportSettings({ leafRimSlackDeg: -8 }).leafRimSlackDeg, 0);
+    assert.equal(normalizeAutoSupportSettings({ leafRimSlackDeg: 55 }).leafRimSlackDeg, 35);
 
     const patched = applyAutoSupportSettingsPatch(defaults, {
         smoothContactNormals: false,
@@ -277,29 +289,42 @@ test('AutoSupportSettings defaults, normalizeAutoSupportSettings, and diagnostic
     assert.equal(patched.normalSynthesisPreset, 'macro-smooth');
     assert.equal('normalSynthesisMode' in patched, false);
     assert.equal('leafCapOrbit' in patched, false);
+    assert.equal('leafRimSlackDeg' in patched, false);
 });
 
-test('resolveEffectiveAutoNormalSynthesis resolves UI defaults, toggle off -> raw, and CLI overrides', () => {
+test('resolveEffectiveAutoNormalSynthesis resolves UI defaults, master gating, CLI overrides, and devTools.leafRimSlackDeg gating', () => {
     assert.deepEqual(resolveEffectiveAutoNormalSynthesis(undefined), {
         mode: 'bisector',
-        leafCapOrbit: false,
+        leafCapOrbit: true,
+        leafRimSlackDeg: 0,
     });
     assert.deepEqual(resolveEffectiveAutoNormalSynthesis(null), {
         mode: 'bisector',
-        leafCapOrbit: false,
+        leafCapOrbit: true,
+        leafRimSlackDeg: 0,
     });
     assert.deepEqual(resolveEffectiveAutoNormalSynthesis({}), {
         mode: 'bisector',
-        leafCapOrbit: false,
+        leafCapOrbit: true,
+        leafRimSlackDeg: 0,
     });
 
     assert.deepEqual(
         resolveEffectiveAutoNormalSynthesis({
             smoothContactNormals: false,
             normalSynthesisPreset: 'crease-lock',
+            knotWeightedLeafNormals: true,
+        }),
+        { mode: 'raw', leafCapOrbit: false, leafRimSlackDeg: 0 },
+    );
+
+    assert.deepEqual(
+        resolveEffectiveAutoNormalSynthesis({
+            smoothContactNormals: true,
+            normalSynthesisPreset: 'macro-smooth',
             knotWeightedLeafNormals: false,
         }),
-        { mode: 'raw', leafCapOrbit: false },
+        { mode: 'macro-smooth', leafCapOrbit: false, leafRimSlackDeg: 0 },
     );
 
     assert.deepEqual(
@@ -308,7 +333,7 @@ test('resolveEffectiveAutoNormalSynthesis resolves UI defaults, toggle off -> ra
             normalSynthesisPreset: 'macro-smooth',
             knotWeightedLeafNormals: true,
         }),
-        { mode: 'macro-smooth', leafCapOrbit: true },
+        { mode: 'macro-smooth', leafCapOrbit: true, leafRimSlackDeg: 0 },
     );
 
     assert.deepEqual(
@@ -318,8 +343,9 @@ test('resolveEffectiveAutoNormalSynthesis resolves UI defaults, toggle off -> ra
             normalSynthesisMode: 'crease-lock',
             knotWeightedLeafNormals: false,
             leafCapOrbit: true,
+            leafRimSlackDeg: 18,
         }),
-        { mode: 'crease-lock', leafCapOrbit: true },
+        { mode: 'crease-lock', leafCapOrbit: true, leafRimSlackDeg: 18 },
     );
 
     assert.deepEqual(
@@ -329,7 +355,260 @@ test('resolveEffectiveAutoNormalSynthesis resolves UI defaults, toggle off -> ra
             normalSynthesisMode: 'raw',
             knotWeightedLeafNormals: true,
             leafCapOrbit: false,
+            leafRimSlackDeg: 50,
         }),
-        { mode: 'raw', leafCapOrbit: false },
+        { mode: 'raw', leafCapOrbit: false, leafRimSlackDeg: 35 },
     );
+
+    // devTools.leafRimSlackDeg gating
+    assert.deepEqual(
+        resolveEffectiveAutoNormalSynthesis({}, { enabled: false, leafRimSlackDeg: 20 }),
+        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 0 },
+    );
+    assert.deepEqual(
+        resolveEffectiveAutoNormalSynthesis({}, { enabled: true, leafRimSlackDeg: 20 }),
+        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 20 },
+    );
+    assert.deepEqual(
+        resolveEffectiveAutoNormalSynthesis({}, { enabled: true, leafRimSlackDeg: 50 }),
+        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 35 },
+    );
+    assert.deepEqual(
+        resolveEffectiveAutoNormalSynthesis({}, { enabled: true, leafRimSlackDeg: -4 }),
+        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 0 },
+    );
+    assert.deepEqual(
+        resolveEffectiveAutoNormalSynthesis({ leafRimSlackDeg: 7 }, { enabled: true, leafRimSlackDeg: 20 }),
+        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 7 },
+    );
+    assert.deepEqual(
+        resolveEffectiveAutoNormalSynthesis({ leafRimSlackDeg: 0 }, { enabled: true, leafRimSlackDeg: 20 }),
+        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 0 },
+    );
+});
+
+test('bench-auto-supports parseArgs handles --leaf-rim-slack order-independently and formatNormalSynthesisTable prints capSplit/slack', () => {
+    const spaceFlag = benchAutoSupports.parseArgs([
+        '--leaf-rim-slack', '15',
+        '--settings', '{"areaPerSupportMm2":20,"leafRimSlackDeg":3}',
+    ]);
+    assert.equal(spaceFlag.settings.leafRimSlackDeg, 15);
+    assert.equal(spaceFlag.settings.areaPerSupportMm2, 20);
+
+    const eqFlag = benchAutoSupports.parseArgs([
+        '--settings', '{"areaPerSupportMm2":12}',
+        '--leaf-rim-slack=15',
+    ]);
+    assert.equal(eqFlag.settings.leafRimSlackDeg, 15);
+    assert.equal(eqFlag.settings.areaPerSupportMm2, 12);
+
+    assert.equal(benchAutoSupports.parseArgs(['--leaf-rim-slack', '-5']).settings.leafRimSlackDeg, 0);
+    assert.equal(benchAutoSupports.parseArgs(['--leaf-rim-slack=50']).settings.leafRimSlackDeg, 35);
+
+    assert.throws(() => benchAutoSupports.parseArgs(['--leaf-rim-slack', 'nope']), /leaf-rim-slack/);
+    assert.throws(() => benchAutoSupports.parseArgs(['--leaf-rim-slack=']), /leaf-rim-slack/);
+    assert.throws(() => benchAutoSupports.parseArgs(['--leaf-rim-slack']), /needs a value/);
+
+    const emptyState: SupportState = {
+        roots: {},
+        trunks: {},
+        branches: {},
+        leaves: {},
+        twigs: {},
+        sticks: {},
+        braces: {},
+        stumps: {},
+        kickstands: {},
+        knots: {},
+        selectedId: null,
+        hoveredId: null,
+    };
+    const withOrbit = computeNormalSynthesisMetrics(emptyState, 'm-fmt', {
+        mode: 'bisector',
+        leafCapOrbit: true,
+    });
+    const formatFn = (benchAutoSupports as Record<string, unknown>).formatNormalSynthesisTable as
+        | ((rows: Array<{ name: string; normalSynthesis?: typeof withOrbit }>, leafRimSlackDeg?: number) => string)
+        | undefined;
+    assert.equal(typeof formatFn, 'function', 'formatNormalSynthesisTable must be exported');
+    const rendered = formatFn!([{ name: 'm-fmt', normalSynthesis: withOrbit }], 15);
+    assert.match(rendered, /bisector\+orb\+slack15/);
+    assert.match(rendered, /== Leaf Cap Split \(H1-H2\) ==/);
+});
+
+test('computeNormalSynthesisMetrics omits capSplit when leafCapOrbit is false and no capAnchor exists, and populates H1-H2 capSplit otherwise', () => {
+    const vecFromDown = (deg: number, azDeg = 0): Vec3 => {
+        const r = (deg * Math.PI) / 180;
+        const a = (azDeg * Math.PI) / 180;
+        return { x: Math.sin(r) * Math.cos(a), y: Math.sin(r) * Math.sin(a), z: -Math.cos(r) };
+    };
+    const diskProfile = {
+        type: 'disk' as const,
+        contactDiameterMm: 0.2,
+        bodyDiameterMm: 0.5,
+        lengthMm: 1.2,
+        penetrationMm: 0.05,
+        diskThicknessMm: 0.1,
+        maxStandoffMm: 0.35,
+        standoffAngleThreshold: Math.PI / 4,
+    };
+    const baseState: SupportState = {
+        roots: {},
+        trunks: {},
+        branches: {},
+        leaves: {
+            'l-plain': {
+                id: 'l-plain',
+                modelId: 'm1',
+                parentKnotId: 'k1',
+                contactCone: {
+                    id: 'c-plain',
+                    pos: { x: 0, y: 0, z: 10 },
+                    normal: vecFromDown(0),
+                    surfaceNormal: vecFromDown(0),
+                    profile: diskProfile,
+                },
+            },
+            'l-other-cap': {
+                id: 'l-other-cap',
+                modelId: 'other-model',
+                parentKnotId: 'k2',
+                contactCone: {
+                    id: 'c-other',
+                    pos: { x: 0, y: 0, z: 10 },
+                    normal: vecFromDown(0),
+                    surfaceNormal: vecFromDown(0),
+                    profile: diskProfile,
+                    capAnchor: {
+                        nMean: vecFromDown(0),
+                        baseNormal: vecFromDown(0),
+                        thetaSpreadRad: (25 * Math.PI) / 180,
+                        thetaCapRad: (25 * Math.PI) / 180,
+                        isConcave: false,
+                    },
+                } as unknown as SupportState['leaves'][string]['contactCone'],
+            },
+        },
+        twigs: {},
+        sticks: {},
+        braces: {},
+        stumps: {},
+        kickstands: {},
+        knots: {},
+        selectedId: null,
+        hoveredId: null,
+    };
+
+    const arm0Off = computeNormalSynthesisMetrics(baseState, 'm1', { mode: 'raw', leafCapOrbit: false });
+    assert.equal(arm0Off.capSplit, undefined);
+    assert.equal('capSplit' in arm0Off, false);
+
+    const orbitEnabledNoAnchor = computeNormalSynthesisMetrics(baseState, 'm1', { mode: 'bisector', leafCapOrbit: true });
+    assert.ok(orbitEnabledNoAnchor.capSplit);
+    assert.deepEqual(orbitEnabledNoAnchor.capSplit.flatOrSmooth, {
+        count: 1,
+        flushCount: 1,
+        angleDrivenCount: 0,
+        collisionDrivenCount: 0,
+        capReachableCount: 0,
+        orbitedCount: 0,
+        concaveCount: 0,
+        meanOrbitShiftDeg: 0,
+        maxOrbitShiftDeg: 0,
+    });
+    assert.equal(orbitEnabledNoAnchor.capSplit.ridgeOrCorner.count, 0);
+
+    const anchoredState: SupportState = {
+        ...baseState,
+        leaves: {
+            ...baseState.leaves,
+            // flatOrSmooth (< 15°): thetaSpread = 10°, orbited 4°, reachable, angle-driven (sn vs cn = 60°)
+            'l-flat-cap': {
+                id: 'l-flat-cap',
+                modelId: 'm1',
+                parentKnotId: 'k1',
+                contactCone: {
+                    id: 'c-flat',
+                    pos: { x: 0, y: 0, z: 10 },
+                    normal: vecFromDown(60),
+                    surfaceNormal: vecFromDown(4),
+                    profile: diskProfile,
+                    capAnchor: {
+                        nMean: vecFromDown(0),
+                        baseNormal: vecFromDown(0),
+                        thetaSpreadRad: (10 * Math.PI) / 180,
+                        thetaCapRad: (15 * Math.PI) / 180, // 45 + 15 = 60° (reachable!)
+                        isConcave: false,
+                    },
+                } as unknown as SupportState['leaves'][string]['contactCone'],
+            },
+            // ridgeOrCorner (>= 15° boundary): thetaSpread = 15°, orbited 12°, concave, collision-driven, unreachable (nMean vs cn = 65° > 45 + 15)
+            'l-ridge-1': {
+                id: 'l-ridge-1',
+                modelId: 'm1',
+                parentKnotId: 'k1',
+                contactCone: {
+                    id: 'c-r1',
+                    pos: { x: 0, y: 0, z: 10 },
+                    normal: vecFromDown(65),
+                    surfaceNormal: vecFromDown(12),
+                    diskLengthOverride: 0.34,
+                    profile: diskProfile,
+                    capAnchor: {
+                        nMean: vecFromDown(0),
+                        baseNormal: vecFromDown(0),
+                        thetaSpreadRad: (15 * Math.PI) / 180,
+                        thetaCapRad: (15 * Math.PI) / 180,
+                        isConcave: true,
+                    },
+                } as unknown as SupportState['leaves'][string]['contactCone'],
+            },
+            // ridgeOrCorner: thetaSpread = 25°, shift 0.2° (<= 0.5, not orbited), flush, reachable
+            'l-ridge-2': {
+                id: 'l-ridge-2',
+                modelId: 'm1',
+                parentKnotId: 'k1',
+                contactCone: {
+                    id: 'c-r2',
+                    pos: { x: 0, y: 0, z: 10 },
+                    normal: vecFromDown(0.2),
+                    surfaceNormal: vecFromDown(0.2),
+                    profile: diskProfile,
+                    capAnchor: {
+                        nMean: vecFromDown(0),
+                        baseNormal: vecFromDown(0),
+                        thetaSpreadRad: (25 * Math.PI) / 180,
+                        thetaCapRad: (25 * Math.PI) / 180,
+                        isConcave: false,
+                    },
+                } as unknown as SupportState['leaves'][string]['contactCone'],
+            },
+        },
+    };
+
+    // Even when leafCapOrbit option is false, presence of capAnchor on modelId populates capSplit
+    const withAnchors = computeNormalSynthesisMetrics(anchoredState, 'm1', { mode: 'bisector', leafCapOrbit: false });
+    assert.ok(withAnchors.capSplit);
+    assert.deepEqual(withAnchors.capSplit.flatOrSmooth, {
+        count: 2,
+        flushCount: 1,
+        angleDrivenCount: 1,
+        collisionDrivenCount: 0,
+        capReachableCount: 1,
+        orbitedCount: 1,
+        concaveCount: 0,
+        meanOrbitShiftDeg: 2,
+        maxOrbitShiftDeg: 4,
+    });
+    assert.deepEqual(withAnchors.capSplit.ridgeOrCorner, {
+        count: 2,
+        flushCount: 1,
+        angleDrivenCount: 0,
+        collisionDrivenCount: 1,
+        capReachableCount: 1,
+        orbitedCount: 1,
+        concaveCount: 1,
+        meanOrbitShiftDeg: 6.1,
+        maxOrbitShiftDeg: 12,
+    });
 });

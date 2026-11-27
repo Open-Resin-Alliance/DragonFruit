@@ -58,6 +58,19 @@ function findDistributionToggleSwitch(container: HTMLElement): HTMLButtonElement
     return match;
 }
 
+function findLeafCapOrbitSwitch(container: HTMLElement): HTMLButtonElement {
+    const buttons = [...container.querySelectorAll('button[role="switch"]')] as HTMLButtonElement[];
+    const match = buttons.find((btn) => btn.closest('label')?.textContent?.includes('Leaf Cap Orbiting'));
+    assert.ok(match, 'Leaf Cap Orbiting switch must render');
+    return match;
+}
+
+function findFieldHelpLabel(switchBtn: HTMLButtonElement): string {
+    const helpEl = switchBtn.closest('label')?.querySelector('[aria-label]') as HTMLElement | null;
+    assert.ok(helpEl, 'help tooltip icon must render inside field label');
+    return helpEl.getAttribute('aria-label') ?? '';
+}
+
 function findAutoPresetTrigger(container: HTMLElement): HTMLButtonElement {
     const trigger = container.querySelector('button[aria-label="Normal Preset"]') as HTMLButtonElement | null;
     assert.ok(trigger, 'Normal Preset dropdown trigger must render');
@@ -115,7 +128,7 @@ afterEach(() => {
     setActiveSidebarPanel(DEFAULT_SIDEBAR_PANEL);
 });
 
-test('AutoSupportSettingsBody updates smoothContactNormals toggle, 3-mode preset dropdown, and disables dropdown when toggle OFF', async () => {
+test('AutoSupportSettingsBody updates smoothContactNormals and Leaf Cap Orbiting toggles, 3-mode preset dropdown, and master-gates without LOCKED_PROFILE_HINT', async () => {
     let latestDraft = createDefaultAutoSupportSettings();
     const tree = await renderWithProviders(
         <AutoSupportHarness
@@ -127,11 +140,27 @@ test('AutoSupportSettingsBody updates smoothContactNormals toggle, 3-mode preset
 
     try {
         const toggle = findDistributionToggleSwitch(tree.container);
+        const orbitToggle = findLeafCapOrbitSwitch(tree.container);
         const trigger = findAutoPresetTrigger(tree.container);
 
         assert.equal(toggle.getAttribute('aria-checked'), 'true');
+        assert.equal(orbitToggle.getAttribute('aria-checked'), 'true');
+        assert.equal(orbitToggle.disabled, false);
         assert.equal(trigger.disabled, false);
         assert.ok(trigger.textContent?.includes('Bisector (125°)'));
+        assert.ok(findFieldHelpLabel(orbitToggle).includes('Orbit leaf contact disks'));
+
+        await act(async () => {
+            orbitToggle.click();
+        });
+        assert.equal(latestDraft.knotWeightedLeafNormals, false);
+        assert.equal(orbitToggle.getAttribute('aria-checked'), 'false');
+
+        await act(async () => {
+            orbitToggle.click();
+        });
+        assert.equal(latestDraft.knotWeightedLeafNormals, true);
+        assert.equal(orbitToggle.getAttribute('aria-checked'), 'true');
 
         await selectDropdownOption(trigger, 'Crease-Lock (55°)');
         assert.equal(latestDraft.normalSynthesisPreset, 'crease-lock');
@@ -147,18 +176,31 @@ test('AutoSupportSettingsBody updates smoothContactNormals toggle, 3-mode preset
         assert.equal(latestDraft.smoothContactNormals, false);
         assert.equal(toggle.getAttribute('aria-checked'), 'false');
         assert.equal(trigger.disabled, true, 'dropdown must disable when Smooth Contact Normals is OFF');
+        assert.equal(orbitToggle.disabled, true, 'Leaf Cap Orbiting must disable when Smooth Contact Normals is OFF');
+        assert.equal(orbitToggle.getAttribute('aria-checked'), 'true', 'stored preference stays intact while master-disabled');
+        assert.ok(
+            findFieldHelpLabel(orbitToggle).includes('Enable Smooth Contact Normals to orbit leaf caps toward host knots.'),
+            'master-disabled help must explain why Leaf Cap Orbiting is disabled',
+        );
+        assert.equal(
+            tree.container.innerHTML.includes('Duplicate it and edit the copy'),
+            false,
+            'master-disabled toggle must NOT render LOCKED_PROFILE_HINT when presetLocked is false',
+        );
 
         await act(async () => {
             toggle.click();
         });
         assert.equal(latestDraft.smoothContactNormals, true);
         assert.equal(trigger.disabled, false, 'dropdown re-enables when Smooth Contact Normals turns ON');
+        assert.equal(orbitToggle.disabled, false, 'Leaf Cap Orbiting re-enables when Smooth Contact Normals turns ON');
+        assert.ok(findFieldHelpLabel(orbitToggle).includes('Orbit leaf contact disks'));
     } finally {
         await tree.unmount();
     }
 });
 
-test('AutoSupportSettingsBody locks Normal Preset dropdown when presetLocked is true', async () => {
+test('AutoSupportSettingsBody locks Normal Preset dropdown and Leaf Cap Orbiting when presetLocked is true', async () => {
     const tree = await renderWithProviders(
         <AutoSupportHarness
             presetLocked
@@ -168,8 +210,11 @@ test('AutoSupportSettingsBody locks Normal Preset dropdown when presetLocked is 
 
     try {
         const toggle = findDistributionToggleSwitch(tree.container);
+        const orbitToggle = findLeafCapOrbitSwitch(tree.container);
         const trigger = findAutoPresetTrigger(tree.container);
         assert.equal(toggle.disabled, true);
+        assert.equal(orbitToggle.disabled, true);
+        assert.ok(findFieldHelpLabel(orbitToggle).includes('Duplicate it and edit the copy'));
         assert.equal(trigger.disabled, true);
     } finally {
         await tree.unmount();

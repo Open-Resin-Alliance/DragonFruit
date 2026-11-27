@@ -59,8 +59,8 @@ import { getFinalSocketPosition } from '../src/supports/SupportPrimitives/Contac
 import type { ContactDiskProfile } from '../src/supports/SupportPrimitives/ContactCone/types';
 import { calculateDiskThickness } from '../src/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { SUPPORT_STATE_TYPES, contactEndpointsFor } from '../src/supports/supportTypeRegistry';
-import type { AutoSupportSettings } from '../src/supports/autoSupport/settings';
-import type { AutoSupportPlan, NormalSynthesisMetrics, PlacementNormalSynthesisMode } from '../src/supports/autoSupport/types';
+import { resolveEffectiveAutoNormalSynthesis, type AutoSupportSettings } from '../src/supports/autoSupport/settings';
+import type { AutoSupportPlan, LeafCapRegimeSummary, NormalSynthesisMetrics, PlacementNormalSynthesisMode } from '../src/supports/autoSupport/types';
 import type { SupportState, Vec3 } from '../src/supports/types';
 import type { SupportFrameStressReport } from '../src/supports/autoSupport/supportGraphStress';
 import type { DetectedIsland } from '../src/volumeAnalysis/Islands/types';
@@ -148,6 +148,15 @@ export interface StressMetrics {
 
 type Interval = { low: number; high: number };
 
+function parseLeafRimSlackDeg(raw: string): number {
+    const trimmed = raw.trim();
+    const parsed = trimmed.length > 0 ? Number(trimmed) : Number.NaN;
+    if (!Number.isFinite(parsed)) {
+        throw new Error(`invalid --leaf-rim-slack "${raw}" (expected finite number in [0, 35])`);
+    }
+    return Math.min(35, Math.max(0, parsed));
+}
+
 export function parseArgs(argv: string[]): {
     only: string[] | null;
     corpusDir: string | null;
@@ -182,6 +191,7 @@ export function parseArgs(argv: string[]): {
     };
     let normalSynthesisMode: PlacementNormalSynthesisMode | undefined;
     let leafCapOrbit: boolean | undefined;
+    let leafRimSlackDeg: number | undefined;
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         const value = (): string => {
@@ -208,6 +218,10 @@ export function parseArgs(argv: string[]): {
                 throw new Error(`invalid --leaf-cap-orbit "${toggle}" (expected on|off)`);
             }
             leafCapOrbit = toggle === 'on';
+        } else if (arg === '--leaf-rim-slack') {
+            leafRimSlackDeg = parseLeafRimSlackDeg(value());
+        } else if (arg.startsWith('--leaf-rim-slack=')) {
+            leafRimSlackDeg = parseLeafRimSlackDeg(arg.slice('--leaf-rim-slack='.length));
         } else if (arg === '--repeat') options.repeat = Math.max(1, Number(value()));
         else if (arg === '--grid') options.grid = true;
         else if (arg === '--verbose') options.verbose = true;
@@ -225,6 +239,7 @@ export function parseArgs(argv: string[]): {
     }
     if (normalSynthesisMode !== undefined) options.settings.normalSynthesisMode = normalSynthesisMode;
     if (leafCapOrbit !== undefined) options.settings.leafCapOrbit = leafCapOrbit;
+    if (leafRimSlackDeg !== undefined) options.settings.leafRimSlackDeg = leafRimSlackDeg;
     return options;
 }
 
@@ -801,8 +816,16 @@ function formatStressTable(rows: ModelMetrics[]): string {
     return [line(header), widths.map((width) => '-'.repeat(width)).join('  '), ...body.map(line)].join('\n');
 }
 
-function formatNormalSynthesisTable(rows: ModelMetrics[]): string {
+function formatCapRegime(label: string, summary: LeafCapRegimeSummary): string {
+    return `${label}[n=${summary.count} fl/ang/col=${summary.flushCount}/${summary.angleDrivenCount}/${summary.collisionDrivenCount} reach=${summary.capReachableCount} orb=${summary.orbitedCount} conc=${summary.concaveCount} shift=${summary.meanOrbitShiftDeg.toFixed(1)}/${summary.maxOrbitShiftDeg.toFixed(1)}°]`;
+}
+
+export function formatNormalSynthesisTable(
+    rows: Array<{ name: string; normalSynthesis?: NormalSynthesisMetrics }>,
+    leafRimSlackDeg = 0,
+): string {
     const header = ['model', 'mode', 'n', 'p50', 'p90', 'max', '>0.25', '=0.35', 'fl/ang/col', 'devP90', 'lean(0/30/60/90+)', 'H4(c/lf/br/blk)'];
+    const slackSuffix = leafRimSlackDeg > 0 ? `+slack${leafRimSlackDeg}` : '';
     const body = rows.map((row) => {
         const ns = row.normalSynthesis;
         if (!ns) {
@@ -812,7 +835,7 @@ function formatNormalSynthesisTable(rows: ModelMetrics[]): string {
         const l = ns.surfaceLeanFromDownDeg;
         return [
             row.name,
-            `${ns.mode}${ns.leafCapOrbit ? '+orb' : ''}`,
+            `${ns.mode}${ns.leafCapOrbit ? '+orb' : ''}${slackSuffix}`,
             String(o.count),
             o.p50Mm.toFixed(3),
             o.p90Mm.toFixed(3),
@@ -830,7 +853,14 @@ function formatNormalSynthesisTable(rows: ModelMetrics[]): string {
         ...body.map((row) => row[column].length),
     ));
     const line = (cells: string[]): string => cells.map((cell, column) => cell.padEnd(widths[column])).join('  ');
-    return [line(header), widths.map((width) => '-'.repeat(width)).join('  '), ...body.map(line)].join('\n');
+    const table = [line(header), widths.map((width) => '-'.repeat(width)).join('  '), ...body.map(line)].join('\n');
+    const capRows = rows.filter((row) => row.normalSynthesis?.capSplit);
+    if (capRows.length === 0) return table;
+    const capLines = capRows.map((row) => {
+        const split = row.normalSynthesis!.capSplit!;
+        return `  ${row.name}: ${formatCapRegime('flat', split.flatOrSmooth)} | ${formatCapRegime('ridge', split.ridgeOrCorner)}`;
+    });
+    return `${table}\n\n== Leaf Cap Split (H1-H2) ==\n${capLines.join('\n')}`;
 }
 
 async function main(): Promise<void> {
@@ -892,8 +922,9 @@ async function main(): Promise<void> {
         console.log(`   corpus: ${options.corpusDir ?? 'synthetic (scripts/bench-auto-support-corpus.ts)'}\n`);
         console.log(formatTable(metrics));
         if (metrics.some((row) => row.normalSynthesis)) {
+            const activeRimSlackDeg = resolveEffectiveAutoNormalSynthesis(options.settings).leafRimSlackDeg;
             console.log('\n== Normal synthesis (H1-H4) ==');
-            console.log(formatNormalSynthesisTable(metrics));
+            console.log(formatNormalSynthesisTable(metrics, activeRimSlackDeg));
         }
         const undetermined = metrics.filter((row) => !row.deterministic);
         if (undetermined.length > 0) console.log(`\nNOT DETERMINISTIC: ${undetermined.map((row) => row.name).join(', ')}`);

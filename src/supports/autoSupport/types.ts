@@ -360,6 +360,25 @@ export interface SurfaceLeanBuckets {
     upwardOver90Count: number;
 }
 
+/** Leaf cap split telemetry summary for one surface curvature regime (H1-H2). */
+export interface LeafCapRegimeSummary {
+    count: number;
+    flushCount: number;
+    angleDrivenCount: number;
+    collisionDrivenCount: number;
+    capReachableCount: number;
+    orbitedCount: number;
+    concaveCount: number;
+    meanOrbitShiftDeg: number;
+    maxOrbitShiftDeg: number;
+}
+
+/** Leaf cap split across flat/smooth vs ridge/corner regimes (H1-H2). */
+export interface LeafCapSplitMetrics {
+    flatOrSmooth: LeafCapRegimeSummary;
+    ridgeOrCorner: LeafCapRegimeSummary;
+}
+
 /** Pre-constraint normal-synthesis telemetry (H1-H4). */
 export interface NormalSynthesisMetrics {
     mode: PlacementNormalSynthesisMode;
@@ -372,7 +391,7 @@ export interface NormalSynthesisMetrics {
     consolidationConvertedLeaves: number;
     consolidationConvertedBranches: number;
     consolidationBlockedCount: number;
-    capSplit?: Record<string, unknown>;
+    capSplit?: LeafCapSplitMetrics;
 }
 
 /** Detailed analytics from an auto-place run. */

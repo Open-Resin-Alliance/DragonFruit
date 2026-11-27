@@ -126,6 +126,7 @@ export type BooleanAutoSupportSettingKey =
   | 'enabled'
   | 'prioritizeIntersection'
   | 'smoothContactNormals'
+  | 'knotWeightedLeafNormals'
   | 'stabilizationEnabled'
   | 'minimaReinforcementEnabled'
   | 'debugSupportOriginColors'
@@ -211,6 +212,7 @@ const TOGGLES: readonly ToggleDef[] = [
   { key: 'enabled', section: 'detection', label: msg`Enabled`, hint: msg`Enable automatic support generation on explicit run` },
   { key: 'prioritizeIntersection', section: 'detection', label: msg`Prioritize Dual`, hint: msg`Islands found by BOTH the slice and mesh scans are placed first (they are the most certain)` },
   { key: 'smoothContactNormals', section: 'distribution', label: msg`Smooth Contact Normals`, hint: msg`Synthesize stable local contact normals instead of raw triangle normals (default on)` },
+  { key: 'knotWeightedLeafNormals', section: 'distribution', label: msg`Leaf Cap Orbiting`, hint: msg`Orbit leaf contact disks inside the local downward surface cap toward their host knot to reduce standoff cylinders on edges and corners.` },
   { key: 'stabilizationEnabled', section: 'stability', label: msg`Stabilization Anchors`, hint: msg`Add contacts along the edge or corner a pose bears on, so a leaning part is held against toppling and peel (default on)` },
   { key: 'minimaReinforcementEnabled', section: 'stability', label: msg`Minima Reinforcement`, hint: msg`Ring each mesh minima with contacts on its own flank, so a section starts on a base instead of a needle (default on)` },
   { key: 'debugSupportOriginColors', section: 'debug', label: msg`Origin Colors`, hint: msg`Debug: color supports by origin — stump (red), overhang (orange), island (blue), standalone (purple), reinforcement (teal)` },

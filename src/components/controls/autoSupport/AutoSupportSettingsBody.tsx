@@ -127,15 +127,21 @@ function ToggleField({
   locked?: boolean;
 }) {
   const { _ } = useLingui();
+  const masterDisabled = toggle.key === 'knotWeightedLeafNormals' && !draft.smoothContactNormals;
+  const disabled = Boolean(locked || masterDisabled);
   const hint = _(toggle.hint);
-  const help = locked ? _(LOCKED_PROFILE_HINT) : hint;
+  const help = locked
+    ? _(LOCKED_PROFILE_HINT)
+    : masterDisabled
+      ? _(msg`Enable Smooth Contact Normals to orbit leaf caps toward host knots.`)
+      : hint;
 
   const field = (
     <LabeledToggleInput
       label={_(toggle.label)}
       helpText={help}
-      title={locked ? undefined : hint}
-      disabled={locked}
+      title={locked ? undefined : help}
+      disabled={disabled}
       checked={draft[toggle.key]}
       onChange={(next) => setDraft((current) => ({ ...current, [toggle.key]: next }))}
     />
