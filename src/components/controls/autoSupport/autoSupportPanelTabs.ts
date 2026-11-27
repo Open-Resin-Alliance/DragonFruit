@@ -125,6 +125,7 @@ export type ToggleDef = {
 export type BooleanAutoSupportSettingKey =
   | 'enabled'
   | 'prioritizeIntersection'
+  | 'smoothContactNormals'
   | 'stabilizationEnabled'
   | 'minimaReinforcementEnabled'
   | 'debugSupportOriginColors'
@@ -209,6 +210,7 @@ export const ADVANCED_CALIBRATION_KNOBS: readonly KnobDef[] = CALIBRATION_KNOB_S
 const TOGGLES: readonly ToggleDef[] = [
   { key: 'enabled', section: 'detection', label: msg`Enabled`, hint: msg`Enable automatic support generation on explicit run` },
   { key: 'prioritizeIntersection', section: 'detection', label: msg`Prioritize Dual`, hint: msg`Islands found by BOTH the slice and mesh scans are placed first (they are the most certain)` },
+  { key: 'smoothContactNormals', section: 'distribution', label: msg`Smooth Contact Normals`, hint: msg`Synthesize stable local contact normals instead of raw triangle normals (default on)` },
   { key: 'stabilizationEnabled', section: 'stability', label: msg`Stabilization Anchors`, hint: msg`Add contacts along the edge or corner a pose bears on, so a leaning part is held against toppling and peel (default on)` },
   { key: 'minimaReinforcementEnabled', section: 'stability', label: msg`Minima Reinforcement`, hint: msg`Ring each mesh minima with contacts on its own flank, so a section starts on a base instead of a needle (default on)` },
   { key: 'debugSupportOriginColors', section: 'debug', label: msg`Origin Colors`, hint: msg`Debug: color supports by origin — stump (red), overhang (orange), island (blue), standalone (purple), reinforcement (teal)` },
@@ -268,6 +270,12 @@ export const TIER_HINTS: Record<string, MessageDescriptor> = {
 export const SIZING_TIER_FIELD = {
   label: msg`Sizing Tier`,
   hint: msg`The Support Studio preset whose tip, shaft and root numbers size this run. Editing that preset changes what auto-support prints — Duplicate it first if you only want to change the run.`,
+} as const;
+
+/** The Normal Preset control's own label and tooltip. */
+export const NORMAL_PRESET_FIELD = {
+  label: msg`Normal Preset`,
+  hint: msg`How contact normals are synthesized across flat regions, creases, and smooth curves when Smooth Contact Normals is enabled.`,
 } as const;
 
 /**

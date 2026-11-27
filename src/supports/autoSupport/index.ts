@@ -17,6 +17,7 @@ export {
   normalizeAutoSupportSettings,
   applyAutoSupportSettingsPatch,
   migrateLegacySizingPreset,
+  resolveEffectiveAutoNormalSynthesis,
 } from "./settings";
 export type {
   AutoSupportSettings,
@@ -25,6 +26,7 @@ export type {
   NumericAutoSupportSettingKey,
   SizingBand,
   SizingPreset,
+  NormalSynthesisPreset,
 } from "./settings";
 
 export {

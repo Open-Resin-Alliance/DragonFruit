@@ -1,5 +1,8 @@
 import { MIN_LEAF_FAN_RADIUS_MM } from './constants';
 import type { PlacementNormalSynthesisMode } from './types';
+import type { NormalSynthesisPreset } from '../Settings/types';
+
+export type { NormalSynthesisPreset };
 
 /**
  * The seven numbers a run sizes every shaft, tip and root from — a Support
@@ -160,6 +163,12 @@ export interface AutoSupportSettings {
      *  load falls with L², so the cap bounds how much a tall support thickens.
      *  **Calibration, not a preference.** Read by `sizeParameters`. */
     heightFactorCap: number;
+    /** Synthesize smoothed contact normals instead of raw triangle normals. */
+    smoothContactNormals: boolean;
+    /** Active Q3 normal synthesis preset when smoothContactNormals is on. */
+    normalSynthesisPreset: NormalSynthesisPreset;
+    /** Wave D knot-weighted leaf cap orbit (must stay false in Wave C). */
+    knotWeightedLeafNormals: boolean;
     /** Optional A/B placement normal synthesis mode (never in defaults). */
     normalSynthesisMode?: PlacementNormalSynthesisMode;
     /** Optional A/B leaf cap orbit toggle (never in defaults). */
@@ -269,6 +278,19 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
     return typeof value === 'boolean' ? value : fallback;
 }
 
+function normalizeNormalSynthesisPresetValue(
+    value: unknown,
+    fallback: NormalSynthesisPreset,
+): NormalSynthesisPreset {
+    return value === 'bisector' || value === 'crease-lock' || value === 'macro-smooth'
+        ? value
+        : fallback;
+}
+
+function isPlacementNormalSynthesisMode(value: unknown): value is PlacementNormalSynthesisMode {
+    return value === 'raw' || value === 'bisector' || value === 'crease-lock' || value === 'macro-smooth';
+}
+
 export function createDefaultAutoSupportSettings(): AutoSupportSettings {
     return {
         enabled: true,
@@ -297,6 +319,9 @@ export function createDefaultAutoSupportSettings(): AutoSupportSettings {
         debugSkipAutoBracing: false,
         stabilizationEnabled: true,
         minimaReinforcementEnabled: true,
+        smoothContactNormals: true,
+        normalSynthesisPreset: 'bisector',
+        knotWeightedLeafNormals: false,
     };
 }
 
@@ -306,6 +331,12 @@ export function normalizeAutoSupportSettings(input?: Partial<AutoSupportSettings
     // the preset id: migrating here means every read path (the settings store's own
     // load, a preset payload applied through it, a direct patch) lands on the id.
     const source = migrateLegacySizingPreset(input ?? defaults);
+    const cliMode = input?.normalSynthesisMode !== undefined && isPlacementNormalSynthesisMode(source.normalSynthesisMode)
+        ? source.normalSynthesisMode
+        : undefined;
+    const cliLeafCapOrbit = input?.leafCapOrbit !== undefined && typeof source.leafCapOrbit === 'boolean'
+        ? source.leafCapOrbit
+        : undefined;
 
     return {
         enabled: normalizeBoolean(source.enabled, defaults.enabled),
@@ -337,7 +368,34 @@ export function normalizeAutoSupportSettings(input?: Partial<AutoSupportSettings
             source.minimaReinforcementEnabled,
             defaults.minimaReinforcementEnabled,
         ),
+        smoothContactNormals: normalizeBoolean(source.smoothContactNormals, defaults.smoothContactNormals),
+        normalSynthesisPreset: normalizeNormalSynthesisPresetValue(
+            source.normalSynthesisPreset,
+            defaults.normalSynthesisPreset,
+        ),
+        knotWeightedLeafNormals: normalizeBoolean(
+            source.knotWeightedLeafNormals,
+            defaults.knotWeightedLeafNormals,
+        ),
+        ...(cliMode !== undefined ? { normalSynthesisMode: cliMode } : {}),
+        ...(cliLeafCapOrbit !== undefined ? { leafCapOrbit: cliLeafCapOrbit } : {}),
     };
+}
+
+/** Resolve effective placement normal synthesis mode and leaf cap orbit, letting 2C CLI fields override UI toggles. */
+export function resolveEffectiveAutoNormalSynthesis(
+    settings?: Partial<AutoSupportSettings> | null,
+): { mode: PlacementNormalSynthesisMode; leafCapOrbit: boolean } {
+    const uiMode: PlacementNormalSynthesisMode = (settings?.smoothContactNormals ?? true)
+        ? normalizeNormalSynthesisPresetValue(settings?.normalSynthesisPreset, 'bisector')
+        : 'raw';
+    const mode = isPlacementNormalSynthesisMode(settings?.normalSynthesisMode)
+        ? settings.normalSynthesisMode
+        : uiMode;
+    const leafCapOrbit = typeof settings?.leafCapOrbit === 'boolean'
+        ? settings.leafCapOrbit
+        : Boolean(settings?.knotWeightedLeafNormals);
+    return { mode, leafCapOrbit };
 }
 
 export function applyAutoSupportSettingsPatch(

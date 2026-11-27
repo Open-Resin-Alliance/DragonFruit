@@ -4,7 +4,14 @@
  * Built-in presets + dynamically created custom presets.
  */
 
-import { SupportPreset, PresetCollection, SupportSettings, createDefaultSettings } from './types';
+import {
+    SupportPreset,
+    PresetCollection,
+    SupportSettings,
+    createDefaultSettings,
+    normalizeDevToolsSettings,
+    normalizeNormalSynthesisPreset,
+} from './types';
 import { getSettings, setSettings, saveSettingsToLocalStorage } from './state';
 import { createDefaultAutoBracingSettings } from '../autoBracing/settings';
 import { createDefaultAutoSupportSettings, migrateLegacySizingPreset } from '../autoSupport/settings';
@@ -76,6 +83,19 @@ function normalizePresetSettings(
             // comparison below compares like with like).
             ...migrateLegacySizingPreset(source.autoSupport ?? {}),
         },
+        devTools: normalizeDevToolsSettings(
+            source.devTools,
+            normalizeDevToolsSettings(fallback.devTools, defaults.devTools),
+        ),
+        smoothContactNormals: typeof source.smoothContactNormals === 'boolean'
+            ? source.smoothContactNormals
+            : (typeof fallback.smoothContactNormals === 'boolean'
+                ? fallback.smoothContactNormals
+                : defaults.smoothContactNormals),
+        normalSynthesisPreset: normalizeNormalSynthesisPreset(
+            source.normalSynthesisPreset,
+            normalizeNormalSynthesisPreset(fallback.normalSynthesisPreset, defaults.normalSynthesisPreset),
+        ),
     };
 }
 
@@ -202,6 +222,8 @@ const DETAIL_PRESET: SupportPreset = {
         autoSupport: { ...createDefaultAutoSupportSettings(), areaPerSupportMm2: 16, sizingPreset: 'detail' },
         devToolsEnabled: false,
         devTools: createDefaultSettings().devTools,
+        smoothContactNormals: true,
+        normalSynthesisPreset: 'bisector',
         debugSimpleSupportRender: false,
         navigationDiscsOnly: false,
     },
@@ -217,6 +239,8 @@ const STRUCTURE_PRESET: SupportPreset = {
     pinnedSlot: 2,
     settings: {
         ...createDefaultSettings(),
+        smoothContactNormals: true,
+        normalSynthesisPreset: 'bisector',
         tip: {
             ...createDefaultSettings().tip,
             contactDiameterMm: 0.28,
@@ -295,6 +319,8 @@ const ANCHOR_PRESET: SupportPreset = {
         autoSupport: { ...createDefaultAutoSupportSettings(), areaPerSupportMm2: 5, sizingPreset: 'anchor' },
         devToolsEnabled: false,
         devTools: createDefaultSettings().devTools,
+        smoothContactNormals: true,
+        normalSynthesisPreset: 'bisector',
         debugSimpleSupportRender: false,
         navigationDiscsOnly: false,
     },
@@ -693,6 +719,8 @@ export function setActivePreset(id: string | null): void {
         // forest, not part of a sizing profile, so switching presets must not
         // flip it (and the stored flag a preset carries is never applied).
         navigationDiscsOnly: current.navigationDiscsOnly,
+        smoothContactNormals: current.smoothContactNormals,
+        normalSynthesisPreset: current.normalSynthesisPreset,
     });
 
     // Keep selected preset + persisted settings in sync across app restarts.

@@ -21,6 +21,9 @@ import {
     updateAutoBracingSettings,
     updateAutoSupportSettings,
     updateDevToolsEnabled,
+    updateDevToolsSettings,
+    updateSmoothContactNormals,
+    updateNormalSynthesisPreset,
 } from './state';
 import {
     subscribe as subscribeToSupportState,
@@ -30,7 +33,7 @@ import {
     type EditableSupportTarget,
 } from '../state';
 import { checkPresetDrift, findMatchingPresetIdForSettings, getPresetById } from './presets';
-import { createDefaultSettings, type SupportSettings } from './types';
+import { createDefaultSettings, type SupportSettings, type NormalSynthesisPreset, type DevToolsSettings } from './types';
 import { SUPPORT_PROFILE_LIMITS } from './defaults';
 import { applySettingsToSelectedSupports } from './applySettingsToSelectedSupports';
 import { areSupportGeometrySettingsEqual } from './supportSettingsCodec';
@@ -140,6 +143,106 @@ function fieldFocusProps(
         onBlurCapture: onBlur,
         'data-setting-key': key,
     };
+}
+
+/* i18n-ignore-start */
+const DEVTOOLS_SYNTHESIS_FIELDS: ReadonlyArray<{
+    key: 'normalSampleRadiusScale' | 'normalFlatThresholdDeg' | 'normalCreaseThresholdDeg' | 'normalDeadbandScale' | 'leafRimSlackDeg';
+    label: string;
+    step: number;
+    min: number;
+    max: number;
+    span2?: boolean;
+}> = [
+    { key: 'normalSampleRadiusScale', label: 'Radius Scale', step: 0.1, min: 0.1, max: 5 },
+    { key: 'normalFlatThresholdDeg', label: 'Flat Deg', step: 1, min: 0, max: 45 },
+    { key: 'normalCreaseThresholdDeg', label: 'Crease Deg', step: 5, min: 0, max: 180 },
+    { key: 'normalDeadbandScale', label: 'Deadband', step: 0.1, min: 0, max: 5 },
+    { key: 'leafRimSlackDeg', label: 'Rim Slack', step: 1, min: 0, max: 45, span2: true },
+];
+/* i18n-ignore-end */
+
+function SupportNormalSynthesisControls({
+    smoothContactNormals,
+    normalSynthesisPreset,
+    devToolsEnabled,
+    devTools,
+    labelClassName,
+}: {
+    smoothContactNormals: boolean;
+    normalSynthesisPreset: NormalSynthesisPreset;
+    devToolsEnabled: boolean;
+    devTools: DevToolsSettings;
+    labelClassName: string;
+}) {
+    const { _ } = useLingui();
+
+    return (
+        <div className="space-y-1.5 min-w-0">
+            <label className="flex items-center gap-1.5 cursor-pointer select-none min-w-0">
+                <input
+                    type="checkbox"
+                    checked={smoothContactNormals}
+                    onChange={(e) => updateSmoothContactNormals(e.target.checked)}
+                    className="ui-checkbox shrink-0 !w-3.5 !h-3.5"
+                />
+                <span
+                    className={labelClassName}
+                    style={{ color: 'var(--text-muted)' }}
+                    title={_(msg`Smooth Contact Normals`)}
+                >
+                    {_(msg`Smooth Contact Normals`)}
+                </span>
+            </label>
+
+            <SelectDropdown
+                value={normalSynthesisPreset}
+                disabled={!smoothContactNormals}
+                ariaLabel={_(msg`Normal Synthesis Preset`)}
+                onChange={(value) => updateNormalSynthesisPreset(value as NormalSynthesisPreset)}
+                options={[
+                    { value: 'bisector', label: _(msg`Bisector (125°)`) },
+                    { value: 'crease-lock', label: _(msg`Crease-Lock (55°)`) },
+                    { value: 'macro-smooth', label: _(msg`Macro-Smooth`) },
+                ]}
+                className="w-full min-w-0 space-y-0"
+                selectClassName="w-full min-w-0 h-8 px-2.5 pr-8 text-xs truncate"
+                menuClassName="!min-w-[9.5rem]"
+            />
+
+            {/* i18n-ignore-start */}
+            {devToolsEnabled && (
+                <div
+                    className="rounded border p-1.5 space-y-1.5"
+                    style={{
+                        borderColor: 'var(--border-subtle)',
+                        background: 'var(--surface-0)',
+                    }}
+                >
+                    <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                        DevTools Synthesis
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                        {DEVTOOLS_SYNTHESIS_FIELDS.map((field) => (
+                            <label key={field.key} className={`space-y-0.5 min-w-0 ${field.span2 ? 'col-span-2' : ''}`}>
+                                <span className="block text-[10px] truncate" style={{ color: 'var(--text-muted)' }}>{field.label}</span>
+                                <NumberInput
+                                    value={devTools[field.key]}
+                                    onChange={(val) => updateDevToolsSettings({ [field.key]: val })}
+                                    step={field.step}
+                                    min={field.min}
+                                    max={field.max}
+                                    showStepper={false}
+                                    className={INPUT_CLASS}
+                                />
+                            </label>
+                        ))}
+                    </div>
+                </div>
+            )}
+            {/* i18n-ignore-end */}
+        </div>
+    );
 }
 
 /**
@@ -921,6 +1024,16 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                 </div>
             )}
 
+            {panelHas(activePanel, 'tip') && (
+                <SupportNormalSynthesisControls
+                    smoothContactNormals={settings.smoothContactNormals}
+                    normalSynthesisPreset={settings.normalSynthesisPreset}
+                    devToolsEnabled={settings.devToolsEnabled}
+                    devTools={settings.devTools}
+                    labelClassName={compactFieldLabelClass}
+                />
+            )}
+
             {panelHas(activePanel, 'shaft') && (
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('shaft.diameterMm')}>
                     <div className={compactFieldLabelClass} style={{ color: 'var(--text-muted)' }} title={_(msg`Trunk Diameter`)}>{_(msg`Trunk Diameter`)}</div>
@@ -1082,6 +1195,14 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                     )}
                 </div>
             </div>
+
+            <SupportNormalSynthesisControls
+                smoothContactNormals={settings.smoothContactNormals}
+                normalSynthesisPreset={settings.normalSynthesisPreset}
+                devToolsEnabled={settings.devToolsEnabled}
+                devTools={settings.devTools}
+                labelClassName={compactFieldLabelClass}
+            />
 
             <div className={compactTrunkPairClass}>
                 <div className="space-y-1 min-w-0" {...makeRowFocusHandlers('shaft.diameterMm')}>
@@ -1302,6 +1423,8 @@ export function SupportSidebar({ activeModelId = null }: { activeModelId?: strin
                                                             // The navigation view is how the user is looking
                                                             // at the forest, not part of a preset.
                                                             navigationDiscsOnly: current.navigationDiscsOnly,
+                                                            smoothContactNormals: current.smoothContactNormals,
+                                                            normalSynthesisPreset: current.normalSynthesisPreset,
                                                         };
                                                         editSessionLatestSettingsRef.current = nextSettings;
                                                         setSettings(nextSettings);

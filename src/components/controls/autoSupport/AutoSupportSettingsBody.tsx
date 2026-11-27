@@ -27,6 +27,7 @@ import type { CSSProperties } from 'react';
 import { LabeledNumberInput, LabeledToggleInput } from '@/components/settings/profileFormAtoms';
 import type { AutoSupportSettings, AutoSupportDiagnosticKey } from '@/supports/autoSupport';
 import { AutoSupportPresetSelector, AutoSupportSettingsFooterActions } from './AutoSupportPresets';
+import { AutoSupportNormalPresetField } from './AutoSupportNormalPresetField';
 import { AutoSupportSizingTierField } from './AutoSupportSizingTierField';
 import { Tooltip } from '@/components/ui/Tooltip';
 import {
@@ -300,6 +301,9 @@ export function AutoSupportSettingsBody({
               {TOGGLES_BY_SECTION[section.key].map((toggle) => (
                 <ToggleField key={toggle.key} toggle={toggle} draft={draft} setDraft={setDraft} locked={presetLocked} />
               ))}
+              {section.key === 'distribution' && (
+                <AutoSupportNormalPresetField draft={draft} setDraft={setDraft} presetLocked={presetLocked} />
+              )}
               {section.key === 'density' && (
                 <AutoSupportSizingTierField draft={draft} setDraft={setDraft} disabled={presetLocked} />
               )}

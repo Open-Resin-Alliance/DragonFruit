@@ -5,7 +5,13 @@
  * Uses a simple subscription pattern for React integration.
  */
 
-import { SupportSettings, createDefaultSettings } from './types';
+import {
+    SupportSettings,
+    createDefaultSettings,
+    normalizeDevToolsSettings,
+    normalizeNormalSynthesisPreset,
+    type NormalSynthesisPreset,
+} from './types';
 import {
     DEFAULT_ROOTS_CONE_HEIGHT_MM,
     DEFAULT_ROOTS_DIAMETER_MM,
@@ -114,8 +120,13 @@ function mergeWithDefaults(settings: SupportSettings): SupportSettings {
             ...defaults.autoSupport,
             ...((settings as any).autoSupport ?? {}),
         }),
-        devToolsEnabled: settings.devToolsEnabled !== undefined ? settings.devToolsEnabled : defaults.devToolsEnabled,
-        devTools: settings.devTools ? { ...defaults.devTools, ...settings.devTools } : defaults.devTools,
+        devToolsEnabled: coerceBoolean(settings.devToolsEnabled, defaults.devToolsEnabled),
+        devTools: normalizeDevToolsSettings(settings.devTools, defaults.devTools),
+        smoothContactNormals: coerceBoolean(settings.smoothContactNormals, defaults.smoothContactNormals),
+        normalSynthesisPreset: normalizeNormalSynthesisPreset(
+            settings.normalSynthesisPreset,
+            defaults.normalSynthesisPreset,
+        ),
         debugSimpleSupportRender: typeof settings.debugSimpleSupportRender === 'boolean' ? settings.debugSimpleSupportRender : defaults.debugSimpleSupportRender,
         navigationDiscsOnly: typeof settings.navigationDiscsOnly === 'boolean' ? settings.navigationDiscsOnly : defaults.navigationDiscsOnly,
     });
@@ -275,7 +286,23 @@ export function updateAutoSupportSettings(autoSupport: Partial<SupportSettings['
 export function updateDevToolsSettings(devTools: Partial<SupportSettings['devTools']>): void {
     currentSettings = {
         ...currentSettings,
-        devTools: { ...currentSettings.devTools, ...devTools },
+        devTools: normalizeDevToolsSettings({ ...currentSettings.devTools, ...devTools }, currentSettings.devTools),
+    };
+    notify();
+}
+
+export function updateSmoothContactNormals(enabled: boolean): void {
+    currentSettings = {
+        ...currentSettings,
+        smoothContactNormals: Boolean(enabled),
+    };
+    notify();
+}
+
+export function updateNormalSynthesisPreset(preset: NormalSynthesisPreset): void {
+    currentSettings = {
+        ...currentSettings,
+        normalSynthesisPreset: normalizeNormalSynthesisPreset(preset, currentSettings.normalSynthesisPreset),
     };
     notify();
 }

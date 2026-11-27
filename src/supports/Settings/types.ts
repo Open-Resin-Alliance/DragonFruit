@@ -43,6 +43,17 @@ import {
 
 // --- Profile Types ---
 
+export type NormalSynthesisPreset = 'bisector' | 'crease-lock' | 'macro-smooth';
+
+export function normalizeNormalSynthesisPreset(
+    value: unknown,
+    fallback: NormalSynthesisPreset = 'bisector',
+): NormalSynthesisPreset {
+    return value === 'bisector' || value === 'crease-lock' || value === 'macro-smooth'
+        ? value
+        : fallback;
+}
+
 export interface TipProfile {
     shape: 'cone';
     type?: 'disk' | 'sphere'; // Phase 1 Contact Primitives
@@ -127,6 +138,36 @@ export interface DevToolsSettings {
     maxConeAngleDevDeg: number;
     verticalKnotSpacingMm: number;
     maxBranchesPerTrunk: number;
+    normalSampleRadiusScale: number;
+    normalFlatThresholdDeg: number;
+    normalCreaseThresholdDeg: number;
+    normalDeadbandScale: number;
+    leafRimSlackDeg: number;
+}
+
+/** Merge a partial or legacy DevTools block against defaults, replacing non-finite/invalid values. */
+export function normalizeDevToolsSettings(
+    raw: Partial<DevToolsSettings> | undefined,
+    fallback: DevToolsSettings,
+): DevToolsSettings {
+    if (!raw || typeof raw !== 'object') return { ...fallback };
+    const next = { ...fallback };
+    const out = next as Record<string, unknown>;
+    const src = raw as Record<string, unknown>;
+    for (const key of Object.keys(fallback) as Array<keyof DevToolsSettings>) {
+        const val = src[key];
+        if (key === 'routingAlgorithm') {
+            if (val === 'astar' || val === 'potential') out[key] = val;
+            continue;
+        }
+        const defaultVal = fallback[key];
+        if (typeof defaultVal === 'boolean') {
+            if (typeof val === 'boolean') out[key] = val;
+        } else if (typeof val === 'number' && Number.isFinite(val)) {
+            out[key] = val;
+        }
+    }
+    return next;
 }
 
 // --- Main Settings Interface ---
@@ -143,6 +184,10 @@ export interface SupportSettings {
     autoSupport: AutoSupportSettings;
     devToolsEnabled: boolean;
     devTools: DevToolsSettings;
+    /** Synthesize smoothed contact normals instead of raw triangle normals. */
+    smoothContactNormals: boolean;
+    /** Active Q3 normal synthesis preset when smoothContactNormals is enabled. */
+    normalSynthesisPreset: NormalSynthesisPreset;
     /** Debug: only render contact disk/cone + line vector for shaft (like J×2 pathfinding debug). */
     debugSimpleSupportRender: boolean;
     /**
@@ -233,7 +278,14 @@ export function createDefaultSettings(): SupportSettings {
             maxConeAngleDevDeg: 30.0,
             verticalKnotSpacingMm: 3.0,
             maxBranchesPerTrunk: 3,
+            normalSampleRadiusScale: 1.0,
+            normalFlatThresholdDeg: 5,
+            normalCreaseThresholdDeg: 0,
+            normalDeadbandScale: 1.0,
+            leafRimSlackDeg: 0,
         },
+        smoothContactNormals: true,
+        normalSynthesisPreset: 'bisector',
         debugSimpleSupportRender: false,
         navigationDiscsOnly: false,
     };
@@ -277,5 +329,21 @@ export function mergeSettingsWithDefaults(base?: SupportSettings): SupportSettin
         grid: { ...defaults.grid, ...base.grid },
         meshToMesh: { ...defaults.meshToMesh, ...base.meshToMesh },
         autoBracing: { ...defaults.autoBracing, ...base.autoBracing },
+        autoSupport: { ...defaults.autoSupport, ...base.autoSupport },
+        devToolsEnabled: typeof base.devToolsEnabled === 'boolean' ? base.devToolsEnabled : defaults.devToolsEnabled,
+        devTools: normalizeDevToolsSettings(base.devTools, defaults.devTools),
+        smoothContactNormals: typeof base.smoothContactNormals === 'boolean'
+            ? base.smoothContactNormals
+            : defaults.smoothContactNormals,
+        normalSynthesisPreset: normalizeNormalSynthesisPreset(
+            base.normalSynthesisPreset,
+            defaults.normalSynthesisPreset,
+        ),
+        debugSimpleSupportRender: typeof base.debugSimpleSupportRender === 'boolean'
+            ? base.debugSimpleSupportRender
+            : defaults.debugSimpleSupportRender,
+        navigationDiscsOnly: typeof base.navigationDiscsOnly === 'boolean'
+            ? base.navigationDiscsOnly
+            : defaults.navigationDiscsOnly,
     };
 }
