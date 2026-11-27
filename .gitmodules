@@ -26,3 +26,6 @@
 	path = plugins/lumen
 	url = https://github.com/Open-Resin-Alliance/LumenFormat.git
 	branch = main
+[submodule "plugins/prusa"]
+	path = plugins/prusa
+	url = https://github.com/Open-Resin-Alliance/df-plugin-prusa.git

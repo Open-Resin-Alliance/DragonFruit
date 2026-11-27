@@ -259,6 +259,73 @@ test('scoped support geometry group only contains requested model metadata', () 
   });
 });
 
+/**
+ * Triangle count of every mesh in a group, the number that decides file size.
+ * Instanced nodes do not appear here: the scoped export builds plain meshes.
+ */
+function triangleCount(object: THREE.Object3D): number {
+  let total = 0;
+  object.traverse((node) => {
+    if (!(node instanceof THREE.Mesh)) return;
+    const geometry = node.geometry as THREE.BufferGeometry;
+    const position = geometry.getAttribute('position');
+    if (!position) return;
+    const index = geometry.getIndex();
+    total += (index ? index.count : position.count) / 3;
+  });
+  return total;
+}
+
+/**
+ * The export is a print artifact, so its primitives stay inside the resolution a
+ * printer can use. These ceilings are budgets, not exact counts: they exist so a
+ * future tweak cannot quietly return to the 480-triangle joint / 32-side root
+ * that made a supported STL several times the size of the mesh it supported.
+ */
+test('export primitives stay inside a print-scale triangle budget', () => {
+  const state = makeSupportState();
+  const root = state.roots['root-a'];
+  const joint = state.trunks['trunk-a'].segments[0].topJoint;
+  assert.ok(root && joint);
+
+  assert.ok(triangleCount(SupportGeometryGenerator.generateRootsMesh(root)) <= 300, 'root geometry');
+  assert.ok(triangleCount(SupportGeometryGenerator.generateJointMesh(joint)) <= 200, 'joint sphere');
+  assert.ok(
+    triangleCount(SupportGeometryGenerator.generateKnotMesh({ pos: joint.pos, diameter: 1.2 })) <= 80,
+    'knot sphere',
+  );
+  assert.ok(
+    triangleCount(
+      SupportGeometryGenerator.generateConeMesh({
+        pos: { x: 0, y: 0, z: 10 },
+        normal: { x: 0, y: 0, z: -1 },
+        surfaceNormal: { x: 0, y: 0, z: -1 },
+        profile: {
+          type: 'disk',
+          contactDiameterMm: 0.4,
+          bodyDiameterMm: 1.2,
+          lengthMm: 2,
+          penetrationMm: 0.05,
+          diskThicknessMm: 0.1,
+          maxStandoffMm: 0.2,
+          standoffAngleThreshold: Math.PI / 4,
+        },
+      }),
+    ) <= 160,
+    'contact cone and its tip',
+  );
+  assert.ok(
+    triangleCount(
+      SupportGeometryGenerator.generateShaftMesh(
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0, 0, 10),
+        1,
+      )!,
+    ) <= 40,
+    'shaft',
+  );
+});
+
 test('export joint and knot diameters use non-edit display sizing', () => {
   const jointDisplayDiameter = SupportGeometryGenerator.getExportJointDiameter(1.2);
   const knotDisplayDiameter = SupportGeometryGenerator.getExportKnotDiameter(1.2);

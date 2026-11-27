@@ -962,6 +962,23 @@ export class ExportManager {
         const scopedSupports = buildScopedSupportGeometryGroup(supportSnapshot, scopedModelIds);
         if (scopedSupports.children.length > 0) {
           exportObjects.push(scopedSupports);
+        } else {
+          // Supports the scope owns but geometry for none of them means a type's
+          // export builder produced nothing. Continuing would write an STL with
+          // the model and silently no supports, which reads as a successful
+          // export of a supported scene - the failure has to surface instead.
+          const scopedDocument = buildScopedSupportExportDocument(supportSnapshot, scopedModelIds);
+          const scopedEntityCount = SUPPORT_COLLECTION_KEYS.reduce(
+            (total, key) => total + Object.keys(
+              (scopedDocument as unknown as Record<string, Record<string, unknown>>)[key] ?? {},
+            ).length,
+            0,
+          );
+          if (scopedEntityCount > 0) {
+            throw new Error(
+              `Supports are present in the scene (${scopedEntityCount} entities) but none produced export geometry.`,
+            );
+          }
         }
       } else if (supportsGroup) {
         supportsGroup.updateMatrixWorld(true);

@@ -57,10 +57,11 @@ export function canBakeOcclusion(): boolean {
 }
 
 /**
- * Whether the machine has a discrete GPU.
+ * Whether this machine should spend the AO bake.
  *
- * AO is disabled without one: integrated-only machines render unoccluded rather
- * than spending bake time. Cached for the session. A backend that predates the
+ * Integrated-only Windows and Linux machines render unoccluded rather than
+ * spending bake time; macOS counts its integrated adapter, because that is the
+ * machine's GPU there. Cached for the session. A backend that predates the
  * `ao_available` command resolves to `true`, so an older build keeps its CPU
  * fallback instead of silently losing AO.
  */

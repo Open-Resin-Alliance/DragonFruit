@@ -13,6 +13,7 @@ const BUILT_IN_THEME_PRESET_IDS = [
   'dragonfruit-light',
   'concepts-3d',
   'atlas-3dss',
+  'prusa-orange',
 ] as const;
 
 export type BuiltInThemePreset = (typeof BUILT_IN_THEME_PRESET_IDS)[number];
@@ -232,6 +233,46 @@ const ATLAS_3DSS_THEME_COLORS: ThemeCustomColors = {
   success: '#36ba78',
 };
 
+// The occasion theme: Prusa's colour-matched brand orange (#ff5900) as the only
+// saturated colour in the chrome. The neutrals are near-black rather than brown: the surface
+// ladder carries a trace of the accent's 37.8° hue (two points at most) so the
+// panels sit under the orange instead of fighting it, but not enough to read as
+// a tinted theme - a tinted ladder made the whole window look brown. The accent
+// reaches 6.3:1 on the background and 5.1:1 on surface 2, and the filled primary
+// button keeps a near-black label (5.2:1) instead of white. The secondary amber
+// (#ffb02e) carries the secondary button; the model highlight is the brand orange
+// itself, so a picked part reads as Prusa's own colour in the viewport rather
+// than as a second, duller warm tone.
+const PRUSA_ORANGE_THEME_COLORS: ThemeCustomColors = {
+  background: '#0c0b0b',
+  foreground: '#f5f0ec',
+  surface0: '#131211',
+  surface1: '#1a1817',
+  surface2: '#232120',
+  textStrong: '#faf6f2',
+  textMuted: '#cec4bb',
+  indicator: '#cec4bb',
+  borderSubtle: '#2c2927',
+  borderStrong: '#3d3935',
+  accent: '#ff5900',
+  accentHover: '#ff7326',
+  primaryButtonSurface: '#e84f00',
+  accentContrast: '#1b0b02',
+  accentSecondary: '#ffb02e',
+  accentSecondaryHover: '#ffc35c',
+  secondaryButtonSurface: '#ffb02e',
+  accentSecondaryContrast: '#1e1400',
+  topbarAccent: '#ff5900',
+  // Backdrop runs ember: the plate's warm haze into the accent's orange.
+  sceneGradientRadial: '#7a2f0f',
+  sceneGradientLinearStart: '#2a1a12',
+  sceneGradientLinearMid: '#b23c06',
+  meshSelectionColor: '#ff5900',
+  meshHoverColor: '#ff5900',
+  danger: '#e45454',
+  success: '#2eb67d',
+};
+
 const BUILT_IN_THEME_PROFILES: ThemeProfile[] = [
   {
     id: 'dragonfruit-dark',
@@ -259,6 +300,13 @@ const BUILT_IN_THEME_PROFILES: ThemeProfile[] = [
     name: 'Atlas 3DSS',
     preference: 'dark',
     colors: ATLAS_3DSS_THEME_COLORS,
+    isBuiltIn: true,
+  },
+  {
+    id: 'prusa-orange',
+    name: 'Prusa Orange',
+    preference: 'dark',
+    colors: PRUSA_ORANGE_THEME_COLORS,
     isBuiltIn: true,
   },
 ];

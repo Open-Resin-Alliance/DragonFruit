@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 import { registerSupportExportGroup } from '../../exportGeometry/seam';
-import { addModelMetadata, appendConeGeometry, appendShafts, SupportGeometryGenerator } from '../../exportGeometry/helpers';
+import { addModelMetadata, appendConeGeometry, appendShafts, EXPORT_SEGMENTS, SupportGeometryGenerator } from '../../exportGeometry/helpers';
 import { getFinalSocketPosition } from '../../SupportPrimitives/ContactCone';
 import type { Stump, Vec3 } from '../../types';
 
@@ -25,7 +25,7 @@ registerSupportExportGroup<Stump>('stump', (stump) => {
             Math.max(0.001, stump.rootTopDiameter / 2),
             Math.max(0.001, stump.rootBaseDiameter / 2),
             rootHeight,
-            20,
+            EXPORT_SEGMENTS.rootCone,
         ),
     );
     rootMesh.position.set(stump.rootPos.x, stump.rootPos.y, stump.rootPos.z + (rootHeight / 2));

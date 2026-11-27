@@ -68,7 +68,7 @@ async function resolveLegacyPrinterAssets(assetParts: string[]): Promise<string 
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ assetPath: string[] }> },
 ) {
   const { assetPath } = await context.params;
@@ -107,10 +107,21 @@ export async function GET(
     return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
   }
 
-  return new NextResponse(Uint8Array.from(bytes), {
-    headers: {
-      'Content-Type': getContentType(resolvedPath),
-      'Cache-Control': 'public, max-age=31536000, immutable',
-    },
-  });
+  // These files are edited in place - a plugin swaps a printer photo without the
+  // URL changing - so the response is revalidated rather than declared immutable.
+  // That is what made `tauri:dev` keep showing a replaced preset image: the webview
+  // had cached the old bytes for a year under the same path.
+  const info = await fs.stat(resolvedPath);
+  const etag = `W/"${bytes.length.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
+  const headers = {
+    'Content-Type': getContentType(resolvedPath),
+    'Cache-Control': 'no-cache',
+    ETag: etag,
+  };
+
+  if (request.headers.get('if-none-match') === etag) {
+    return new NextResponse(null, { status: 304, headers });
+  }
+
+  return new NextResponse(Uint8Array.from(bytes), { headers });
 }

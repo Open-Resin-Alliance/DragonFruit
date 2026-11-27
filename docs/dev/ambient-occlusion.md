@@ -125,14 +125,18 @@ requirement.
 
 | machine | what runs |
 | --- | --- |
-| a discrete GPU (Vulkan, Metal, DX12, GL) | the compute bake; measured 9–14× the CPU (0.14 s against 1.78 s at 32 rays on the 384,324-vertex model) |
+| a discrete GPU (Vulkan, DX12, GL) | the compute bake; measured 9–14× the CPU (0.14 s against 1.78 s at 32 rays on the 384,324-vertex model) |
+| macOS (Metal), integrated or not | the compute bake; every Mac GPU is reported integrated, and it is the machine's GPU |
 | an adapter that fails or disappears mid-bake | the CPU recipe, with the failure logged |
-| no discrete GPU (integrated-only or software) | AO is disabled; no bake runs |
+| integrated-only Windows or Linux, or software | AO is disabled; no bake runs |
 
-**AO is only baked when a discrete GPU is present.** The IPC boundary checks
-`dragonfruit_ao_gpu::has_discrete_adapter()` before the request is sent, and
-`bake_vertex_occlusion` refuses without one, so integrated-only machines render
-unoccluded instead of spending bake time. The crate itself can still bake on an
+**AO is only baked where the policy says the machine can afford it.** The IPC
+boundary checks `dragonfruit_ao_gpu::occlusion_supported()` before the request is
+sent, and `bake_vertex_occlusion` refuses without it, so integrated-only
+Windows/Linux machines render unoccluded instead of spending bake time. macOS is
+exempt from the integrated rule because wgpu reports the unified Apple Silicon GPU
+as `IntegratedGpu` and no Mac has a discrete adapter to prefer - a discrete-only
+rule would disable AO on every Mac. The crate itself can still bake on an
 integrated adapter if called directly; the policy lives at the boundary, not in
 the accelerator.
 

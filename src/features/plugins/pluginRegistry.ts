@@ -553,6 +553,22 @@ function resolveRuntimeAssetPath(value: string): string {
   return value;
 }
 
+/**
+ * Keys a plugin's asset URL by the plugin version.
+ *
+ * A plugin edits its images in place, so the path alone does not change when one
+ * is replaced; a webview that cached the old bytes would keep them. The version is
+ * the only thing the plugin bumps when its content changes, so it is the cache key.
+ * The bundled desktop build serves these from the app bundle rather than over HTTP
+ * and keeps the plain path.
+ */
+function versionPluginAssetPath(value: unknown, version: string | undefined): unknown {
+  if (typeof value !== 'string' || !version) return value;
+  const isPluginAsset = value.startsWith('/api/profile-assets/plugins/') || value.startsWith('/plugins/');
+  if (!isPluginAsset || shouldUseBundledAssetPaths() || value.includes('?')) return value;
+  return `${value}?v=${encodeURIComponent(version)}`;
+}
+
 function boundedString(value: unknown, max = 120): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
 }
@@ -1180,6 +1196,7 @@ export function getRuntimePrinterPresets(basePresets: PrinterPreset[]): PrinterP
     .flatMap((plugin) => (plugin.enabled
       ? (plugin.manifest.printerPresets ?? []).map((preset) => ({
         ...preset,
+        imageAssetPath: versionPluginAssetPath(preset.imageAssetPath, plugin.manifest.version) as string | undefined,
         pluginId: plugin.manifest.id,
         pluginName: plugin.manifest.name,
       }))
