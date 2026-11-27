@@ -361,6 +361,11 @@ export function fillConeBatchSlot(
   target.contactRadius = Math.max(0.001, cone.profile.contactDiameterMm / 2);
   target.diskThickness = getDiskThicknessForCone(cone);
   target.penetrationMm = cone.profile.penetrationMm ?? 0;
+  if (cone.profile.maxSafePenetrationMm !== undefined) {
+    target.maxSafePenetrationMm = cone.profile.maxSafePenetrationMm;
+  } else {
+    delete target.maxSafePenetrationMm;
+  }
   if (modelId !== undefined) target.modelId = modelId;
   else delete target.modelId;
   return true;

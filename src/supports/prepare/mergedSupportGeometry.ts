@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { quantizeToScale } from '@/utils/math';
 import { buildBatchedBezierTubes, splitBatchedShafts } from '../Curves/batchedBezierTubeGeometry';
 import type { InstancedContactCone } from '../SupportPrimitives/ContactCone/InstancedContactConeGroup';
+import { clampContactPenetration } from '../SupportPrimitives/ContactCone/types';
 import { getConeCenterPosition, getConeQuaternionInto } from '../SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness, getDiskCenter, getDiskRotationInto } from '../SupportPrimitives/ContactDisk/contactDiskUtils';
 import type { InstancedShaft } from '../SupportPrimitives/Shaft/InstancedShaftGroup';
@@ -132,7 +133,7 @@ export type MergedSupportGeometryOptions = {
    * authored value as the argument keeps that fallback inside the caller's
    * resolver instead of duplicating it here.
    */
-  resolvePenetration?: (authoredPenetrationMm: number | undefined) => number;
+  resolvePenetration?: (authoredPenetrationMm: number | undefined, maxSafePenetrationMm?: number) => number;
   /**
    * Bake the finished world-space buffer into this model's local frame.
    *
@@ -400,10 +401,10 @@ export function buildMergedSupportGeometry(
         const contactRadius = Math.max(0.001, cone.profile.contactDiameterMm / 2);
         const effectiveSurfaceNormal = cone.surfaceNormal ?? cone.normal;
         const thickness = diskThicknessForCone(cone);
-        const penetration = Math.max(
-            0,
-            resolvePenetration ? resolvePenetration(cone.profile.penetrationMm) : (cone.profile.penetrationMm ?? 0),
-        );
+        const rawPenetration = resolvePenetration
+            ? resolvePenetration(cone.profile.penetrationMm, cone.profile.maxSafePenetrationMm)
+            : (cone.profile.penetrationMm ?? 0);
+        const penetration = clampContactPenetration(rawPenetration, cone.profile.maxSafePenetrationMm);
         const diskCenter = getDiskCenter(cone.pos, effectiveSurfaceNormal, thickness);
         getDiskRotationInto(effectiveSurfaceNormal, quaternion);
         writePlaced(

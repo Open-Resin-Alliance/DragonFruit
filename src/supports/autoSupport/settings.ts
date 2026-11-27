@@ -175,6 +175,8 @@ export interface AutoSupportSettings {
     leafCapOrbit?: boolean;
     /** Optional CLI/diagnostic leaf cap rim slack in degrees [0, 35] (never in defaults). */
     leafRimSlackDeg?: number;
+    /** Optional CLI/A-B edge safeguards toggle (Pen-A1/A2, Safe-B1/B2; never in defaults). */
+    edgeSafeguards?: boolean;
 }
 
 /**
@@ -342,6 +344,9 @@ export function normalizeAutoSupportSettings(input?: Partial<AutoSupportSettings
     const cliRimSlack = typeof source.leafRimSlackDeg === 'number' && Number.isFinite(source.leafRimSlackDeg)
         ? Math.min(35, Math.max(0, source.leafRimSlackDeg))
         : undefined;
+    const cliEdgeSafeguards = input?.edgeSafeguards !== undefined && typeof source.edgeSafeguards === 'boolean'
+        ? source.edgeSafeguards
+        : undefined;
 
     return {
         enabled: normalizeBoolean(source.enabled, defaults.enabled),
@@ -385,14 +390,15 @@ export function normalizeAutoSupportSettings(input?: Partial<AutoSupportSettings
         ...(cliMode !== undefined ? { normalSynthesisMode: cliMode } : {}),
         ...(cliLeafCapOrbit !== undefined ? { leafCapOrbit: cliLeafCapOrbit } : {}),
         ...(cliRimSlack !== undefined ? { leafRimSlackDeg: cliRimSlack } : {}),
+        ...(cliEdgeSafeguards !== undefined ? { edgeSafeguards: cliEdgeSafeguards } : {}),
     };
 }
 
-/** Resolve effective placement normal synthesis mode, leaf cap orbit, and rim slack, letting CLI fields and gated DevTools override UI defaults. */
+/** Resolve effective placement normal synthesis mode, leaf cap orbit, rim slack, and edge safeguards, letting CLI fields and gated DevTools override UI defaults. */
 export function resolveEffectiveAutoNormalSynthesis(
     settings?: Partial<AutoSupportSettings> | null,
     devTools?: { enabled?: boolean; leafRimSlackDeg?: number } | null,
-): { mode: PlacementNormalSynthesisMode; leafCapOrbit: boolean; leafRimSlackDeg: number } {
+): { mode: PlacementNormalSynthesisMode; leafCapOrbit: boolean; leafRimSlackDeg: number; edgeSafeguards: boolean } {
     const smoothContactNormals = settings?.smoothContactNormals ?? true;
     const uiMode: PlacementNormalSynthesisMode = smoothContactNormals
         ? normalizeNormalSynthesisPresetValue(settings?.normalSynthesisPreset, 'bisector')
@@ -413,7 +419,8 @@ export function resolveEffectiveAutoNormalSynthesis(
     ) {
         leafRimSlackDeg = Math.min(35, Math.max(0, devTools.leafRimSlackDeg));
     }
-    return { mode, leafCapOrbit, leafRimSlackDeg };
+    const edgeSafeguards = mode !== 'raw' && (typeof settings?.edgeSafeguards === 'boolean' ? settings.edgeSafeguards : true);
+    return { mode, leafCapOrbit, leafRimSlackDeg, edgeSafeguards };
 }
 
 export function applyAutoSupportSettingsPatch(

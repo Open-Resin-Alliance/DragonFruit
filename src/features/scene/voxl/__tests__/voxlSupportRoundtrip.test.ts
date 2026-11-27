@@ -633,3 +633,107 @@ test('VOXL V2 binary roundtrip preserves non-collinear contact normals, override
         resetKickstandsInState();
     }
 });
+
+test('VOXL V2 binary roundtrip preserves maxSafePenetrationMm and keeps absent case undefined', async () => {
+    resetStore();
+    resetKickstandsInState();
+
+    try {
+        const cappedCone: ContactCone = {
+            id: 'stick-cone-capped',
+            pos: { x: 0, y: 0, z: 2 },
+            normal: { x: 0, y: 0, z: 1 },
+            surfaceNormal: { x: 0, y: 0, z: 1 },
+            socketJointId: 'stick-bj-pen',
+            profile: {
+                type: 'disk',
+                contactDiameterMm: 0.4,
+                bodyDiameterMm: 1.2,
+                lengthMm: 3,
+                penetrationMm: 0.05,
+                maxSafePenetrationMm: 0.09,
+                diskThicknessMm: 0.1,
+                maxStandoffMm: 0.25,
+                standoffAngleThreshold: Math.PI / 4,
+            },
+        };
+        const uncappedCone: ContactCone = {
+            id: 'stick-cone-uncapped',
+            pos: { x: 0, y: 0, z: 10 },
+            normal: { x: 0, y: 0, z: -1 },
+            surfaceNormal: { x: 0, y: 0, z: -1 },
+            socketJointId: 'stick-tj-pen',
+            profile: {
+                type: 'disk',
+                contactDiameterMm: 0.4,
+                bodyDiameterMm: 1.2,
+                lengthMm: 3,
+                penetrationMm: 0.05,
+                diskThicknessMm: 0.1,
+                maxStandoffMm: 0.25,
+                standoffAngleThreshold: Math.PI / 4,
+            },
+        };
+
+        const imported: DragonfruitImportFormat = {
+            ...emptyWireCollections(),
+            version: 1,
+            meta: { source: 'unit-test-v2-max-pen', objectCenter: { x: 0, y: 0, z: 0 } },
+            roots: [],
+            knots: [],
+        };
+        setCollection(imported, 'stick', [
+            {
+                id: 'stick-pen-v2',
+                modelId: 'model-1',
+                segments: [
+                    {
+                        id: 'stick-seg-pen',
+                        type: 'straight',
+                        diameter: 1.0,
+                        bottomJoint: { id: 'stick-bj-pen', pos: getFinalSocketPosition(cappedCone), diameter: 1.1 },
+                        topJoint: { id: 'stick-tj-pen', pos: getFinalSocketPosition(uncappedCone), diameter: 1.1 },
+                    },
+                ],
+                contactConeA: cappedCone,
+                contactConeB: uncappedCone,
+            },
+        ]);
+
+        loadFromImportFormat(imported);
+        const supports = buildSupportExportFromStores(getSnapshot());
+        const binary = await serializeVoxlDocumentV2({
+            models: [
+                {
+                    id: 'model-1',
+                    name: 'Model 1',
+                    visible: true,
+                    color: '#ffffff',
+                    polygonCount: 0,
+                    transform: {
+                        position: { x: 0, y: 0, z: 0 },
+                        rotation: { x: 0, y: 0, z: 0 },
+                        scale: { x: 1, y: 1, z: 1 },
+                    },
+                },
+            ],
+            activeModelId: 'model-1',
+            selectedModelIds: ['model-1'],
+            supports,
+        }, new Map());
+
+        const parsed = (await parseVoxlBinaryV2(binary)).document;
+        resetStore();
+        resetKickstandsInState();
+        loadFromImportFormat(parsed.supports);
+
+        const rtStick = getSnapshot().sticks['stick-pen-v2'];
+        assert.ok(rtStick, 'Stick must roundtrip');
+        assert.strictEqual(rtStick.contactConeA.profile.maxSafePenetrationMm, 0.09);
+        assert.strictEqual(rtStick.contactConeB.profile.maxSafePenetrationMm, undefined);
+        assert.strictEqual('maxSafePenetrationMm' in rtStick.contactConeB.profile, false);
+    } finally {
+        resetStore();
+        resetKickstandsInState();
+    }
+});

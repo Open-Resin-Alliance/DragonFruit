@@ -157,6 +157,26 @@ function parseLeafRimSlackDeg(raw: string): number {
     return Math.min(35, Math.max(0, parsed));
 }
 
+function parseEdgeSafeguardsToggle(raw: string): boolean {
+    if (raw === 'on') return true;
+    if (raw === 'off') return false;
+    throw new Error(`invalid --edge-safeguards "${raw}" (expected on|off)`);
+}
+
+export function normalizeModeForCheck<T extends { settings?: Partial<AutoSupportSettings> }>(
+    candidate: T,
+    baselineMode?: { settings?: Partial<AutoSupportSettings> } | null,
+): T {
+    if (baselineMode?.settings?.edgeSafeguards === undefined && candidate.settings?.edgeSafeguards === false) {
+        const { edgeSafeguards: _omitted, ...restSettings } = candidate.settings;
+        return {
+            ...candidate,
+            settings: restSettings,
+        };
+    }
+    return candidate;
+}
+
 export function parseArgs(argv: string[]): {
     only: string[] | null;
     corpusDir: string | null;
@@ -192,6 +212,7 @@ export function parseArgs(argv: string[]): {
     let normalSynthesisMode: PlacementNormalSynthesisMode | undefined;
     let leafCapOrbit: boolean | undefined;
     let leafRimSlackDeg: number | undefined;
+    let edgeSafeguards: boolean | undefined;
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         const value = (): string => {
@@ -222,6 +243,10 @@ export function parseArgs(argv: string[]): {
             leafRimSlackDeg = parseLeafRimSlackDeg(value());
         } else if (arg.startsWith('--leaf-rim-slack=')) {
             leafRimSlackDeg = parseLeafRimSlackDeg(arg.slice('--leaf-rim-slack='.length));
+        } else if (arg === '--edge-safeguards') {
+            edgeSafeguards = parseEdgeSafeguardsToggle(value());
+        } else if (arg.startsWith('--edge-safeguards=')) {
+            edgeSafeguards = parseEdgeSafeguardsToggle(arg.slice('--edge-safeguards='.length));
         } else if (arg === '--repeat') options.repeat = Math.max(1, Number(value()));
         else if (arg === '--grid') options.grid = true;
         else if (arg === '--verbose') options.verbose = true;
@@ -240,6 +265,7 @@ export function parseArgs(argv: string[]): {
     if (normalSynthesisMode !== undefined) options.settings.normalSynthesisMode = normalSynthesisMode;
     if (leafCapOrbit !== undefined) options.settings.leafCapOrbit = leafCapOrbit;
     if (leafRimSlackDeg !== undefined) options.settings.leafRimSlackDeg = leafRimSlackDeg;
+    if (edgeSafeguards !== undefined) options.settings.edgeSafeguards = edgeSafeguards;
     return options;
 }
 
@@ -820,6 +846,11 @@ function formatCapRegime(label: string, summary: LeafCapRegimeSummary): string {
     return `${label}[n=${summary.count} fl/ang/col=${summary.flushCount}/${summary.angleDrivenCount}/${summary.collisionDrivenCount} reach=${summary.capReachableCount} orb=${summary.orbitedCount} conc=${summary.concaveCount} shift=${summary.meanOrbitShiftDeg.toFixed(1)}/${summary.maxOrbitShiftDeg.toFixed(1)}°]`;
 }
 
+interface NormalSynthesisMetricsWithEdge extends NormalSynthesisMetrics {
+    thinWallClampedCount?: number;
+    concaveFloorCount?: number;
+}
+
 export function formatNormalSynthesisTable(
     rows: Array<{ name: string; normalSynthesis?: NormalSynthesisMetrics }>,
     leafRimSlackDeg = 0,
@@ -827,15 +858,16 @@ export function formatNormalSynthesisTable(
     const header = ['model', 'mode', 'n', 'p50', 'p90', 'max', '>0.25', '=0.35', 'fl/ang/col', 'devP90', 'lean(0/30/60/90+)', 'H4(c/lf/br/blk)'];
     const slackSuffix = leafRimSlackDeg > 0 ? `+slack${leafRimSlackDeg}` : '';
     const body = rows.map((row) => {
-        const ns = row.normalSynthesis;
+        const ns = row.normalSynthesis as NormalSynthesisMetricsWithEdge | undefined;
         if (!ns) {
             return [row.name, '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—'];
         }
         const o = ns.overall;
         const l = ns.surfaceLeanFromDownDeg;
+        const edgeSuffix = (ns.thinWallClampedCount !== undefined || ns.concaveFloorCount !== undefined) ? '+edge' : '';
         return [
             row.name,
-            `${ns.mode}${ns.leafCapOrbit ? '+orb' : ''}${slackSuffix}`,
+            `${ns.mode}${ns.leafCapOrbit ? '+orb' : ''}${slackSuffix}${edgeSuffix}`,
             String(o.count),
             o.p50Mm.toFixed(3),
             o.p90Mm.toFixed(3),
@@ -854,13 +886,27 @@ export function formatNormalSynthesisTable(
     ));
     const line = (cells: string[]): string => cells.map((cell, column) => cell.padEnd(widths[column])).join('  ');
     const table = [line(header), widths.map((width) => '-'.repeat(width)).join('  '), ...body.map(line)].join('\n');
+    const sections = [table];
     const capRows = rows.filter((row) => row.normalSynthesis?.capSplit);
-    if (capRows.length === 0) return table;
-    const capLines = capRows.map((row) => {
-        const split = row.normalSynthesis!.capSplit!;
-        return `  ${row.name}: ${formatCapRegime('flat', split.flatOrSmooth)} | ${formatCapRegime('ridge', split.ridgeOrCorner)}`;
+    if (capRows.length > 0) {
+        const capLines = capRows.map((row) => {
+            const split = row.normalSynthesis!.capSplit!;
+            return `  ${row.name}: ${formatCapRegime('flat', split.flatOrSmooth)} | ${formatCapRegime('ridge', split.ridgeOrCorner)}`;
+        });
+        sections.push(`== Leaf Cap Split (H1-H2) ==\n${capLines.join('\n')}`);
+    }
+    const edgeRows = rows.filter((row) => {
+        const ns = row.normalSynthesis as NormalSynthesisMetricsWithEdge | undefined;
+        return ns?.thinWallClampedCount !== undefined || ns?.concaveFloorCount !== undefined;
     });
-    return `${table}\n\n== Leaf Cap Split (H1-H2) ==\n${capLines.join('\n')}`;
+    if (edgeRows.length > 0) {
+        const edgeLines = edgeRows.map((row) => {
+            const ns = row.normalSynthesis as NormalSynthesisMetricsWithEdge;
+            return `  ${row.name}: thinWallClamped=${ns.thinWallClampedCount ?? 0} | concaveFloor=${ns.concaveFloorCount ?? 0}`;
+        });
+        sections.push(`== Edge Safeguards (Pen-A1/A2) ==\n${edgeLines.join('\n')}`);
+    }
+    return sections.join('\n\n');
 }
 
 async function main(): Promise<void> {
@@ -973,10 +1019,11 @@ async function main(): Promise<void> {
         }
         // A different corpus, mode or resolution is a different measurement, not
         // a regression: comparing them would fail on every flag.
-        if (stored?.mode && JSON.stringify(stored.mode) !== JSON.stringify(mode)) {
+        const normalizedMode = normalizeModeForCheck(mode, stored?.mode);
+        if (stored?.mode && JSON.stringify(stored.mode) !== JSON.stringify(normalizedMode)) {
             throw new Error(
                 `the baseline was recorded with ${JSON.stringify(stored.mode)}\n`
-                + `   this run is            ${JSON.stringify(mode)}\n`
+                + `   this run is            ${JSON.stringify(normalizedMode)}\n`
                 + '   rerun with the baseline\'s flags, or --update-baseline for this mode',
             );
         }

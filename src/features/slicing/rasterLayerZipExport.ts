@@ -25,6 +25,7 @@ import type { Brace, ContactDisk, Segment, SupportState, Vec3 } from '@/supports
 import { braceSpanDiameters } from '@/supports/SupportTypes/Brace/braceSpanDiameters';
 import { taperWidthAlong } from '@/supports/SupportPrimitives/Shaft/shaftTaperGeometry';
 import { getFinalSocketPosition } from '@/supports/SupportPrimitives/ContactCone/contactConeUtils';
+import { clampContactPenetration } from '@/supports/SupportPrimitives/ContactCone/types';
 import { calculateDiskThickness, getDiskCenter, getDiskRotation } from '@/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { getBezierPointAtT } from '@/supports/Curves/BezierUtils';
 import { resolveSegmentEndpoints, type ShaftEntity } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
@@ -751,7 +752,7 @@ function appendContactConePrimitive(
     normal: { x: number; y: number; z: number };
     surfaceNormal?: { x: number; y: number; z: number };
     diskLengthOverride?: number;
-    profile: { contactDiameterMm: number; bodyDiameterMm: number; type?: string; diskThicknessMm?: number; maxStandoffMm?: number; standoffAngleThreshold?: number; penetrationMm?: number };
+    profile: { contactDiameterMm: number; bodyDiameterMm: number; type?: string; diskThicknessMm?: number; maxStandoffMm?: number; standoffAngleThreshold?: number; penetrationMm?: number; maxSafePenetrationMm?: number };
   },
   radialSegments = 12,
   penetrationMm = 0,
@@ -759,10 +760,11 @@ function appendContactConePrimitive(
 ): void {
   const socket = getFinalSocketPosition(cone as any);
   const effectiveNormal = cone.surfaceNormal ?? cone.normal;
+  const clampedPenetrationMm = clampContactPenetration(penetrationMm, cone.profile.maxSafePenetrationMm);
   const start = new THREE.Vector3(
-    cone.pos.x - effectiveNormal.x * penetrationMm,
-    cone.pos.y - effectiveNormal.y * penetrationMm,
-    cone.pos.z - effectiveNormal.z * penetrationMm,
+    cone.pos.x - effectiveNormal.x * clampedPenetrationMm,
+    cone.pos.y - effectiveNormal.y * clampedPenetrationMm,
+    cone.pos.z - effectiveNormal.z * clampedPenetrationMm,
   );
   const end = new THREE.Vector3(socket.x, socket.y, socket.z);
   const g = createFrustumGeometryBetween(

@@ -40,6 +40,11 @@ export type SupportTipProfile = {
      * shaft thickening (`syncContactConeDiameters`) never blows out narrow features.
      */
     maxContactDiameterMm?: number;
+    /**
+     * Explicit per-point penetration depth ceiling (mm), e.g. from Pen-A1
+     * thin-wall ray clamping so global tip offset never punches through thin ribs.
+     */
+    maxSafePenetrationMm?: number;
     bodyDiameterMm: number;     // Larger end (socket side)
     lengthMm: number;           // Total head length (excluding primitive offset)
     penetrationMm: number;      // Embed depth (legacy use, mostly for sphere now)
@@ -92,3 +97,15 @@ export const DEFAULT_TIP_PROFILE: SupportTipProfile = {
     maxStandoffMm: 0.25, // Reduced from 1.5mm to prevent fragility
     standoffAngleThreshold: Math.PI / 4, // 45 degrees
 };
+
+/** Clamp contact tip penetration depth to a finite non-negative safety ceiling. */
+export function clampContactPenetration(
+    penetrationMm: number,
+    maxSafePenetrationMm?: number,
+): number {
+    const base = Number.isFinite(penetrationMm) ? Math.max(0, penetrationMm) : 0;
+    if (typeof maxSafePenetrationMm === 'number' && Number.isFinite(maxSafePenetrationMm)) {
+        return Math.min(base, Math.max(0, maxSafePenetrationMm));
+    }
+    return base;
+}

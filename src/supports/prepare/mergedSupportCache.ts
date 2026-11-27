@@ -44,7 +44,10 @@ const IDLE_TIMEOUT_MS = 200;
  * The nib depth for one cone, from the depth it was authored with. The proxy's
  * `useContactPenetrationResolver` supplies the profile-driven half.
  */
-type ResolvePenetration = (authoredPenetrationMm: number | undefined) => number;
+type ResolvePenetration = (
+  authoredPenetrationMm: number | undefined,
+  maxSafePenetrationMm?: number,
+) => number;
 
 export type PrepareMergedSupportEntry = {
   /** The model this geometry belongs to; `null` for the loose-support bucket. */
@@ -683,7 +686,8 @@ export function usePrepareMergedSupportCache(
   // Same resolver identity the proxy's cone group keys on, adapted to the
   // builder's "authored depth in, resolved depth out" shape.
   const resolvePenetration = React.useMemo<ResolvePenetration>(
-    () => (authoredPenetrationMm) => contactPenetration({ penetrationMm: authoredPenetrationMm }),
+    () => (authoredPenetrationMm, maxSafePenetrationMm) =>
+      contactPenetration({ penetrationMm: authoredPenetrationMm, maxSafePenetrationMm }),
     [contactPenetration],
   );
 

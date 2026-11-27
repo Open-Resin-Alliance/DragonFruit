@@ -8,6 +8,7 @@ import {
   subscribeToProfileStore,
 } from '@/features/profiles/profileStore';
 import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
+import { clampContactPenetration } from '@/supports/SupportPrimitives/ContactCone/types';
 
 /**
  * How deep a contact primitive's nib is sunk into the model, in millimetres.
@@ -26,6 +27,7 @@ import { calculateTipOffset } from '@/supports/rendering/calculateTipOffset';
 /** The authored fallback a slot carries, when the profile does not compute one. */
 export type ContactPenetrationSlot = {
   penetrationMm?: number;
+  maxSafePenetrationMm?: number;
 };
 
 export type ContactPenetrationResolver = (slot: ContactPenetrationSlot) => number;
@@ -53,13 +55,16 @@ export function useContactPenetrationResolver(): ContactPenetrationResolver {
       const pxY = activePrinter.pixelSize?.y
         ? activePrinter.pixelSize.y / 1000
         : (activePrinter.buildVolumeMm?.depth ?? 89) / (activePrinter.display?.resolutionY ?? 1620);
-      return calculateTipOffset(
-        activeMaterial.antiAliasingSettings,
-        activeMaterial.layerHeightMm,
-        pxX,
-        pxY,
+      return clampContactPenetration(
+        calculateTipOffset(
+          activeMaterial.antiAliasingSettings,
+          activeMaterial.layerHeightMm,
+          pxX,
+          pxY,
+        ),
+        slot.maxSafePenetrationMm,
       );
     }
-    return slot.penetrationMm ?? 0;
+    return clampContactPenetration(slot.penetrationMm ?? 0, slot.maxSafePenetrationMm);
   }, [activeMaterial, activePrinter]);
 }

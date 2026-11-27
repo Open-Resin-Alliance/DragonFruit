@@ -79,6 +79,8 @@ export type ConeBatchSlot = {
    * input (`contactPenetration.ts`), never part of this record.
    */
   penetrationMm: number;
+  /** Per-point ceiling (mm) capping resolved penetration depth when set. */
+  maxSafePenetrationMm?: number;
 };
 
 /**
@@ -211,6 +213,9 @@ export function buildConeSlotIndex(
         // standoff resolves to the identical thickness.
         diskThickness: getDiskThicknessForCone(cone),
         penetrationMm: cone.profile.penetrationMm ?? 0,
+        ...(cone.profile.maxSafePenetrationMm !== undefined
+          ? { maxSafePenetrationMm: cone.profile.maxSafePenetrationMm }
+          : {}),
         ...(cone.modelId !== undefined ? { modelId: cone.modelId } : {}),
       };
 

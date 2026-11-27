@@ -2,7 +2,7 @@ import React, { useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { ThreeEvent } from '@react-three/fiber';
 import type { Vec3 } from '../../types';
-import type { SupportTipProfile } from './types';
+import { clampContactPenetration, type SupportTipProfile } from './types';
 import { getConeCenterPosition, getConeQuaternionInto } from './contactConeUtils';
 import { calculateDiskThickness, getDiskCenter, getDiskRotationInto } from '../ContactDisk/contactDiskUtils';
 import { HIDDEN_INSTANCE_MATRIX } from '../hiddenInstanceMatrix';
@@ -610,14 +610,17 @@ export function InstancedContactConeGroup({
         if (activeMaterial && activePrinter && activeMaterial.antiAliasingSettings?.tipOffsetDisplayInUi) {
             const pxX = activePrinter.pixelSize?.x ? activePrinter.pixelSize.x / 1000 : (activePrinter.buildVolumeMm?.width ?? 143) / (activePrinter.display?.resolutionX ?? 2560);
             const pxY = activePrinter.pixelSize?.y ? activePrinter.pixelSize.y / 1000 : (activePrinter.buildVolumeMm?.depth ?? 89) / (activePrinter.display?.resolutionY ?? 1620);
-            return calculateTipOffset(
-                activeMaterial.antiAliasingSettings,
-                activeMaterial.layerHeightMm,
-                pxX,
-                pxY
+            return clampContactPenetration(
+                calculateTipOffset(
+                    activeMaterial.antiAliasingSettings,
+                    activeMaterial.layerHeightMm,
+                    pxX,
+                    pxY
+                ),
+                cone.profile.maxSafePenetrationMm,
             );
         }
-        return cone.profile.penetrationMm ?? 0;
+        return clampContactPenetration(cone.profile.penetrationMm ?? 0, cone.profile.maxSafePenetrationMm);
     }, [activeMaterial, activePrinter]);
 
     const validCones = useMemo(() => {

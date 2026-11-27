@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { calculateTipOffset } from '../rendering/calculateTipOffset';
 import { getRaftSettingsForModel } from '../Rafts/Crenelated/RaftState';
 import type { Segment, Vec3 } from '../types';
-import type { ContactCone } from '../SupportPrimitives/ContactCone/types';
+import { clampContactPenetration, type ContactCone } from '../SupportPrimitives/ContactCone/types';
 import { SupportGeometryGenerator } from './SupportGeometryGenerator';
 import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone';
 import { getActiveMaterialProfile, getActivePrinterProfile } from '@/features/profiles/profileStore';
@@ -46,7 +46,7 @@ export function raftSettingsFor(modelId: string | null | undefined) {
 
 /** Contact cone plus its disk, as one pair of children. */
 export function appendConeGeometry(group: THREE.Group, cone: ContactCone): void {
-    const pen = globalPenetrationMm();
+    const pen = clampContactPenetration(globalPenetrationMm(), cone.profile.maxSafePenetrationMm);
     group.add(SupportGeometryGenerator.generateConeMesh(cone, pen));
 
     const diskGroup = SupportGeometryGenerator.generateContactDiskMesh(cone, pen);

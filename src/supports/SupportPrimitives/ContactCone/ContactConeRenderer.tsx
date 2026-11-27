@@ -4,7 +4,7 @@ import React, { useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { usePicking } from '@/components/picking';
 import { Vec3 } from '../../types';
-import { SupportTipProfile, DEFAULT_TIP_PROFILE } from './types';
+import { SupportTipProfile, DEFAULT_TIP_PROFILE, clampContactPenetration } from './types';
 import { getConeCenterPosition, getConeQuaternion } from './contactConeUtils';
 import { handleContactDiskClick } from '../../interaction/clickHandlers';
 import { setHoveredState } from '../../state';
@@ -96,18 +96,19 @@ export function ContactConeRenderer({
     const activeMaterial = React.useMemo(() => getActiveMaterialProfile(storeState), [storeState]);
     const activePrinter = React.useMemo(() => getActivePrinterProfile(storeState), [storeState]);
     const penetrationMm = React.useMemo(() => {
+        let rawPenetrationMm = profile.penetrationMm ?? 0;
         if (activeMaterial && activePrinter && activeMaterial.antiAliasingSettings?.tipOffsetDisplayInUi) {
             const pxX = activePrinter.pixelSize?.x ? activePrinter.pixelSize.x / 1000 : (activePrinter.buildVolumeMm?.width ?? 143) / (activePrinter.display?.resolutionX ?? 2560);
             const pxY = activePrinter.pixelSize?.y ? activePrinter.pixelSize.y / 1000 : (activePrinter.buildVolumeMm?.depth ?? 89) / (activePrinter.display?.resolutionY ?? 1620);
-            return calculateTipOffset(
+            rawPenetrationMm = calculateTipOffset(
                 activeMaterial.antiAliasingSettings,
                 activeMaterial.layerHeightMm,
                 pxX,
                 pxY
             );
         }
-        return profile.penetrationMm ?? 0;
-    }, [activeMaterial, activePrinter, profile.penetrationMm]);
+        return clampContactPenetration(rawPenetrationMm, profile.maxSafePenetrationMm);
+    }, [activeMaterial, activePrinter, profile.maxSafePenetrationMm, profile.penetrationMm]);
     
     const [isHovered, setIsHovered] = useState(false);
     const hoverVisible = isHovered && isInteractable && isParentSelected;

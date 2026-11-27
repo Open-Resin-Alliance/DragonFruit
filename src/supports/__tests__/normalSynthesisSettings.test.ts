@@ -244,6 +244,7 @@ test('AutoSupportSettings defaults, normalizeAutoSupportSettings, and diagnostic
     assert.equal('normalSynthesisMode' in defaults, false);
     assert.equal('leafCapOrbit' in defaults, false);
     assert.equal('leafRimSlackDeg' in defaults, false);
+    assert.equal('edgeSafeguards' in defaults, false);
 
     assert.equal((DIAGNOSTIC_AUTO_SUPPORT_KEYS as readonly string[]).includes('smoothContactNormals'), false);
     assert.equal((DIAGNOSTIC_AUTO_SUPPORT_KEYS as readonly string[]).includes('normalSynthesisPreset'), false);
@@ -256,27 +257,36 @@ test('AutoSupportSettings defaults, normalizeAutoSupportSettings, and diagnostic
     assert.equal('normalSynthesisMode' in normalizedEmpty, false, 'must omit normalSynthesisMode when absent');
     assert.equal('leafCapOrbit' in normalizedEmpty, false, 'must omit leafCapOrbit when absent');
     assert.equal('leafRimSlackDeg' in normalizedEmpty, false, 'must omit leafRimSlackDeg when absent');
+    assert.equal('edgeSafeguards' in normalizedEmpty, false, 'must omit edgeSafeguards when absent');
 
     const normalizedInvalid = normalizeAutoSupportSettings({
         smoothContactNormals: 'nope' as unknown as boolean,
         normalSynthesisPreset: 'bogus' as unknown as NormalSynthesisPreset,
         knotWeightedLeafNormals: 1 as unknown as boolean,
         leafRimSlackDeg: Number.NaN,
-    });
+        edgeSafeguards: 'yes' as unknown as boolean,
+    } as Partial<ReturnType<typeof createDefaultAutoSupportSettings>> & { edgeSafeguards?: boolean });
     assert.equal(normalizedInvalid.smoothContactNormals, true);
     assert.equal(normalizedInvalid.normalSynthesisPreset, 'bisector');
     assert.equal(normalizedInvalid.knotWeightedLeafNormals, true);
     assert.equal('normalSynthesisMode' in normalizedInvalid, false);
     assert.equal('leafRimSlackDeg' in normalizedInvalid, false);
+    assert.equal('edgeSafeguards' in normalizedInvalid, false);
 
     const withCli = normalizeAutoSupportSettings({
         normalSynthesisMode: 'crease-lock',
         leafCapOrbit: true,
         leafRimSlackDeg: 14,
-    });
+        edgeSafeguards: false,
+    } as Partial<ReturnType<typeof createDefaultAutoSupportSettings>> & { edgeSafeguards?: boolean });
     assert.equal(withCli.normalSynthesisMode, 'crease-lock');
     assert.equal(withCli.leafCapOrbit, true);
     assert.equal(withCli.leafRimSlackDeg, 14);
+    assert.equal((withCli as { edgeSafeguards?: boolean }).edgeSafeguards, false);
+    assert.equal(
+        (normalizeAutoSupportSettings({ edgeSafeguards: true } as Partial<ReturnType<typeof createDefaultAutoSupportSettings>> & { edgeSafeguards?: boolean }) as { edgeSafeguards?: boolean }).edgeSafeguards,
+        true,
+    );
 
     assert.equal(normalizeAutoSupportSettings({ leafRimSlackDeg: -8 }).leafRimSlackDeg, 0);
     assert.equal(normalizeAutoSupportSettings({ leafRimSlackDeg: 55 }).leafRimSlackDeg, 35);
@@ -290,23 +300,27 @@ test('AutoSupportSettings defaults, normalizeAutoSupportSettings, and diagnostic
     assert.equal('normalSynthesisMode' in patched, false);
     assert.equal('leafCapOrbit' in patched, false);
     assert.equal('leafRimSlackDeg' in patched, false);
+    assert.equal('edgeSafeguards' in patched, false);
 });
 
-test('resolveEffectiveAutoNormalSynthesis resolves UI defaults, master gating, CLI overrides, and devTools.leafRimSlackDeg gating', () => {
+test('resolveEffectiveAutoNormalSynthesis resolves UI defaults, master gating, CLI overrides, edgeSafeguards, and devTools.leafRimSlackDeg gating', () => {
     assert.deepEqual(resolveEffectiveAutoNormalSynthesis(undefined), {
         mode: 'bisector',
         leafCapOrbit: true,
         leafRimSlackDeg: 0,
+        edgeSafeguards: true,
     });
     assert.deepEqual(resolveEffectiveAutoNormalSynthesis(null), {
         mode: 'bisector',
         leafCapOrbit: true,
         leafRimSlackDeg: 0,
+        edgeSafeguards: true,
     });
     assert.deepEqual(resolveEffectiveAutoNormalSynthesis({}), {
         mode: 'bisector',
         leafCapOrbit: true,
         leafRimSlackDeg: 0,
+        edgeSafeguards: true,
     });
 
     assert.deepEqual(
@@ -315,7 +329,7 @@ test('resolveEffectiveAutoNormalSynthesis resolves UI defaults, master gating, C
             normalSynthesisPreset: 'crease-lock',
             knotWeightedLeafNormals: true,
         }),
-        { mode: 'raw', leafCapOrbit: false, leafRimSlackDeg: 0 },
+        { mode: 'raw', leafCapOrbit: false, leafRimSlackDeg: 0, edgeSafeguards: false },
     );
 
     assert.deepEqual(
@@ -324,7 +338,7 @@ test('resolveEffectiveAutoNormalSynthesis resolves UI defaults, master gating, C
             normalSynthesisPreset: 'macro-smooth',
             knotWeightedLeafNormals: false,
         }),
-        { mode: 'macro-smooth', leafCapOrbit: false, leafRimSlackDeg: 0 },
+        { mode: 'macro-smooth', leafCapOrbit: false, leafRimSlackDeg: 0, edgeSafeguards: true },
     );
 
     assert.deepEqual(
@@ -333,7 +347,7 @@ test('resolveEffectiveAutoNormalSynthesis resolves UI defaults, master gating, C
             normalSynthesisPreset: 'macro-smooth',
             knotWeightedLeafNormals: true,
         }),
-        { mode: 'macro-smooth', leafCapOrbit: true, leafRimSlackDeg: 0 },
+        { mode: 'macro-smooth', leafCapOrbit: true, leafRimSlackDeg: 0, edgeSafeguards: true },
     );
 
     assert.deepEqual(
@@ -345,7 +359,7 @@ test('resolveEffectiveAutoNormalSynthesis resolves UI defaults, master gating, C
             leafCapOrbit: true,
             leafRimSlackDeg: 18,
         }),
-        { mode: 'crease-lock', leafCapOrbit: true, leafRimSlackDeg: 18 },
+        { mode: 'crease-lock', leafCapOrbit: true, leafRimSlackDeg: 18, edgeSafeguards: true },
     );
 
     assert.deepEqual(
@@ -357,37 +371,56 @@ test('resolveEffectiveAutoNormalSynthesis resolves UI defaults, master gating, C
             leafCapOrbit: false,
             leafRimSlackDeg: 50,
         }),
-        { mode: 'raw', leafCapOrbit: false, leafRimSlackDeg: 35 },
+        { mode: 'raw', leafCapOrbit: false, leafRimSlackDeg: 35, edgeSafeguards: false },
+    );
+
+    assert.deepEqual(
+        resolveEffectiveAutoNormalSynthesis({ edgeSafeguards: false } as Partial<ReturnType<typeof createDefaultAutoSupportSettings>> & { edgeSafeguards?: boolean }),
+        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 0, edgeSafeguards: false },
+    );
+    assert.deepEqual(
+        resolveEffectiveAutoNormalSynthesis({
+            smoothContactNormals: false,
+            edgeSafeguards: true,
+        } as Partial<ReturnType<typeof createDefaultAutoSupportSettings>> & { edgeSafeguards?: boolean }),
+        { mode: 'raw', leafCapOrbit: false, leafRimSlackDeg: 0, edgeSafeguards: false },
+    );
+    assert.deepEqual(
+        resolveEffectiveAutoNormalSynthesis({
+            normalSynthesisMode: 'raw',
+            edgeSafeguards: true,
+        } as Partial<ReturnType<typeof createDefaultAutoSupportSettings>> & { edgeSafeguards?: boolean }),
+        { mode: 'raw', leafCapOrbit: true, leafRimSlackDeg: 0, edgeSafeguards: false },
     );
 
     // devTools.leafRimSlackDeg gating
     assert.deepEqual(
         resolveEffectiveAutoNormalSynthesis({}, { enabled: false, leafRimSlackDeg: 20 }),
-        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 0 },
+        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 0, edgeSafeguards: true },
     );
     assert.deepEqual(
         resolveEffectiveAutoNormalSynthesis({}, { enabled: true, leafRimSlackDeg: 20 }),
-        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 20 },
+        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 20, edgeSafeguards: true },
     );
     assert.deepEqual(
         resolveEffectiveAutoNormalSynthesis({}, { enabled: true, leafRimSlackDeg: 50 }),
-        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 35 },
+        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 35, edgeSafeguards: true },
     );
     assert.deepEqual(
         resolveEffectiveAutoNormalSynthesis({}, { enabled: true, leafRimSlackDeg: -4 }),
-        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 0 },
+        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 0, edgeSafeguards: true },
     );
     assert.deepEqual(
         resolveEffectiveAutoNormalSynthesis({ leafRimSlackDeg: 7 }, { enabled: true, leafRimSlackDeg: 20 }),
-        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 7 },
+        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 7, edgeSafeguards: true },
     );
     assert.deepEqual(
         resolveEffectiveAutoNormalSynthesis({ leafRimSlackDeg: 0 }, { enabled: true, leafRimSlackDeg: 20 }),
-        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 0 },
+        { mode: 'bisector', leafCapOrbit: true, leafRimSlackDeg: 0, edgeSafeguards: true },
     );
 });
 
-test('bench-auto-supports parseArgs handles --leaf-rim-slack order-independently and formatNormalSynthesisTable prints capSplit/slack', () => {
+test('bench-auto-supports parseArgs handles --leaf-rim-slack and --edge-safeguards order-independently, normalizeModeForCheck keeps pre-Wave-E parity, and formatNormalSynthesisTable prints capSplit/slack/edge', () => {
     const spaceFlag = benchAutoSupports.parseArgs([
         '--leaf-rim-slack', '15',
         '--settings', '{"areaPerSupportMm2":20,"leafRimSlackDeg":3}',
@@ -409,6 +442,53 @@ test('bench-auto-supports parseArgs handles --leaf-rim-slack order-independently
     assert.throws(() => benchAutoSupports.parseArgs(['--leaf-rim-slack=']), /leaf-rim-slack/);
     assert.throws(() => benchAutoSupports.parseArgs(['--leaf-rim-slack']), /needs a value/);
 
+    const edgeOffSpace = benchAutoSupports.parseArgs([
+        '--edge-safeguards', 'off',
+        '--settings', '{"areaPerSupportMm2":20,"edgeSafeguards":true}',
+    ]);
+    assert.equal((edgeOffSpace.settings as { edgeSafeguards?: boolean }).edgeSafeguards, false);
+    assert.equal(edgeOffSpace.settings.areaPerSupportMm2, 20);
+
+    const edgeOnEq = benchAutoSupports.parseArgs([
+        '--settings', '{"areaPerSupportMm2":12}',
+        '--edge-safeguards=on',
+    ]);
+    assert.equal((edgeOnEq.settings as { edgeSafeguards?: boolean }).edgeSafeguards, true);
+    assert.equal(edgeOnEq.settings.areaPerSupportMm2, 12);
+
+    assert.throws(() => benchAutoSupports.parseArgs(['--edge-safeguards', 'nope']), /edge-safeguards/);
+    assert.throws(() => benchAutoSupports.parseArgs(['--edge-safeguards=']), /edge-safeguards/);
+    assert.throws(() => benchAutoSupports.parseArgs(['--edge-safeguards']), /needs a value/);
+
+    const normalizeModeForCheck = (benchAutoSupports as Record<string, unknown>).normalizeModeForCheck as
+        | (<T extends { settings?: Record<string, unknown> }>(
+            candidate: T,
+            baselineMode?: { settings?: Record<string, unknown> } | null,
+        ) => T)
+        | undefined;
+    assert.equal(typeof normalizeModeForCheck, 'function', 'normalizeModeForCheck must be exported');
+    assert.deepEqual(
+        normalizeModeForCheck!(
+            { settings: { normalSynthesisMode: 'bisector', edgeSafeguards: false } },
+            { settings: { normalSynthesisMode: 'bisector' } },
+        ),
+        { settings: { normalSynthesisMode: 'bisector' } },
+    );
+    assert.deepEqual(
+        normalizeModeForCheck!(
+            { settings: { normalSynthesisMode: 'bisector', edgeSafeguards: true } },
+            { settings: { normalSynthesisMode: 'bisector' } },
+        ),
+        { settings: { normalSynthesisMode: 'bisector', edgeSafeguards: true } },
+    );
+    assert.deepEqual(
+        normalizeModeForCheck!(
+            { settings: { normalSynthesisMode: 'bisector', edgeSafeguards: false } },
+            { settings: { normalSynthesisMode: 'bisector', edgeSafeguards: true } },
+        ),
+        { settings: { normalSynthesisMode: 'bisector', edgeSafeguards: false } },
+    );
+
     const emptyState: SupportState = {
         roots: {},
         trunks: {},
@@ -428,12 +508,22 @@ test('bench-auto-supports parseArgs handles --leaf-rim-slack order-independently
         leafCapOrbit: true,
     });
     const formatFn = (benchAutoSupports as Record<string, unknown>).formatNormalSynthesisTable as
-        | ((rows: Array<{ name: string; normalSynthesis?: typeof withOrbit }>, leafRimSlackDeg?: number) => string)
+        | ((rows: Array<{ name: string; normalSynthesis?: typeof withOrbit & { thinWallClampedCount?: number; concaveFloorCount?: number } }>, leafRimSlackDeg?: number) => string)
         | undefined;
     assert.equal(typeof formatFn, 'function', 'formatNormalSynthesisTable must be exported');
     const rendered = formatFn!([{ name: 'm-fmt', normalSynthesis: withOrbit }], 15);
     assert.match(rendered, /bisector\+orb\+slack15/);
+    assert.equal(rendered.includes('+edge'), false);
     assert.match(rendered, /== Leaf Cap Split \(H1-H2\) ==/);
+    assert.equal(rendered.includes('== Edge Safeguards (Pen-A1/A2) =='), false);
+
+    const renderedEdge = formatFn!([{
+        name: 'm-edge',
+        normalSynthesis: { ...withOrbit, thinWallClampedCount: 3, concaveFloorCount: 2 },
+    }], 0);
+    assert.match(renderedEdge, /bisector\+orb\+edge/);
+    assert.match(renderedEdge, /== Edge Safeguards \(Pen-A1\/A2\) ==/);
+    assert.match(renderedEdge, /m-edge:.*3.*2/);
 });
 
 test('computeNormalSynthesisMetrics omits capSplit when leafCapOrbit is false and no capAnchor exists, and populates H1-H2 capSplit otherwise', () => {
