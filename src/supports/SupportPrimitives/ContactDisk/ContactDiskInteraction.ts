@@ -5,10 +5,13 @@ import type { ContactDisk, Vec3 } from '../../types';
 import { calculateDiskThickness } from './contactDiskUtils';
 import { getFinalSocketPosition } from '../ContactCone/contactConeUtils';
 import { calculateSafeOffset } from '../../PlacementLogic/CollisionAvoidance';
+import { computeThinWallMaxSafePenetrationMm } from '../../PlacementLogic/PlacementNormalSynthesis';
 import { hasWarmSDFCache } from '../../PlacementLogic/Pathfinding/SDFCachePool';
 
 export interface RecomputeContactConeOptions {
     allowColdCollision?: boolean;
+    cornerMeta?: { thetaSpreadRad: number; isConcave: boolean };
+    edgeSafeguards?: boolean;
 }
 
 // Contact cones need to respect the model, but they can sit much closer than
@@ -16,6 +19,8 @@ export interface RecomputeContactConeOptions {
 const CONTACT_CONE_COLLISION_SAFETY_MM = 0.3;
 const LEGACY_MAX_STANDOFF_MM = 1.5;
 const LEGACY_CLAMPED_MAX_STANDOFF_MM = 0.35;
+const PEN_A2_MIN_CONCAVE_SPREAD_RAD = THREE.MathUtils.degToRad(15);
+const SAFE_B_MIN_CORNER_SPREAD_RAD = THREE.MathUtils.degToRad(35);
 
 /**
  * Collision-aware disk thickness is a pure function of the contact, normal,
@@ -34,58 +39,99 @@ function resolveCollisionAwareDiskThickness(
     socketTarget: THREE.Vector3,
     collisionMesh: THREE.Mesh | undefined,
     uncollidedThickness: number,
+    effectiveMinThickness: number,
     allowColdCollision = true,
+    edgeSafeguards = false,
+    effectiveCornerMeta?: { thetaSpreadRad: number; isConcave: boolean },
+    hasFixedSocket = false,
 ): number {
     if (!collisionMesh || cone.profile.type !== 'disk') {
-        return uncollidedThickness;
+        return effectiveMinThickness;
     }
 
     const bodyRadius = cone.profile.bodyDiameterMm / 2;
     const rawMaxStandoff = cone.profile.maxStandoffMm ?? LEGACY_MAX_STANDOFF_MM;
-    const maxStandoff = rawMaxStandoff === LEGACY_MAX_STANDOFF_MM
+    const baseMaxStandoff = rawMaxStandoff === LEGACY_MAX_STANDOFF_MM
         ? LEGACY_CLAMPED_MAX_STANDOFF_MM
         : rawMaxStandoff;
+    const useCornerExactSweep = edgeSafeguards
+        && effectiveCornerMeta !== undefined
+        && effectiveCornerMeta.thetaSpreadRad >= SAFE_B_MIN_CORNER_SPREAD_RAD;
+    const shiftTargetRigidly = useCornerExactSweep && !hasFixedSocket;
+    const maxOffsetScale = useCornerExactSweep && effectiveCornerMeta?.isConcave ? Math.SQRT2 : 1;
+    const effectiveMaxStandoff = baseMaxStandoff * maxOffsetScale;
 
-    if (maxStandoff <= uncollidedThickness + 1e-6) {
-        return uncollidedThickness;
+    if (effectiveMaxStandoff <= effectiveMinThickness + 1e-6) {
+        return effectiveMinThickness;
     }
 
     // The world matrix and geometry are part of the thickness: the same mesh
     // object is reused when the model is moved or its geometry is replaced.
     const meshKey = `${collisionMesh.matrixWorld.elements.join(',')}|${collisionMesh.geometry?.uuid ?? ''}`;
-    const cacheKey = `${meshKey}`
+    const baseCacheKey = `${meshKey}`
         + `|${contactPos.x},${contactPos.y},${contactPos.z}`
         + `|${surfaceNormal.x},${surfaceNormal.y},${surfaceNormal.z}`
         + `|${socketTarget.x},${socketTarget.y},${socketTarget.z}`
         + `|${cone.profile.contactDiameterMm},${cone.profile.bodyDiameterMm}`
-        + `|${maxStandoff},${uncollidedThickness}`;
+        + `|${baseMaxStandoff},${uncollidedThickness}`;
+    const cacheKey = edgeSafeguards
+        ? `${baseCacheKey}|es:${useCornerExactSweep ? 1 : 0}|sh:${shiftTargetRigidly ? 1 : 0}|ms:${effectiveMaxStandoff}|em:${effectiveMinThickness}`
+        : baseCacheKey;
     let cache = diskThicknessCache.get(collisionMesh);
     const cached = cache?.get(cacheKey);
     if (cached !== undefined) return cached;
 
     if (!allowColdCollision && !hasWarmSDFCache(collisionMesh)) {
-        return uncollidedThickness;
+        return effectiveMinThickness;
     }
 
-    const safeThickness = calculateSafeOffset(
-        contactPos,
-        { x: surfaceNormal.x, y: surfaceNormal.y, z: surfaceNormal.z },
-        { x: socketTarget.x, y: socketTarget.y, z: socketTarget.z },
-        bodyRadius + CONTACT_CONE_COLLISION_SAFETY_MM,
-        collisionMesh,
-        uncollidedThickness,
-        maxStandoff,
-        0.2,
-        {
-            startRadius: (cone.profile.contactDiameterMm / 2) + CONTACT_CONE_COLLISION_SAFETY_MM,
-            endRadius: bodyRadius + CONTACT_CONE_COLLISION_SAFETY_MM,
-        },
-    );
-
+    const surfaceNormalObj = { x: surfaceNormal.x, y: surfaceNormal.y, z: surfaceNormal.z };
+    const socketTargetObj = { x: socketTarget.x, y: socketTarget.y, z: socketTarget.z };
     const capEps = 1e-6;
-    const thickness = safeThickness >= (maxStandoff - capEps)
-        ? uncollidedThickness
-        : safeThickness;
+    let thickness: number;
+    if (useCornerExactSweep) {
+        const safeThickness = calculateSafeOffset(
+            contactPos,
+            surfaceNormalObj,
+            socketTargetObj,
+            bodyRadius,
+            collisionMesh,
+            effectiveMinThickness,
+            baseMaxStandoff,
+            0.05,
+            undefined,
+            {
+                useExactContactConeSweep: true,
+                exactConeRadii: {
+                    startRadius: Math.max(0.001, cone.profile.contactDiameterMm / 2),
+                    endRadius: Math.max(0.001, bodyRadius),
+                },
+                shiftTargetRigidly,
+                maxOffsetScale,
+            },
+        );
+        thickness = safeThickness >= (effectiveMaxStandoff - capEps)
+            ? effectiveMinThickness
+            : safeThickness;
+    } else {
+        const safeThickness = calculateSafeOffset(
+            contactPos,
+            surfaceNormalObj,
+            socketTargetObj,
+            bodyRadius + CONTACT_CONE_COLLISION_SAFETY_MM,
+            collisionMesh,
+            effectiveMinThickness,
+            baseMaxStandoff,
+            0.2,
+            {
+                startRadius: (cone.profile.contactDiameterMm / 2) + CONTACT_CONE_COLLISION_SAFETY_MM,
+                endRadius: bodyRadius + CONTACT_CONE_COLLISION_SAFETY_MM,
+            },
+        );
+        thickness = safeThickness >= (baseMaxStandoff - capEps)
+            ? effectiveMinThickness
+            : safeThickness;
+    }
     if (!cache) {
         cache = new Map<string, number>();
         diskThicknessCache.set(collisionMesh, cache);
@@ -215,7 +261,48 @@ export function recomputeContactConeForMovedDisk(
         uncollidedThickness = calculateDiskThickness(surfaceNormal, _uncollidedAxisScratch, diskProfile);
     }
 
-    const socketTarget = new THREE.Vector3(socketX, socketY, socketZ);
+    const edgeSafeguards = options?.edgeSafeguards === true;
+    const dx = cone.pos.x - nextContactPos.x;
+    const dy = cone.pos.y - nextContactPos.y;
+    const dz = cone.pos.z - nextContactPos.z;
+    const keepCapAnchor = cone.capAnchor !== undefined && (dx * dx + dy * dy + dz * dz) <= 1e-6;
+    const effectiveCornerMeta = edgeSafeguards
+        ? (options?.cornerMeta ?? (keepCapAnchor && cone.capAnchor
+            ? { thetaSpreadRad: cone.capAnchor.thetaSpreadRad, isConcave: cone.capAnchor.isConcave }
+            : undefined))
+        : undefined;
+
+    let effectiveMinThickness = uncollidedThickness;
+    if (
+        edgeSafeguards
+        && diskProfile
+        && effectiveCornerMeta?.isConcave
+        && effectiveCornerMeta.thetaSpreadRad >= PEN_A2_MIN_CONCAVE_SPREAD_RAD
+    ) {
+        const rawMaxStandoff = diskProfile.maxStandoffMm ?? LEGACY_MAX_STANDOFF_MM;
+        const baseMaxStandoff = rawMaxStandoff === LEGACY_MAX_STANDOFF_MM
+            ? LEGACY_CLAMPED_MAX_STANDOFF_MM
+            : rawMaxStandoff;
+        const rContact = Math.max(0.001, diskProfile.contactDiameterMm / 2);
+        const concaveFloor = Math.min(
+            baseMaxStandoff,
+            rContact / Math.max(0.5, Math.cos(effectiveCornerMeta.thetaSpreadRad)),
+        );
+        effectiveMinThickness = Math.max(uncollidedThickness, concaveFloor);
+    }
+
+    const shiftTargetRigidly = edgeSafeguards
+        && effectiveCornerMeta !== undefined
+        && effectiveCornerMeta.thetaSpreadRad >= SAFE_B_MIN_CORNER_SPREAD_RAD
+        && fixedSocketPos === undefined;
+    const baseShift = shiftTargetRigidly && effectiveMinThickness > uncollidedThickness + 1e-6
+        ? effectiveMinThickness - uncollidedThickness
+        : 0;
+    const socketTarget = new THREE.Vector3(
+        socketX + nx * baseShift,
+        socketY + ny * baseShift,
+        socketZ + nz * baseShift,
+    );
     const thickness = resolveCollisionAwareDiskThickness(
         cone,
         nextContactPos,
@@ -223,7 +310,11 @@ export function recomputeContactConeForMovedDisk(
         socketTarget,
         collisionMesh,
         uncollidedThickness,
+        effectiveMinThickness,
         options?.allowColdCollision ?? true,
+        edgeSafeguards,
+        effectiveCornerMeta,
+        fixedSocketPos !== undefined,
     );
 
     // Cone body starts after the disk offset along surface normal
@@ -231,10 +322,17 @@ export function recomputeContactConeForMovedDisk(
     const coneStartY = nextContactPos.y + ny * thickness;
     const coneStartZ = nextContactPos.z + nz * thickness;
 
+    const socketShift = shiftTargetRigidly && thickness > uncollidedThickness + 1e-6
+        ? thickness - uncollidedThickness
+        : 0;
+    const effectiveSocketX = socketX + nx * socketShift;
+    const effectiveSocketY = socketY + ny * socketShift;
+    const effectiveSocketZ = socketZ + nz * socketShift;
+
     // Pass 2: final axis from coneStart to socket (matches how the renderer applies it)
-    let fx = socketX - coneStartX;
-    let fy = socketY - coneStartY;
-    let fz = socketZ - coneStartZ;
+    let fx = effectiveSocketX - coneStartX;
+    let fy = effectiveSocketY - coneStartY;
+    let fz = effectiveSocketZ - coneStartZ;
     if (fx * fx + fy * fy + fz * fz < 0.000001) {
         fx = ax; fy = ay; fz = az;
     }
@@ -242,10 +340,22 @@ export function recomputeContactConeForMovedDisk(
     const lengthMm = Math.max(0.05, fl);
     fx /= fl; fy /= fl; fz /= fl;
 
-    const dx = cone.pos.x - nextContactPos.x;
-    const dy = cone.pos.y - nextContactPos.y;
-    const dz = cone.pos.z - nextContactPos.z;
-    const keepCapAnchor = cone.capAnchor !== undefined && (dx * dx + dy * dy + dz * dz) <= 1e-6;
+    const nextProfile = {
+        ...cone.profile,
+        lengthMm,
+    };
+    if (edgeSafeguards && collisionMesh && (options?.allowColdCollision ?? true)) {
+        const maxSafePen = computeThinWallMaxSafePenetrationMm(
+            collisionMesh,
+            nextContactPos,
+            surfaceNormal,
+        );
+        if (typeof maxSafePen === 'number') {
+            nextProfile.maxSafePenetrationMm = maxSafePen;
+        } else {
+            delete nextProfile.maxSafePenetrationMm;
+        }
+    }
 
     return {
         ...cone,
@@ -253,10 +363,7 @@ export function recomputeContactConeForMovedDisk(
         surfaceNormal: nextSurfaceNormal,
         capAnchor: keepCapAnchor ? cone.capAnchor : undefined,
         normal: { x: fx, y: fy, z: fz },
-        profile: {
-            ...cone.profile,
-            lengthMm,
-        },
+        profile: nextProfile,
         diskLengthOverride: thickness > uncollidedThickness + 1e-6 ? thickness : undefined,
     };
 }

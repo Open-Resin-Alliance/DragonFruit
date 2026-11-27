@@ -9,6 +9,7 @@ import { getJointDiameter } from '../../constants';
 import { isShaftBlocked } from '../../PlacementLogic/CollisionAvoidance';
 import { checkShaftCollision } from '../../PlacementLogic/CollisionUtils';
 import { clampConeAxisDeviationFromSurfaceNormal } from '../../PlacementLogic/ConeAxisPolicy';
+import { computeThinWallMaxSafePenetrationMm } from '../../PlacementLogic/PlacementNormalSynthesis';
 import { v4 as uuidv4 } from 'uuid';
 
 export interface StickBuildInput {
@@ -21,6 +22,7 @@ export interface StickBuildInput {
     bPos: Vec3;
     bNormal: Vec3;
     mesh?: THREE.Mesh;
+    edgeSafeguards?: boolean;
 }
 
 export interface StickBuildResult {
@@ -171,12 +173,25 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
 
     const coneLengthA = clampConeLengthToFreeGap(coneStartA, coneAxisA, tipProfile.lengthMm, mesh);
     const coneLengthB = clampConeLengthToFreeGap(coneStartB, coneAxisB, tipProfile.lengthMm, mesh);
-    const profileA: SupportTipProfile = coneLengthA === tipProfile.lengthMm
+    const runEdgeSafeguards = Boolean(mesh && (input.edgeSafeguards ?? (settings.smoothContactNormals !== false)));
+    const capA = runEdgeSafeguards
+        ? computeThinWallMaxSafePenetrationMm(mesh!, aPos, surfaceNormalA)
+        : undefined;
+    const capB = runEdgeSafeguards
+        ? computeThinWallMaxSafePenetrationMm(mesh!, bPos, surfaceNormalB)
+        : undefined;
+    const baseProfileA: SupportTipProfile = coneLengthA === tipProfile.lengthMm
         ? tipProfile
         : { ...tipProfile, lengthMm: coneLengthA };
-    const profileB: SupportTipProfile = coneLengthB === tipProfile.lengthMm
+    const baseProfileB: SupportTipProfile = coneLengthB === tipProfile.lengthMm
         ? tipProfile
         : { ...tipProfile, lengthMm: coneLengthB };
+    const profileA: SupportTipProfile = typeof capA === 'number'
+        ? { ...baseProfileA, maxSafePenetrationMm: capA }
+        : baseProfileA;
+    const profileB: SupportTipProfile = typeof capB === 'number'
+        ? { ...baseProfileB, maxSafePenetrationMm: capB }
+        : baseProfileB;
 
     const socketA = getSocketPosition(toVec3(coneStartA), toVec3(coneAxisA), profileA);
     const socketB = getSocketPosition(toVec3(coneStartB), toVec3(coneAxisB), profileB);

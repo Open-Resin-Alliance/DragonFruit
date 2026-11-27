@@ -392,6 +392,8 @@ export interface NormalSynthesisMetrics {
     consolidationConvertedBranches: number;
     consolidationBlockedCount: number;
     capSplit?: LeafCapSplitMetrics;
+    thinWallClampedCount?: number;
+    concaveFloorCount?: number;
 }
 
 /** Detailed analytics from an auto-place run. */

@@ -43,6 +43,8 @@ interface ClassifiedDiskCone {
 export interface ComputeNormalSynthesisMetricsOptions {
     mode?: PlacementNormalSynthesisMode;
     leafCapOrbit?: boolean;
+    edgeSafeguards?: boolean;
+    concaveFloorCount?: number;
     consolidationLeafIds?: ReadonlySet<string>;
     consolidationCandidates?: number;
     consolidationConvertedLeaves?: number;
@@ -232,12 +234,28 @@ export function computeNormalSynthesisMetrics(
     const flatOrSmoothAcc = createCapRegimeAccumulator();
     const ridgeOrCornerAcc = createCapRegimeAccumulator();
     let hasLeafCapAnchor = false;
+    let thinWallClampedCount = 0;
+    let autoConcaveFloor = 0;
 
     const recordCone = (cone: ContactCone | undefined, kind: NormalSynthesisSupportKind): ClassifiedDiskCone | null => {
         if (!cone) return null;
         const classified = classifyDiskCone(cone);
         if (!classified) return null;
         const { sn, cn, effective, isCollisionDriven, isAngleDriven } = classified;
+        if (typeof cone.profile?.maxSafePenetrationMm === 'number') {
+            thinWallClampedCount++;
+        }
+        const capAnchor = (cone as { capAnchor?: ConeCapAnchorLike }).capAnchor;
+        if (capAnchor?.isConcave) {
+            const thetaSpreadDeg = (capAnchor.thetaSpreadRad * 180) / Math.PI;
+            if (thetaSpreadDeg >= 15 - 1e-9) {
+                const rContact = Math.max(0.001, (cone.profile.contactDiameterMm ?? 0) / 2);
+                const floor = Math.min(0.35, rContact / Math.max(0.5, Math.cos(capAnchor.thetaSpreadRad)));
+                if (effective >= floor - 1e-5) {
+                    autoConcaveFloor++;
+                }
+            }
+        }
         const isOver025 = effective > 0.25 + 1e-6;
         const isClamped035 = effective >= 0.35 - 1e-4;
 
@@ -336,5 +354,11 @@ export function computeNormalSynthesisMetrics(
         consolidationConvertedBranches: options?.consolidationConvertedBranches ?? 0,
         consolidationBlockedCount: options?.consolidationBlockedCount ?? 0,
         ...(shouldIncludeCapSplit ? { capSplit } : {}),
+        ...(options?.edgeSafeguards === true
+            ? {
+                thinWallClampedCount,
+                concaveFloorCount: options.concaveFloorCount ?? autoConcaveFloor,
+            }
+            : {}),
     };
 }

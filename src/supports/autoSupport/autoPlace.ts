@@ -26,7 +26,7 @@ import { quantizeToScale } from '@/utils/math';
  */
 const round2Mm = (v: number): number => quantizeToScale(v, 100);
 import type { ContactCone, LeafCapAnchor } from '../SupportPrimitives/ContactCone/types';
-import type { AttachmentKind, CandidatePoint, AutoPlaceResult, AutoPlaceStatus, AutoPlaceAnalytics, RejectReason, AutoSupportPlan, PlacementDiagnostics, FanLeafRefusal, ForestLedgerEntry, ForestReport, ForestTree, OrphanInfo, PlacementOutcomeKind } from './types';
+import type { AttachmentKind, CandidatePoint, AutoPlaceResult, AutoPlaceStatus, AutoPlaceAnalytics, PlacementNormalSynthesisMode, RejectReason, AutoSupportPlan, PlacementDiagnostics, FanLeafRefusal, ForestLedgerEntry, ForestReport, ForestTree, OrphanInfo, PlacementOutcomeKind } from './types';
 import { isLedgerKind } from './types';
 import { computeNormalSynthesisMetrics } from './normalSynthesisTelemetry';
 import type { Branch, Segment, SupportState, SupportOrigin, Vec3 } from '../types';
@@ -96,6 +96,7 @@ import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import { buildTrunkData, buildTrunkDataFromPlacement } from '../SupportTypes/Trunk/trunkBuilder';
 import { getFinalSocketPosition, getSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
 import { recomputeContactConeForMovedDisk } from '../SupportPrimitives/ContactDisk/ContactDiskInteraction';
+import { calculateDiskThickness } from '../SupportPrimitives/ContactDisk/contactDiskUtils';
 import {
     synthesizeTreeClusters,
     findOffsetSilhouetteRoute,
@@ -134,6 +135,7 @@ import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
 import { calculateRawWorldNormal } from '../PlacementLogic/PlacementUtils';
 import {
     buildLeafCapAnchor,
+    computeThinWallMaxSafePenetrationMm,
     extractSphericalCapDescriptor,
     orbitLeafCapAnchorTowardKnot,
     resolvePlacementNormalAndCap,
@@ -3241,6 +3243,23 @@ export function rehostLegacyKnots(draft: SupportState, modelId?: string): Suppor
     return changed ? { ...draft, knots: nextKnots } : draft;
 }
 
+function reencodeConeSettingsHex(
+    hex: string | undefined,
+    cone: ContactCone,
+    shaftDiameterMm: number | undefined,
+): string | undefined {
+    if (typeof hex !== 'string' || hex.length === 0) return hex;
+    const fallback = getSettings();
+    const decoded = decodeSupportSettingsHex(hex, fallback) ?? fallback;
+    return encodeSupportSettingsHex(
+        applySizingOverridesToSettings(decoded, {
+            tipContactDiameterMm: cone.profile.contactDiameterMm,
+            tipBodyDiameterMm: cone.profile.bodyDiameterMm,
+            ...(shaftDiameterMm !== undefined ? { shaftDiameterMm } : {}),
+        }),
+    );
+}
+
 /**
  * Enforce "contact cone body == the shaft it sits on" across the whole draft —
  * the same geometry a settings-driven rebuild from the shaft produces. The
@@ -3335,23 +3354,6 @@ export function syncContactConeDiameters(
         };
     };
 
-    const reencodeConeSettingsHex = (
-        hex: string | undefined,
-        cone: ContactCone,
-        shaftDiameterMm: number | undefined,
-    ): string | undefined => {
-        if (typeof hex !== 'string' || hex.length === 0) return hex;
-        const fallback = getSettings();
-        const decoded = decodeSupportSettingsHex(hex, fallback) ?? fallback;
-        return encodeSupportSettingsHex(
-            applySizingOverridesToSettings(decoded, {
-                tipContactDiameterMm: cone.profile.contactDiameterMm,
-                tipBodyDiameterMm: cone.profile.bodyDiameterMm,
-                ...(shaftDiameterMm !== undefined ? { shaftDiameterMm } : {}),
-            }),
-        );
-    };
-
     const nextTrunks: SupportState['trunks'] = { ...draft.trunks };
     for (const [tid, t] of Object.entries(draft.trunks)) {
         if (modelId !== undefined && t.modelId !== modelId) continue;
@@ -3421,6 +3423,262 @@ export function syncContactConeDiameters(
 
     if (!changed) return draft;
     return { ...draft, trunks: nextTrunks, leaves: nextLeaves, branches: nextBranches };
+}
+
+const EDGE_SAFEGUARD_MIN_CONCAVE_RAD = THREE.MathUtils.degToRad(15);
+const EDGE_SAFEGUARD_MIN_SWEEP_RAD = THREE.MathUtils.degToRad(35);
+
+function stripConeThinWallCap(cone: ContactCone): ContactCone {
+    if (cone.profile.maxSafePenetrationMm === undefined && !('maxSafePenetrationMm' in cone.profile)) {
+        return cone;
+    }
+    const nextProfile = { ...cone.profile };
+    delete nextProfile.maxSafePenetrationMm;
+    return { ...cone, profile: nextProfile };
+}
+
+function stripStickThinWallCaps(draft: SupportState, modelId: string): SupportState {
+    let changed = false;
+    const nextSticks: SupportState['sticks'] = { ...draft.sticks };
+    for (const [sid, stick] of Object.entries(draft.sticks)) {
+        if (stick.modelId !== modelId) continue;
+        const coneA = stripConeThinWallCap(stick.contactConeA);
+        const coneB = stripConeThinWallCap(stick.contactConeB);
+        if (coneA !== stick.contactConeA || coneB !== stick.contactConeB) {
+            changed = true;
+            nextSticks[sid] = {
+                ...stick,
+                contactConeA: coneA,
+                contactConeB: coneB,
+            };
+        }
+    }
+    return changed ? { ...draft, sticks: nextSticks } : draft;
+}
+
+function applyConeThinWallPenetrationCap(cone: ContactCone, mesh: THREE.Mesh): ContactCone {
+    const surfaceNormal = cone.surfaceNormal ?? cone.normal;
+    const maxSafePen = computeThinWallMaxSafePenetrationMm(mesh, cone.pos, surfaceNormal);
+    const prevMaxSafe = cone.profile.maxSafePenetrationMm;
+    const hasProp = 'maxSafePenetrationMm' in cone.profile;
+    const changed = typeof maxSafePen === 'number'
+        ? prevMaxSafe !== maxSafePen
+        : (prevMaxSafe !== undefined || hasProp);
+    if (!changed) return cone;
+    const nextProfile = { ...cone.profile };
+    if (typeof maxSafePen === 'number') {
+        nextProfile.maxSafePenetrationMm = maxSafePen;
+    } else {
+        delete nextProfile.maxSafePenetrationMm;
+    }
+    return { ...cone, profile: nextProfile };
+}
+
+function applyEdgeSafeguardsToDraftCones(
+    draft: SupportState,
+    modelId: string,
+    mesh: THREE.Mesh,
+    effective: { mode: PlacementNormalSynthesisMode },
+): { draft: SupportState; concaveFloorCount: number } {
+    let changed = false;
+    let concaveFloorCount = 0;
+
+    const resolveCornerMeta = (cone: ContactCone): { thetaSpreadRad: number; isConcave: boolean } => {
+        if (cone.capAnchor) {
+            return {
+                thetaSpreadRad: cone.capAnchor.thetaSpreadRad,
+                isConcave: cone.capAnchor.isConcave,
+            };
+        }
+        const synthOpts = buildPlacementNormalSynthesisOptions(effective.mode, cone.profile.contactDiameterMm)
+            ?? { mode: effective.mode, contactRadiusMm: cone.profile.contactDiameterMm * 0.5 };
+        const synth = synthesizePlacementNormal(
+            mesh,
+            cone.pos,
+            cone.surfaceNormal ?? cone.normal,
+            synthOpts,
+            _surfaceSynthResult,
+        );
+        return {
+            thetaSpreadRad: synth.thetaSpreadRad ?? 0,
+            isConcave: synth.isConcave ?? false,
+        };
+    };
+
+    const safeguardCone = (cone: ContactCone, fixedSocketPos: Vec3): ContactCone => {
+        const cornerMeta = resolveCornerMeta(cone);
+        const needsCornerSafeguard =
+            (cornerMeta.isConcave && cornerMeta.thetaSpreadRad >= EDGE_SAFEGUARD_MIN_CONCAVE_RAD)
+            || cornerMeta.thetaSpreadRad >= EDGE_SAFEGUARD_MIN_SWEEP_RAD;
+        if (!needsCornerSafeguard) {
+            return applyConeThinWallPenetrationCap(cone, mesh);
+        }
+
+        const surfaceNormal = cone.surfaceNormal ?? cone.normal;
+        const uncollided = cone.profile.type === 'disk'
+            ? calculateDiskThickness(surfaceNormal, cone.normal, cone.profile)
+            : 0;
+
+        let recomputed = recomputeContactConeForMovedDisk(
+            cone,
+            cone.pos,
+            surfaceNormal,
+            fixedSocketPos,
+            mesh,
+            { edgeSafeguards: true, cornerMeta },
+        );
+
+        const recomputedMaxBody = maxConeBodyDiameterForContact({
+            coneAxis: recomputed.normal,
+            socketPos: getFinalSocketPosition(recomputed),
+            tipPos: recomputed.pos,
+        }) - 0.005;
+        const clampedBody = Math.max(
+            recomputed.profile.contactDiameterMm,
+            Math.min(recomputed.profile.bodyDiameterMm, recomputedMaxBody),
+        );
+        if (Math.abs(recomputed.profile.bodyDiameterMm - clampedBody) > 1e-6) {
+            recomputed = {
+                ...recomputed,
+                profile: { ...recomputed.profile, bodyDiameterMm: clampedBody },
+            };
+        }
+
+        if (
+            recomputed.profile.type === 'disk'
+            && cornerMeta.isConcave
+            && cornerMeta.thetaSpreadRad >= EDGE_SAFEGUARD_MIN_CONCAVE_RAD
+        ) {
+            const rawMaxStandoff = recomputed.profile.maxStandoffMm ?? 1.5;
+            const baseMaxStandoff = rawMaxStandoff === 1.5 ? 0.35 : rawMaxStandoff;
+            const rContact = Math.max(0.001, recomputed.profile.contactDiameterMm / 2);
+            const concaveFloor = Math.min(
+                baseMaxStandoff,
+                rContact / Math.max(0.5, Math.cos(cornerMeta.thetaSpreadRad)),
+            );
+            if ((recomputed.diskLengthOverride ?? 0) >= concaveFloor - 1e-6 && concaveFloor > uncollided + 1e-6) {
+                concaveFloorCount++;
+            }
+        }
+
+        return recomputed;
+    };
+
+    const nextTrunks: SupportState['trunks'] = { ...draft.trunks };
+    for (const [tid, t] of Object.entries(draft.trunks)) {
+        if (t.modelId !== modelId || !t.contactCone) continue;
+        const topSeg = t.segments[t.segments.length - 1];
+        const fixedSocket = topSeg?.topJoint?.pos ?? getFinalSocketPosition(t.contactCone);
+        const nextCone = safeguardCone(t.contactCone, fixedSocket);
+        if (nextCone !== t.contactCone) {
+            changed = true;
+            const bodyChanged = Math.abs(nextCone.profile.bodyDiameterMm - t.contactCone.profile.bodyDiameterMm) > 1e-6;
+            nextTrunks[tid] = {
+                ...t,
+                contactCone: nextCone,
+                ...(bodyChanged
+                    ? {
+                        settingsCodeHex: reencodeConeSettingsHex(
+                            t.settingsCodeHex,
+                            nextCone,
+                            t.segments[0]?.diameter ?? topSeg?.diameter,
+                        ),
+                    }
+                    : {}),
+            };
+        }
+    }
+
+    const nextBranches: SupportState['branches'] = { ...draft.branches };
+    for (const [bid, b] of Object.entries(draft.branches)) {
+        if (b.modelId !== modelId || !b.contactCone) continue;
+        const topSeg = b.segments[b.segments.length - 1];
+        const fixedSocket = topSeg?.topJoint?.pos ?? getFinalSocketPosition(b.contactCone);
+        const nextCone = safeguardCone(b.contactCone, fixedSocket);
+        if (nextCone !== b.contactCone) {
+            changed = true;
+            const bodyChanged = Math.abs(nextCone.profile.bodyDiameterMm - b.contactCone.profile.bodyDiameterMm) > 1e-6;
+            nextBranches[bid] = {
+                ...b,
+                contactCone: nextCone,
+                ...(bodyChanged
+                    ? {
+                        settingsCodeHex: reencodeConeSettingsHex(
+                            b.settingsCodeHex,
+                            nextCone,
+                            b.segments[0]?.diameter,
+                        ),
+                    }
+                    : {}),
+            };
+        }
+    }
+
+    const nextLeaves: SupportState['leaves'] = { ...draft.leaves };
+    for (const [lid, l] of Object.entries(draft.leaves)) {
+        if (l.modelId !== modelId) continue;
+        const fixedSocket = draft.knots[l.parentKnotId]?.pos ?? getFinalSocketPosition(l.contactCone);
+        const nextCone = safeguardCone(l.contactCone, fixedSocket);
+        if (nextCone !== l.contactCone) {
+            changed = true;
+            const bodyChanged = Math.abs(nextCone.profile.bodyDiameterMm - l.contactCone.profile.bodyDiameterMm) > 1e-6;
+            nextLeaves[lid] = {
+                ...l,
+                contactCone: nextCone,
+                ...(bodyChanged
+                    ? {
+                        settingsCodeHex: reencodeConeSettingsHex(
+                            l.settingsCodeHex,
+                            nextCone,
+                            nextCone.profile.bodyDiameterMm,
+                        ),
+                    }
+                    : {}),
+            };
+        }
+    }
+
+    const nextStumps: SupportState['stumps'] = { ...draft.stumps };
+    for (const [spid, sp] of Object.entries(draft.stumps)) {
+        if (sp.modelId !== modelId) continue;
+        const fixedSocket = sp.joint?.pos ?? getFinalSocketPosition(sp.contactCone);
+        const nextCone = safeguardCone(sp.contactCone, fixedSocket);
+        if (nextCone !== sp.contactCone) {
+            changed = true;
+            nextStumps[spid] = {
+                ...sp,
+                contactCone: nextCone,
+            };
+        }
+    }
+
+    const nextSticks: SupportState['sticks'] = { ...draft.sticks };
+    for (const [sid, st] of Object.entries(draft.sticks)) {
+        if (st.modelId !== modelId) continue;
+        const coneA = applyConeThinWallPenetrationCap(st.contactConeA, mesh);
+        const coneB = applyConeThinWallPenetrationCap(st.contactConeB, mesh);
+        if (coneA !== st.contactConeA || coneB !== st.contactConeB) {
+            changed = true;
+            nextSticks[sid] = {
+                ...st,
+                contactConeA: coneA,
+                contactConeB: coneB,
+            };
+        }
+    }
+
+    if (!changed) return { draft, concaveFloorCount };
+    return {
+        draft: {
+            ...draft,
+            trunks: nextTrunks,
+            branches: nextBranches,
+            leaves: nextLeaves,
+            stumps: nextStumps,
+            sticks: nextSticks,
+        },
+        concaveFloorCount,
+    };
 }
 
 /**
@@ -5276,6 +5534,7 @@ export function computeAutoSupportPlan(
             normalSynthesisMetrics: computeNormalSynthesisMetrics(draft, modelId, {
                 mode: effective.mode,
                 leafCapOrbit: effective.leafCapOrbit,
+                edgeSafeguards: effective.edgeSafeguards,
             }),
         },
         result,
@@ -7414,6 +7673,7 @@ export function computeAutoSupportPlan(
 
     // ── Root merge: trunks whose plate roots stand together share one host ──
     let rootMergeStats: { merged: number; refusals: Partial<Record<string, number>> } | undefined;
+
     if (changed) {
         try {
             const mergeResult = mergeNearbyTrunkRoots(draft, modelId, {
@@ -7453,6 +7713,8 @@ export function computeAutoSupportPlan(
     //    profile from its final attachment tree (a trunk carrying four
     //    branches gets thicker; a lone trunk stays at its placed diameter).
     // ------------------------------------------------------------------
+
+    let concaveFloorCount: number | undefined;
 
     if (changed) {
         try {
@@ -7837,6 +8099,20 @@ export function computeAutoSupportPlan(
             if (coneSynced !== draft) {
                 draft = coneSynced;
                 console.log(LOG_PREFIX, 'Contact cone sync: matched cone bodies to their host shafts.');
+            }
+            if (effective.edgeSafeguards && resolvedMesh) {
+                perfMark('resize:edge-safeguards');
+                const safeguarded = applyEdgeSafeguardsToDraftCones(draft, modelId, resolvedMesh, effective);
+                perfMeasure('resize:edge-safeguards', 'resize:edge-safeguards');
+                bumpDraftVersion(safeguarded.draft);
+                draft = safeguarded.draft;
+                concaveFloorCount = safeguarded.concaveFloorCount;
+            } else if (!effective.edgeSafeguards) {
+                const stripped = stripStickThinWallCaps(draft, modelId);
+                if (stripped !== draft) {
+                    bumpDraftVersion(stripped);
+                    draft = stripped;
+                }
             }
 
             timingEnd('resize');
@@ -8414,9 +8690,15 @@ export function computeAutoSupportPlan(
     }
     logAutoPlaceTimings(timings);
 
+    if (!effective.edgeSafeguards) {
+        draft = stripStickThinWallCaps(draft, modelId);
+    }
+
     analytics.normalSynthesisMetrics = computeNormalSynthesisMetrics(draft, modelId, {
         mode: effective.mode,
         leafCapOrbit: effective.leafCapOrbit,
+        edgeSafeguards: effective.edgeSafeguards,
+        ...(concaveFloorCount !== undefined ? { concaveFloorCount } : {}),
         consolidationLeafIds,
         consolidationCandidates: consolidationAttemptedHosts.size,
         consolidationConvertedLeaves,
