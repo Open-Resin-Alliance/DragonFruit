@@ -5,7 +5,9 @@ import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 
 import {
+    buildLeafCapAnchor,
     extractSphericalCapDescriptor,
+    orbitLeafCapAnchorTowardKnot,
     resolveKnotWeightedCapNormal,
     resolvePlacementNormalAndCap,
     synthesizePlacementNormal,
@@ -561,4 +563,97 @@ test('8. G2 50 mm coarse sphere cap weights closest-point distance d_t accuratel
     assert.equal(convexCap.downwardTriCount, 2);
     assert.equal(convexCap.isConcave, false);
     assert.ok(convexCap.rimSlackRad > 0, 'convex ridge retains rimSlackRad');
+});
+
+test('9. Upgrade A: tau_i=(1-u_i)^2 prevents asymmetric inward overshoot on 90° slab+wall perimeter at d=0.15 mm with leafRimSlackDeg=0', () => {
+    // Slab bottom face (z = 0, x in [-4, 0], normal (0, 0, -1)) meeting a vertical wall (x = 0, z in [0, 4], normal (1, 0, 0))
+    const slabWallMesh = buildTriangleSoupMesh([
+        [-4, -2, 0, -4, 2, 0, 0, 2, 0],
+        [-4, -2, 0, 0, 2, 0, 0, -2, 0],
+        [0, -2, 0, 0, 2, 0, 0, 2, 4],
+        [0, -2, 0, 0, 2, 4, 0, -2, 4],
+    ]);
+
+    const tipPos = new THREE.Vector3(-0.15, 0, 0);
+    const rawDown = new THREE.Vector3(0, 0, -1);
+    const cap = extractSphericalCapDescriptor(slabWallMesh, tipPos, rawDown, 0.15, 0);
+
+    // At d=0.15 mm with R_cap=0.45 mm: u_wall=1/3, K=(2/3)^2=4/9 -> nMean angle ~23.96 deg,
+    // attenuated thetaSpreadRad = (4/9)*(90-23.96) = ~29.35 deg (without tau it was ~66 deg -> 45 deg cap).
+    assert.equal(cap.downwardTriCount, 2);
+    assert.equal(cap.rimSlackRad, 0);
+    assert.ok(
+        THREE.MathUtils.radToDeg(cap.thetaSpreadRad) < 31,
+        `expected radially attenuated thetaSpreadRad < 31°, got ${THREE.MathUtils.radToDeg(cap.thetaSpreadRad).toFixed(2)}°`,
+    );
+
+    // Orbiting toward a modestly inward knot (x = -0.8, z = -5) must keep zero inward overshoot (orbited.x >= 0)
+    const inwardKnot = new THREE.Vector3(-0.8, 0, -5);
+    const orbited = resolveKnotWeightedCapNormal(
+        tipPos,
+        inwardKnot,
+        cap,
+        rawDown,
+        rawDown,
+        THREE.MathUtils.degToRad(45),
+    );
+    assert.ok(
+        orbited.x >= 0,
+        `expected zero inward overshoot (orbited.x >= 0) on 90° slab+wall perimeter, got x=${orbited.x}`,
+    );
+});
+
+test('10. Upgrade B: 96°-125° sloped-cantilever +Y lip expands cap only in resolvePlacementNormalAndCap while extractSphericalCapDescriptor stays untouched', () => {
+    // Underside z = 0 (y in [-4, 0], normal (0, 0, -1)) meeting a 110° tapered wall along y = 0 (+Y lip):
+    // n_wall = (0, sin(110°), -cos(110°)) = (0, +0.9397, +0.3420) -> n_wall.z > sin(5°) so cap pool alone rejects wall!
+    const dihedralRad = THREE.MathUtils.degToRad(110);
+    const wallDy = Math.cos(dihedralRad - Math.PI / 2); // cos(20°) along +Y? Wait: edge along X, wall goes from y=0 upward/outward
+    const wallDz = Math.sin(dihedralRad - Math.PI / 2); // sin(20°) = +0.3420? Check cross product!
+    // Edge from (-2,0,0) to (2,0,0): let third vertex be (0, -wallDy, wallDz) vs (0, wallDy, wallDz)
+    // Wait: for wall face starting at y=0, z=0 going to y = +cos(70°)? Wait: wall angle from -Z is 110°:
+    // n_wall = (0, sin(110°), -cos(110°)) = (0, 0.9397, 0.3420).
+    // Tangent from y=0,z=0 perpendicular to n_wall going upward (+Z): (0, -0.3420, +0.9397) = (0, -cos(70°), sin(70°))!
+    // Cross((-2,0,0)->(2,0,0) = (4,0,0), (0, -0.3420, 0.9397)*4) -> (0, -3.7588, -1.368) -> opposite!
+    // So reverse order: (2,0,0)->(-2,0,0) cross (0, -0.3420, 0.9397): (-4,0,0) x (0,-0.342,0.940) = (0, +3.7588, +1.368) -> outward (0, +0.9397, +0.3420)!
+    void wallDy;
+    void wallDz;
+    const slopeAngle = THREE.MathUtils.degToRad(110);
+    const ty = Math.cos(slopeAngle); // -0.3420
+    const tz = Math.sin(slopeAngle); // +0.9397
+    const cantileverMesh = buildTriangleSoupMesh([
+        [-2, -4, 0, -2, 0, 0, 2, 0, 0],
+        [-2, -4, 0, 2, 0, 0, 2, -4, 0],
+        [2, 0, 0, -2, 0, 0, -2, ty * 4, tz * 4],
+        [2, 0, 0, -2, ty * 4, tz * 4, 2, ty * 4, tz * 4],
+    ]);
+
+    const lipPt = new THREE.Vector3(0, -0.02, 0);
+    const rawDown = new THREE.Vector3(0, 0, -1);
+
+    const standaloneCap = extractSphericalCapDescriptor(cantileverMesh, lipPt, rawDown, 0.25, 0);
+    assert.ok(standaloneCap.downwardTriCount > 0);
+    assert.ok(standaloneCap.nMean.y < 1e-6, `standalone extractSphericalCapDescriptor must remain untouched (nMean.y=${standaloneCap.nMean.y})`);
+    assert.ok(standaloneCap.thetaSpreadRad < 1e-6, `standalone thetaSpreadRad must stay 0, got ${standaloneCap.thetaSpreadRad}`);
+
+    const combined = resolvePlacementNormalAndCap(cantileverMesh, lipPt, rawDown, {
+        mode: 'bisector',
+        contactRadiusMm: 0.25,
+        leafRimSlackDeg: 0,
+    });
+    assert.equal(combined.synthesis.regime, 'edge-bisector');
+    assert.ok(combined.cap.nMean.y > 0.35, `expected Upgrade B to expand cap.nMean toward +Y, got nMean.y=${combined.cap.nMean.y}`);
+    assert.ok(combined.cap.thetaSpreadRad > THREE.MathUtils.degToRad(20), `expected Upgrade B to expand thetaSpreadRad, got ${THREE.MathUtils.radToDeg(combined.cap.thetaSpreadRad)}°`);
+
+    const anchor = buildLeafCapAnchor(lipPt, combined.cap, combined.synthesis.normal);
+    assert.ok(anchor, 'expected valid LeafCapAnchor on sloped-cantilever lip');
+    const target = { x: 0, y: 0, z: 0 };
+    const orbitedOut = orbitLeafCapAnchorTowardKnot(lipPt, new THREE.Vector3(0, 4, -3), anchor, THREE.MathUtils.degToRad(45), target);
+    assert.equal(orbitedOut, target, 'orbitLeafCapAnchorTowardKnot must write into target in-place');
+    assert.ok(orbitedOut.y > 0.5, `expected orbited normal to follow +Y knot along expanded cap, got y=${orbitedOut.y}`);
+    assert.ok(orbitedOut.z <= Math.sin(THREE.MathUtils.degToRad(5)) + 1e-12);
+
+    // buildLeafCapAnchor returns undefined when downwardTriCount === 0 and baseSynthesisNormal.z > sin(5°)
+    const emptyCap = { ...combined.cap, downwardTriCount: 0 };
+    assert.equal(buildLeafCapAnchor(lipPt, emptyCap, { x: 0, y: 0, z: 0.5 }), undefined);
+    assert.ok(buildLeafCapAnchor(lipPt, emptyCap, { x: 0, y: 0, z: -1 }), 'downward baseNormal builds fallback anchor even when downwardTriCount === 0');
 });

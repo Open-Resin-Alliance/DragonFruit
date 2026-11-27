@@ -1,11 +1,16 @@
 import React from 'react';
 import { useThree } from '@react-three/fiber';
+import * as THREE from 'three';
 import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { getSnapshot } from '../../state';
+import { getSettings } from '../../Settings/state';
+import { getModelMesh } from '../../autoSupport/meshStore';
+import { buildLeafCapAnchor, extractSphericalCapDescriptor } from '../../PlacementLogic/PlacementNormalSynthesis';
 import { updateSupportEntity } from '../../supportTypeRegistry';
 import { Leaf, Knot, Vec3 } from '../../types';
 import { registerSupportDetailRenderer, simpleViewHidesDetail } from '../../detailRenderer/seam';
 import { ContactConeRenderer, getFinalSocketPosition, type ContactCone } from '../../SupportPrimitives/ContactCone';
+import type { LeafCapAnchor } from '../../SupportPrimitives/ContactCone/types';
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk';
 import { isPrimaryPointerPress, type ContactDiskDragHit } from '../../SupportPrimitives/ContactDisk/contactDiskDragController';
 import { handleSupportClick } from '../../interaction/clickHandlers';
@@ -14,6 +19,40 @@ import { useHighlight } from '../../interaction/useHighlight';
 import { KnotRenderer } from '../../SupportPrimitives/Knot/KnotRenderer';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
 import { useContactDiskDragSession } from '../useContactDiskDragSession';
+
+const TOP_FACE_NZ_LIMIT = Math.sin(THREE.MathUtils.degToRad(35));
+
+export function refreshMovedLeafCapAnchor(
+    nextCone: ContactCone,
+    modelId: string,
+    dragMesh?: THREE.Mesh,
+): ContactCone {
+    const settings = getSettings();
+    let nextCapAnchor: LeafCapAnchor | undefined;
+    if (settings.smoothContactNormals !== false) {
+        const baseNormal = nextCone.surfaceNormal ?? nextCone.normal;
+        const capMesh = dragMesh
+            ?? (nextCone.placementSurface !== 'interior' && modelId ? getModelMesh(modelId) ?? undefined : undefined);
+        if (capMesh && baseNormal.z <= TOP_FACE_NZ_LIMIT) {
+            const contactRadiusMm = (nextCone.profile.contactDiameterMm ?? settings.tip.contactDiameterMm) * 0.5;
+            const leafRimSlackDeg = settings.devToolsEnabled ? (settings.devTools.leafRimSlackDeg ?? 0) : 0;
+            const cap = extractSphericalCapDescriptor(
+                capMesh,
+                nextCone.pos,
+                baseNormal,
+                contactRadiusMm,
+                leafRimSlackDeg,
+            );
+            if (cap.downwardTriCount > 0) {
+                nextCapAnchor = buildLeafCapAnchor(nextCone.pos, cap, baseNormal);
+            }
+        }
+    }
+    return {
+        ...nextCone,
+        capAnchor: nextCapAnchor,
+    };
+}
 
 interface LeafRendererProps {
     leaf: Leaf;
@@ -83,6 +122,7 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     // The socket the cone pivots around is fixed at pointer-down, so a drag
     // across a re-hit surface cannot re-socket the leaf mid-flight.
     const dragSocketAnchorRef = React.useRef<Vec3 | undefined>(undefined);
+    const lastTipDragHitRef = React.useRef<ContactDiskDragHit | null>(null);
 
     const { pickRef, visuals } = useHighlight({
         id: leaf.id,
@@ -124,17 +164,28 @@ export const LeafRenderer = React.memo(function LeafRenderer({
     };
 
     const tipDrag = useContactDiskDragSession<ContactCone>(typeId, {
-        onHit: ({ point, surfaceNormal, mesh }: ContactDiskDragHit) => {
+        onHit: (hit: ContactDiskDragHit) => {
             const latest = getSnapshot().leaves[leaf.id];
             const socketAnchor = dragSocketAnchorRef.current;
             if (!latest?.contactCone || !socketAnchor) return null;
-            return recomputeContactConeForMovedDisk(latest.contactCone, point, surfaceNormal, socketAnchor, mesh);
+            lastTipDragHitRef.current = hit;
+            return recomputeContactConeForMovedDisk(latest.contactCone, hit.point, hit.surfaceNormal, socketAnchor, hit.mesh);
         },
         onCommit: (nextCone) => {
             const latest = getSnapshot().leaves[leaf.id];
+            const dragHit = lastTipDragHitRef.current;
+            lastTipDragHitRef.current = null;
+            if (!latest) return;
+
             // The one-argument form reads the type off the entity, so this does not
             // name the type to write it.
-            if (latest) updateSupportEntity({ ...latest, contactCone: nextCone });
+            updateSupportEntity({
+                ...latest,
+                contactCone: refreshMovedLeafCapAnchor(nextCone, latest.modelId, dragHit?.mesh),
+            });
+        },
+        onSettled: () => {
+            lastTipDragHitRef.current = null;
         },
         // A leaf's tip drag mutates only its contact cone; it owns no segments.
         coneFromPreview: (cone) => cone,

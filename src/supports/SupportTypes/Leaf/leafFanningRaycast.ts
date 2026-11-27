@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
+import { resolveManualLeafTipAndCap } from '../../PlacementLogic/PlacementUtils';
+import type { LeafCapAnchor } from '../../SupportPrimitives/ContactCone/types';
 import { leafPlacementStore } from './leafPlacementState';
 import type { Vec3 } from '../../types';
 
@@ -17,6 +18,7 @@ export interface LeafPlacementRaycastOptions {
 export interface SyncSproutTipResult {
     tipPosition: Vec3 | null;
     surfaceNormal: Vec3 | null;
+    capAnchor?: LeafCapAnchor | null;
 }
 
 const MAX_CLIP_STEP_ITERATIONS = 16;
@@ -174,13 +176,19 @@ export function syncSproutTipFromRaycast(
     }
 
     const tipPosition: Vec3 = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
-    const surfaceNormal = calculateSmoothedNormal(hit);
+    const { surfaceNormal: resolvedNormal, capAnchor } = resolveManualLeafTipAndCap(hit);
+    const surfaceNormal: Vec3 = {
+        x: resolvedNormal.x,
+        y: resolvedNormal.y,
+        z: resolvedNormal.z,
+    };
     const hitModelId = hit.object.userData?.modelId;
     leafPlacementStore.updateFanningTip(
         tipPosition,
         surfaceNormal,
         typeof hitModelId === 'string' ? hitModelId : undefined,
+        capAnchor ?? null,
     );
 
-    return { tipPosition, surfaceNormal };
+    return { tipPosition, surfaceNormal, capAnchor: capAnchor ?? null };
 }

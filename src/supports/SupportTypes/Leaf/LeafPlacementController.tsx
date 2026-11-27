@@ -25,6 +25,8 @@ import { isSupportEditInteractionActive } from '../../interaction/gizmoInteracti
 import { previewVecKey, previewNormalKey, quantizePreviewValue } from '../shared/previewSignature';
 import { getClipBounds } from '@/components/scene/SceneCanvas/clipBoundsStore';
 import { findClosestMeshToPoint } from '../../PlacementLogic/PlacementUtils';
+import { orbitLeafCapAnchorTowardKnot } from '../../PlacementLogic/PlacementNormalSynthesis';
+import { hasWarmSDFCache } from '../../PlacementLogic/Pathfinding/SDFCachePool';
 import { resolveLeafPlacementMeshHit, syncSproutTipFromRaycast } from './leafFanningRaycast';
 import { markPlacementSurface } from '../../PlacementLogic/placementSurface';
 import { setPickRayFromCamera } from '@/components/scene/camera/pickRay';
@@ -45,7 +47,7 @@ interface LeafPlacementControllerProps {
 }
 
 export function LeafPlacementController({ activeModelId }: LeafPlacementControllerProps = {}) {
-    const { isActive, stage, tipPosition, surfaceNormal, modelId, placementSurface, sproutParentingLockHeld } = useLeafPlacementState();
+    const { isActive, stage, tipPosition, surfaceNormal, tipCapAnchor, modelId, placementSurface, sproutParentingLockHeld } = useLeafPlacementState();
     const supportState = useSyncExternalStore(subscribe, getSnapshot);
     const { getHotkey } = useHotkeyConfig();
     const leafBinding = getHotkey('SUPPORTS', 'LEAF_PLACEMENT');
@@ -202,6 +204,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
 
         let finalTipPos = snap.tipPosition;
         let finalNormal = snap.surfaceNormal;
+        let finalCapAnchor = snap.tipCapAnchor;
 
         if (liveStage === 'awaitingSproutTip') {
             const { clipLower, clipUpper } = getClipBounds();
@@ -212,6 +215,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
             });
             finalTipPos = synced.tipPosition;
             finalNormal = synced.surfaceNormal;
+            finalCapAnchor = synced.capAnchor ?? null;
         }
 
         let knotPos: Vec3 | null = null;
@@ -383,6 +387,9 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
             const settings = getSettings();
             const fallbackHostDiameterMm = settings.shaft.diameterMm;
             const resolvedHostDiameter = hostDiameterMm ?? fallbackHostDiameterMm;
+            const orbitedNormal = (finalCapAnchor && settings.smoothContactNormals !== false)
+                ? orbitLeafCapAnchorTowardKnot(finalTipPos, knotPos, finalCapAnchor)
+                : finalNormal;
 
             const previewSignature = [
                 'leaf',
@@ -392,7 +399,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 quantizePreviewValue(t ?? 0),
                 quantizePreviewValue(resolvedHostDiameter),
                 previewVecKey(finalTipPos),
-                previewNormalKey(finalNormal),
+                previewNormalKey(orbitedNormal),
             ].join('|');
 
             if (lastPreviewSignatureRef.current !== previewSignature) {
@@ -420,13 +427,17 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                     diameter: previewKnotDiameter,
                 };
 
+                const rawPreviewMesh = resolveTipMesh(finalTipPos);
+                const previewMesh = rawPreviewMesh && hasWarmSDFCache(rawPreviewMesh) ? rawPreviewMesh : undefined;
+
                 const buildResult = buildLeafData({
                     tipPos: finalTipPos,
-                    surfaceNormal: finalNormal,
+                    surfaceNormal: orbitedNormal,
                     modelId,
                     parentKnot,
                     hostDiameterMm: resolvedHostDiameter,
-                    mesh: resolveTipMesh(finalTipPos),
+                    mesh: previewMesh,
+                    capAnchor: finalCapAnchor ?? undefined,
                 });
 
                 const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
@@ -585,6 +596,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
             if (stage === 'awaitingSproutTip') {
                 const liveTipPos = snap.tipPosition;
                 const liveNormal = snap.surfaceNormal;
+                const liveCapAnchor = snap.tipCapAnchor;
                 if (!snap.junctionHubId || !liveTipPos || !liveNormal) return;
                 const parentKnot = getSnapshot().knots[snap.junctionHubId];
                 if (!parentKnot) return;
@@ -604,13 +616,18 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 if (parentKnot.pos.z > liveTipPos.z + epsilonZ) return;
                 if (angleFromUpDeg > maxAngleDeg) return;
 
+                const orbitedNormal = (liveCapAnchor && settings.smoothContactNormals !== false)
+                    ? orbitLeafCapAnchorTowardKnot(liveTipPos, parentKnot.pos, liveCapAnchor)
+                    : liveNormal;
+
                 const { leaf } = buildLeafData({
                     tipPos: liveTipPos,
-                    surfaceNormal: liveNormal,
+                    surfaceNormal: orbitedNormal,
                     modelId: snap.modelId,
                     parentKnot,
                     hostDiameterMm,
                     mesh: resolveTipMesh(liveTipPos),
+                    capAnchor: liveCapAnchor ?? undefined,
                 });
                 // The built leaf stamps its own `typeId`, so the controller reads
                 // it back rather than restating the name: the surface mark and the
@@ -678,13 +695,18 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 if (parentKnot.pos.z > tipPosition.z + epsilonZ) return;
                 if (angleFromUpDeg > maxAngleDeg) return;
 
+                const orbitedNormal = (tipCapAnchor && settings.smoothContactNormals !== false)
+                    ? orbitLeafCapAnchorTowardKnot(tipPosition, parentKnot.pos, tipCapAnchor)
+                    : surfaceNormal;
+
                 const { leaf } = buildLeafData({
                     tipPos: tipPosition,
-                    surfaceNormal,
+                    surfaceNormal: orbitedNormal,
                     modelId,
                     parentKnot,
                     hostDiameterMm,
                     mesh: resolveTipMesh(tipPosition),
+                    capAnchor: tipCapAnchor ?? undefined,
                 });
                 // Same derivation as the sprout path above: the type the leaf
                 // declares, read back off the entity it just stamped.
@@ -739,6 +761,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
         stage,
         tipPosition,
         surfaceNormal,
+        tipCapAnchor,
         modelId,
         placementSurface,
         leafBinding,

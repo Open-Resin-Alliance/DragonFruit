@@ -46,6 +46,22 @@ export type SupportTipProfile = {
 } & (ContactDiskProfile | ContactSphereProfile | { type?: undefined }); // Allow undefined for legacy compatibility
 
 /**
+ * Non-persisted runtime spherical-cap anchor metadata for O(1) leaf orbiting.
+ * `.voxl` load leaves it undefined and falls back to `surfaceNormal`.
+ */
+export interface LeafCapAnchor {
+    nMean: Vec3;
+    baseNormal: Vec3;
+    thetaSpreadRad: number;
+    rimSlackRad: number;
+    thetaCapRad: number;
+    coneAngleLimitRad: number;
+    isConcave: boolean;
+    downwardTriCount: number;
+    tipPos: Vec3;
+}
+
+/**
  * ContactCone: The terminal piece at the model interface.
  * - Contact face touches model
  * - Socket side connects directly to a Joint (never to a Shaft)
@@ -55,6 +71,7 @@ export interface ContactCone {
     pos: Vec3;                  // Contact point on model surface
     normal: Vec3;               // Cone axis direction (points into model)
     surfaceNormal?: Vec3;       // ACTUAL surface normal (for disk alignment)
+    capAnchor?: LeafCapAnchor;  // Runtime-only spherical-cap anchor for leaf orbiting
     diskLengthOverride?: number; // Override for disk thickness (e.g. from collision)
     placementSurface?: 'interior' | 'exterior';
     profile: SupportTipProfile;

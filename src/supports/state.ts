@@ -21,6 +21,8 @@ import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactC
 import { recomputeContactConeForMovedDisk } from './SupportPrimitives/ContactDisk/ContactDiskInteraction';
 import { getModelMesh } from './autoSupport/meshStore';
 import { hasWarmSDFCache } from './PlacementLogic/Pathfinding/SDFCachePool';
+import { orbitLeafCapAnchorTowardKnot } from './PlacementLogic/PlacementNormalSynthesis';
+import { getSettings } from './Settings/state';
 import { resolveSegmentEndpoints, type ShaftEntity } from './SupportPrimitives/Knot/segmentEndpoints';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { emitSupportInteractionReset } from './interaction/supportInteractionReset';
@@ -414,6 +416,7 @@ export function recomputeKnotDependentGeometry(
     const knotIds = Object.keys(updatedKnotPosById);
     if (knotIds.length === 0) return leaves;
 
+    const smoothContactNormals = getSettings().smoothContactNormals !== false;
     let changed = false;
     let nextLeaves = leaves;
 
@@ -423,17 +426,21 @@ export function recomputeKnotDependentGeometry(
         const cone = leaf.contactCone;
         if (!cone?.surfaceNormal) continue;
 
+        const nextSurfaceNormal = (cone.capAnchor && smoothContactNormals)
+            ? orbitLeafCapAnchorTowardKnot(cone.pos, knotPos, cone.capAnchor)
+            : cone.surfaceNormal;
+
         const modelMesh = leaf.modelId ? getModelMesh(leaf.modelId) : null;
         const warmMesh = modelMesh && hasWarmSDFCache(modelMesh) ? modelMesh : undefined;
 
         let axis: Vec3;
         let lengthMm: number;
         let nextOverride: number | undefined;
-        if (warmMesh && cone.surfaceNormal) {
+        if (warmMesh && nextSurfaceNormal) {
             const recomputed = recomputeContactConeForMovedDisk(
                 cone,
                 cone.pos,
-                cone.surfaceNormal,
+                nextSurfaceNormal,
                 knotPos,
                 warmMesh,
                 { allowColdCollision: false },
@@ -444,7 +451,7 @@ export function recomputeKnotDependentGeometry(
         } else {
             ({ axis, lengthMm } = recomputeLeafContactConeAxisAndLength(
                 cone.pos,
-                cone.surfaceNormal,
+                nextSurfaceNormal,
                 knotPos,
                 cone.profile,
             ));
@@ -452,6 +459,7 @@ export function recomputeKnotDependentGeometry(
         }
 
         const oldNormal = cone.normal;
+        const oldSurfaceNormal = cone.surfaceNormal;
         const oldLen = cone.profile.lengthMm;
 
         if (
@@ -459,7 +467,10 @@ export function recomputeKnotDependentGeometry(
             cone.diskLengthOverride === nextOverride &&
             oldNormal.x === axis.x &&
             oldNormal.y === axis.y &&
-            oldNormal.z === axis.z
+            oldNormal.z === axis.z &&
+            oldSurfaceNormal.x === nextSurfaceNormal.x &&
+            oldSurfaceNormal.y === nextSurfaceNormal.y &&
+            oldSurfaceNormal.z === nextSurfaceNormal.z
         ) {
             continue;
         }
@@ -474,6 +485,8 @@ export function recomputeKnotDependentGeometry(
             contactCone: {
                 ...cone,
                 normal: axis,
+                surfaceNormal: nextSurfaceNormal,
+                ...(cone.capAnchor ? { capAnchor: cone.capAnchor } : {}),
                 diskLengthOverride: nextOverride,
                 profile: {
                     ...cone.profile,
@@ -1650,11 +1663,31 @@ function transformContactCone(
     matrix: THREE.Matrix4,
     normalMatrix: THREE.Matrix3,
 ) {
+    let nextCapAnchor = cone.capAnchor;
+    if (cone.capAnchor) {
+        const nMeanNext = transformDirection(cone.capAnchor.nMean, normalMatrix);
+        const baseNormalNext = transformDirection(cone.capAnchor.baseNormal, normalMatrix);
+        if (
+            Math.abs(nMeanNext.z - cone.capAnchor.nMean.z) <= 1e-5
+            && Math.abs(baseNormalNext.z - cone.capAnchor.baseNormal.z) <= 1e-5
+        ) {
+            nextCapAnchor = {
+                ...cone.capAnchor,
+                tipPos: transformVec3(cone.capAnchor.tipPos, matrix),
+                nMean: nMeanNext,
+                baseNormal: baseNormalNext,
+            };
+        } else {
+            nextCapAnchor = undefined;
+        }
+    }
+
     return {
         ...cone,
         pos: transformVec3(cone.pos, matrix),
         normal: transformDirection(cone.normal, normalMatrix),
         surfaceNormal: cone.surfaceNormal ? transformDirection(cone.surfaceNormal, normalMatrix) : cone.surfaceNormal,
+        ...(cone.capAnchor ? { capAnchor: nextCapAnchor } : {}),
     };
 }
 

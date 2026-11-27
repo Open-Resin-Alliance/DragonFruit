@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from 'react';
 import * as THREE from 'three';
 import { useInteractionStatus } from '../../interaction/useInteractionStatus';
-import { calculateSmoothedNormal } from '../../PlacementLogic/PlacementUtils';
+import { resolveManualLeafTipAndCap } from '../../PlacementLogic/PlacementUtils';
 import { leafPlacementStore, useLeafPlacementState } from './leafPlacementState';
 import { useActionActive } from '@/hotkeys/hotkeyStore';
 import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
@@ -76,12 +76,13 @@ export function useLeafPlacement() {
     const onModelClick = useCallback((hit: THREE.Intersection | null) => {
         if (!state.hotkeyActive || isPlacementDisabled || !hit) return;
 
-        const surfaceNormal = calculateSmoothedNormal(hit);
+        const { surfaceNormal: resolvedNormal, capAnchor } = resolveManualLeafTipAndCap(hit);
+        const surfaceNormal = { x: resolvedNormal.x, y: resolvedNormal.y, z: resolvedNormal.z };
         const pos = { x: hit.point.x, y: hit.point.y, z: hit.point.z };
         const modelId = hit.object.userData?.modelId || 'unknown';
         const placementSurface = hit.object.userData?.supportPlacementSurface === 'interior' ? 'interior' : undefined;
 
-        leafPlacementStore.setTip(pos, surfaceNormal, modelId, placementSurface);
+        leafPlacementStore.setTip(pos, surfaceNormal, modelId, placementSurface, capAnchor ?? null);
     }, [state.hotkeyActive, isPlacementDisabled]);
 
     useEffect(() => {

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Leaf, Knot, Vec3 } from '../../types';
-import type { ContactCone, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
+import type { ContactCone, LeafCapAnchor, SupportTipProfile } from '../../SupportPrimitives/ContactCone/types';
 // Direct, not through the barrel: the barrel re-exports renderers and their
 // React hooks, which a server route cannot import.
 import { recomputeContactConeForMovedDisk } from '../../SupportPrimitives/ContactDisk/ContactDiskInteraction';
@@ -19,6 +19,7 @@ export interface LeafBuildInput {
     /** Auto-support tier tip contact — absent for manual placement. */
     tipContactDiameterMm?: number;
     mesh?: THREE.Mesh;
+    capAnchor?: LeafCapAnchor;
 }
 
 export interface LeafBuildResult {
@@ -105,6 +106,7 @@ export function buildLeafData(input: LeafBuildInput): LeafBuildResult {
                 normal: axis,
                 surfaceNormal,
                 profile,
+                ...(input.capAnchor ? { capAnchor: input.capAnchor } : {}),
             },
             tipPos,
             surfaceNormal,
@@ -112,6 +114,7 @@ export function buildLeafData(input: LeafBuildInput): LeafBuildResult {
             mesh,
         ),
         id: uuidv4(),
+        ...(input.capAnchor ? { capAnchor: input.capAnchor } : {}),
     };
 
     const leafId = uuidv4();

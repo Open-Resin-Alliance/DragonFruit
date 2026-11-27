@@ -3,6 +3,8 @@ import { CONTAINED, INTERSECTED, NOT_INTERSECTED, type MeshBVH } from 'three-mes
 
 import { modelGeometryOf } from '../autoSupport/meshStore';
 import type { PlacementNormalSynthesisMode } from '../autoSupport/types';
+import type { LeafCapAnchor } from '../SupportPrimitives/ContactCone/types';
+import type { Vec3 } from '../types';
 
 export type { PlacementNormalSynthesisMode };
 
@@ -92,10 +94,25 @@ const _capNormalSum = new THREE.Vector3();
 const _capDirSum = new THREE.Vector3();
 const _capMean = new THREE.Vector3();
 const _nAnchor = new THREE.Vector3();
+const _baseDown = new THREE.Vector3();
 
 const _localQueryBox = new THREE.Box3();
 const _worldTri = new THREE.Triangle();
 const _invMatrix = new THREE.Matrix4();
+
+const _orbitCapDescriptor: SphericalCapDescriptor = {
+    nMean: new THREE.Vector3(),
+    thetaSpreadRad: 0,
+    rimSlackRad: 0,
+    thetaCapRad: 0,
+    coneAngleLimitRad: DEFAULT_CAP_LIMIT_RAD,
+    concavityRatio: 0,
+    isConcave: false,
+    capRadiusMm: 0,
+    downwardTriCount: 0,
+};
+const _orbitOutVec = new THREE.Vector3();
+const _orbitCapOptions: KnotWeightedCapOptions = { target: _orbitOutVec };
 
 interface BoundedTrianglePool {
     nx: Float64Array;
@@ -622,6 +639,7 @@ function finalizeCapDescriptor(
     capWeightSum: number,
     capRadiusMm: number,
     leafRimSlackDeg: number,
+    synthesisNormal?: THREE.Vector3 | null,
     target?: SphericalCapDescriptor,
 ): SphericalCapDescriptor {
     if (capTriTotal === 0 || capWeightSum <= 0 || _capNormalSum.lengthSq() < 1e-12) {
@@ -638,8 +656,31 @@ function finalizeCapDescriptor(
             -1,
             1,
         );
-        const ang = Math.acos(dot);
+        const u = capRadiusMm > 1e-9 ? THREE.MathUtils.clamp(_capPool.dist[i] / capRadiusMm, 0, 1) : 0;
+        const tau = (1 - u) * (1 - u);
+        const ang = tau * Math.acos(dot);
         if (ang > thetaSpreadRad) thetaSpreadRad = ang;
+    }
+
+    if (synthesisNormal) {
+        _baseDown.copy(synthesisNormal);
+        clampNormalMaxZ(_baseDown, DOWNWARD_NZ_LIMIT);
+        const baseDot = THREE.MathUtils.clamp(_capMean.dot(_baseDown), -1, 1);
+        const baseAng = Math.acos(baseDot);
+        if (baseAng > thetaSpreadRad) {
+            const delta = 0.5 * (baseAng - thetaSpreadRad);
+            _tangent.copy(_baseDown).addScaledVector(_capMean, -baseDot);
+            const tanLenSq = _tangent.lengthSq();
+            if (tanLenSq > 1e-12) {
+                _tangent.multiplyScalar(1 / Math.sqrt(tanLenSq));
+                _capMean
+                    .multiplyScalar(Math.cos(delta))
+                    .addScaledVector(_tangent, Math.sin(delta))
+                    .normalize();
+                clampNormalMaxZ(_capMean, DOWNWARD_NZ_LIMIT);
+            }
+            thetaSpreadRad += delta;
+        }
     }
 
     const concavityRatio = _capDirSum.dot(_capMean) / capWeightSum;
@@ -782,12 +823,18 @@ function executeSharedShapecast(
         },
     });
 
+    const synthesis = wantSynthesis && synthOptions && params
+        ? finalizeSynthesis(synthOptions, params, acceptedSphereTris, synthTarget)
+        : null;
+    const expansionSynthesisNormal =
+        wantCap && synthesis && synthesis.regime !== 'raw' && capTriTotal > 0
+            ? synthesis.normal
+            : null;
+
     return {
-        synthesis: wantSynthesis && synthOptions && params
-            ? finalizeSynthesis(synthOptions, params, acceptedSphereTris, synthTarget)
-            : null,
+        synthesis,
         cap: wantCap
-            ? finalizeCapDescriptor(capTriTotal, capWeightSum, rCap, leafRimSlackDeg, capTarget)
+            ? finalizeCapDescriptor(capTriTotal, capWeightSum, rCap, leafRimSlackDeg, expansionSynthesisNormal, capTarget)
             : null,
     };
 }
@@ -979,4 +1026,73 @@ export function resolvePlacementNormalAndCap(
         capTarget,
     );
     return { synthesis: synthesis!, cap: cap! };
+}
+
+/**
+ * Builds a plain-cloned runtime `LeafCapAnchor` from a downward spherical-cap descriptor,
+ * returning `undefined` when no downward cap triangles exist and the base normal faces upward.
+ */
+export function buildLeafCapAnchor(
+    worldPoint: Vec3Like,
+    cap: SphericalCapDescriptor,
+    baseSynthesisNormal: Vec3Like,
+): LeafCapAnchor | undefined {
+    if (cap.downwardTriCount === 0 && baseSynthesisNormal.z > DOWNWARD_NZ_LIMIT) {
+        return undefined;
+    }
+
+    return {
+        nMean: { x: cap.nMean.x, y: cap.nMean.y, z: cap.nMean.z },
+        baseNormal: { x: baseSynthesisNormal.x, y: baseSynthesisNormal.y, z: baseSynthesisNormal.z },
+        thetaSpreadRad: cap.thetaSpreadRad,
+        rimSlackRad: cap.rimSlackRad,
+        thetaCapRad: cap.thetaCapRad,
+        coneAngleLimitRad: cap.coneAngleLimitRad,
+        isConcave: cap.isConcave,
+        downwardTriCount: cap.downwardTriCount,
+        tipPos: { x: worldPoint.x, y: worldPoint.y, z: worldPoint.z },
+    };
+}
+
+/**
+ * Orbits a leaf contact normal inside `capAnchor` toward `knotPos` using pooled
+ * scratch math (`0` heap allocations when `target` is passed).
+ */
+export function orbitLeafCapAnchorTowardKnot(
+    tipPos: Vec3Like,
+    knotPos: Vec3Like,
+    capAnchor: LeafCapAnchor,
+    coneMaxAngleRad = DEFAULT_CAP_LIMIT_RAD,
+    target?: Vec3,
+): Vec3 {
+    _orbitCapDescriptor.nMean.set(capAnchor.nMean.x, capAnchor.nMean.y, capAnchor.nMean.z);
+    _orbitCapDescriptor.thetaSpreadRad = capAnchor.thetaSpreadRad;
+    _orbitCapDescriptor.rimSlackRad = capAnchor.rimSlackRad;
+    _orbitCapDescriptor.thetaCapRad = capAnchor.thetaCapRad;
+    _orbitCapDescriptor.coneAngleLimitRad = capAnchor.coneAngleLimitRad;
+    _orbitCapDescriptor.isConcave = capAnchor.isConcave;
+    _orbitCapDescriptor.downwardTriCount = capAnchor.downwardTriCount;
+
+    resolveKnotWeightedCapNormal(
+        tipPos,
+        knotPos,
+        _orbitCapDescriptor,
+        capAnchor.baseNormal,
+        capAnchor.baseNormal,
+        coneMaxAngleRad,
+        _orbitCapOptions,
+    );
+
+    if (target) {
+        target.x = _orbitOutVec.x;
+        target.y = _orbitOutVec.y;
+        target.z = _orbitOutVec.z;
+        return target;
+    }
+
+    return {
+        x: _orbitOutVec.x,
+        y: _orbitOutVec.y,
+        z: _orbitOutVec.z,
+    };
 }

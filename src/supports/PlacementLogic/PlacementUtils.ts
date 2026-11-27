@@ -1,9 +1,15 @@
 import * as THREE from 'three';
 import { modelGeometryOf } from '../autoSupport/meshStore';
 import { getSettings } from '../Settings/state';
+import type { SupportSettings } from '../Settings/types';
+import type { LeafCapAnchor } from '../SupportPrimitives/ContactCone/types';
 import {
+    buildLeafCapAnchor,
+    resolvePlacementNormalAndCap,
     synthesizePlacementNormal,
+    type PlacementNormalSynthesisOptions,
     type PlacementNormalSynthesisResult,
+    type SphericalCapDescriptor,
 } from './PlacementNormalSynthesis';
 
 // Pooled scratch objects — reused across calls to avoid per-frame GC pressure.
@@ -22,12 +28,47 @@ const _synthTarget: PlacementNormalSynthesisResult = {
     regime: 'raw',
     acceptedSphereTris: 0,
 };
+const _capTarget: SphericalCapDescriptor = {
+    nMean: new THREE.Vector3(),
+    thetaSpreadRad: 0,
+    rimSlackRad: 0,
+    thetaCapRad: 0,
+    coneAngleLimitRad: (45 * Math.PI) / 180,
+    concavityRatio: 0,
+    isConcave: false,
+    capRadiusMm: 0,
+    downwardTriCount: 0,
+};
+const TOP_FACE_NZ_LIMIT = Math.sin(THREE.MathUtils.degToRad(35));
 
 export interface CalculateSmoothedNormalOptions {
     contactRadiusMm?: number;
     prevNormal?: { x: number; y: number; z: number } | THREE.Vector3;
     isDiskHudDrag?: boolean;
     forceRaw?: boolean;
+}
+
+function buildPlacementSynthesisOptions(
+    settings: SupportSettings,
+    options?: CalculateSmoothedNormalOptions,
+): PlacementNormalSynthesisOptions {
+    const devTools = settings.devToolsEnabled === true ? settings.devTools : undefined;
+    return {
+        mode: settings.normalSynthesisPreset,
+        contactRadiusMm: options?.contactRadiusMm ?? settings.tip.contactDiameterMm * 0.5,
+        prevNormal: options?.prevNormal,
+        isDiskHudDrag: options?.isDiskHudDrag,
+        ...(devTools
+            ? {
+                sampleRadiusScale: devTools.normalSampleRadiusScale,
+                flatThresholdDeg: devTools.normalFlatThresholdDeg,
+                ...(devTools.normalCreaseThresholdDeg > 0
+                    ? { creaseThresholdDeg: devTools.normalCreaseThresholdDeg }
+                    : {}),
+                deadbandScale: devTools.normalDeadbandScale,
+            }
+            : {}),
+    };
 }
 
 function localNormalToWorld(
@@ -132,27 +173,11 @@ export function calculateSmoothedNormal(
         return raw;
     }
 
-    const devTools = settings.devToolsEnabled === true ? settings.devTools : undefined;
     const synthesized = synthesizePlacementNormal(
         hit.object,
         hit.point,
         raw,
-        {
-            mode: settings.normalSynthesisPreset,
-            contactRadiusMm: options?.contactRadiusMm ?? settings.tip.contactDiameterMm * 0.5,
-            prevNormal: options?.prevNormal,
-            isDiskHudDrag: options?.isDiskHudDrag,
-            ...(devTools
-                ? {
-                    sampleRadiusScale: devTools.normalSampleRadiusScale,
-                    flatThresholdDeg: devTools.normalFlatThresholdDeg,
-                    ...(devTools.normalCreaseThresholdDeg > 0
-                        ? { creaseThresholdDeg: devTools.normalCreaseThresholdDeg }
-                        : {}),
-                    deadbandScale: devTools.normalDeadbandScale,
-                }
-                : {}),
-        },
+        buildPlacementSynthesisOptions(settings, options),
         _synthTarget,
     );
 
@@ -160,6 +185,55 @@ export function calculateSmoothedNormal(
         x: synthesized.normal.x,
         y: synthesized.normal.y,
         z: synthesized.normal.z,
+    };
+}
+
+/**
+ * Resolves a manual leaf tip's synthesized surface normal and downward spherical-cap
+ * anchor in a single BVH `shapecast` pass (`G2`), falling back without a cap for
+ * raw mode, non-mesh hits, or top faces (`raw.z > sin(35°)`).
+ */
+export function resolveManualLeafTipAndCap(
+    hit: THREE.Intersection,
+    options?: { contactRadiusMm?: number; forceRaw?: boolean },
+): { surfaceNormal: THREE.Vector3; capAnchor?: LeafCapAnchor } {
+    const raw = calculateRawWorldNormal(hit);
+    const settings = getSettings();
+
+    if (
+        options?.forceRaw
+        || settings.smoothContactNormals === false
+        || !(hit.object instanceof THREE.Mesh)
+        || !hit.face
+        || !hit.point
+        || !modelGeometryOf(hit.object)
+    ) {
+        return { surfaceNormal: new THREE.Vector3(raw.x, raw.y, raw.z) };
+    }
+
+    if (raw.z > TOP_FACE_NZ_LIMIT) {
+        const smoothed = calculateSmoothedNormal(hit, options);
+        return { surfaceNormal: new THREE.Vector3(smoothed.x, smoothed.y, smoothed.z) };
+    }
+
+    const leafRimSlackDeg = settings.devToolsEnabled ? (settings.devTools.leafRimSlackDeg ?? 0) : 0;
+    const { synthesis, cap } = resolvePlacementNormalAndCap(
+        hit.object,
+        hit.point,
+        raw,
+        {
+            ...buildPlacementSynthesisOptions(settings, options),
+            leafRimSlackDeg,
+        },
+        _synthTarget,
+        _capTarget,
+    );
+
+    return {
+        surfaceNormal: synthesis.normal.clone(),
+        capAnchor: cap.downwardTriCount > 0
+            ? buildLeafCapAnchor(hit.point, cap, synthesis.normal)
+            : undefined,
     };
 }
 

@@ -242,10 +242,16 @@ export function recomputeContactConeForMovedDisk(
     const lengthMm = Math.max(0.05, fl);
     fx /= fl; fy /= fl; fz /= fl;
 
+    const dx = cone.pos.x - nextContactPos.x;
+    const dy = cone.pos.y - nextContactPos.y;
+    const dz = cone.pos.z - nextContactPos.z;
+    const keepCapAnchor = cone.capAnchor !== undefined && (dx * dx + dy * dy + dz * dz) <= 1e-6;
+
     return {
         ...cone,
         pos: nextContactPos,
         surfaceNormal: nextSurfaceNormal,
+        capAnchor: keepCapAnchor ? cone.capAnchor : undefined,
         normal: { x: fx, y: fy, z: fz },
         profile: {
             ...cone.profile,

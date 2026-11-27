@@ -1,6 +1,7 @@
 import { createPlacementStore, usePlacementStoreState } from '../../interaction/shared/placement/placementStore';
 import { hostSnapTargetEq, hoverPositionEq, vecEq, type HostSnapTarget } from '../../interaction/shared/placement/placementComparators';
 import type { SupportData } from '../../rendering/SupportBuilder';
+import type { LeafCapAnchor } from '../../SupportPrimitives/ContactCone/types';
 import type { Vec3 } from '../../types';
 
 type Stage = 'idle' | 'awaitingBase' | 'awaitingSproutTip';
@@ -11,6 +12,7 @@ interface LeafPlacementState {
     stage: Stage;
     tipPosition: Vec3 | null;
     surfaceNormal: Vec3 | null;
+    tipCapAnchor: LeafCapAnchor | null;
     modelId: string;
     placementSurface?: PlacementSurface;
     previewData: SupportData | null;
@@ -27,6 +29,7 @@ const initialState: LeafPlacementState = {
     stage: 'idle',
     tipPosition: null,
     surfaceNormal: null,
+    tipCapAnchor: null,
     modelId: 'unknown',
     placementSurface: undefined,
     previewData: null,
@@ -42,6 +45,20 @@ function vec3ExactEq(a: Vec3 | null, b: Vec3 | null): boolean {
     if (a === b) return true;
     if (!a || !b) return false;
     return vecEq(a, b);
+}
+
+function tipCapAnchorEq(a: LeafCapAnchor | null, b: LeafCapAnchor | null): boolean {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    return vecEq(a.nMean, b.nMean)
+        && vecEq(a.baseNormal, b.baseNormal)
+        && vecEq(a.tipPos, b.tipPos)
+        && a.thetaSpreadRad === b.thetaSpreadRad
+        && a.rimSlackRad === b.rimSlackRad
+        && a.thetaCapRad === b.thetaCapRad
+        && a.coneAngleLimitRad === b.coneAngleLimitRad
+        && a.isConcave === b.isConcave
+        && a.downwardTriCount === b.downwardTriCount;
 }
 
 const store = createPlacementStore(initialState);
@@ -101,12 +118,18 @@ export const leafPlacementStore = {
     },
 
     /** Updates the live fanning tip/normal, clearing to `null` when passed `null` and preserving `modelId` when omitted. */
-    updateFanningTip(tipPosition: Vec3 | null, surfaceNormal: Vec3 | null, modelId?: string) {
+    updateFanningTip(
+        tipPosition: Vec3 | null,
+        surfaceNormal: Vec3 | null,
+        modelId?: string,
+        capAnchor: LeafCapAnchor | null = null,
+    ) {
         const state = store.read();
         const nextModelId = modelId !== undefined && modelId !== null ? modelId : state.modelId;
         if (
             vec3ExactEq(state.tipPosition, tipPosition)
             && vec3ExactEq(state.surfaceNormal, surfaceNormal)
+            && tipCapAnchorEq(state.tipCapAnchor, capAnchor)
             && state.modelId === nextModelId
         ) {
             return;
@@ -116,15 +139,26 @@ export const leafPlacementStore = {
             ...state,
             tipPosition,
             surfaceNormal,
+            tipCapAnchor: capAnchor,
             modelId: nextModelId,
         });
     },
 
-    setTip(tipPosition: Vec3, surfaceNormal: Vec3, modelId: string, placementSurface?: PlacementSurface) {
+    setTip(
+        tipPosition: Vec3,
+        surfaceNormal: Vec3,
+        modelId: string,
+        placementSurfaceOrCapAnchor?: PlacementSurface | LeafCapAnchor | null,
+        maybeCapAnchor: LeafCapAnchor | null = null,
+    ) {
+        const isSurfaceArg = placementSurfaceOrCapAnchor === undefined || typeof placementSurfaceOrCapAnchor === 'string';
+        const placementSurface = isSurfaceArg ? placementSurfaceOrCapAnchor : undefined;
+        const tipCapAnchor = isSurfaceArg ? maybeCapAnchor : placementSurfaceOrCapAnchor;
         store.write({
             ...store.read(),
             tipPosition,
             surfaceNormal,
+            tipCapAnchor,
             modelId,
             placementSurface,
             stage: 'awaitingBase',

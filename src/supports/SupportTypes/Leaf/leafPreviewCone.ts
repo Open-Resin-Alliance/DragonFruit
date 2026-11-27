@@ -1,8 +1,19 @@
 import * as THREE from 'three';
 
+import { orbitLeafCapAnchorTowardKnot } from '../../PlacementLogic/PlacementNormalSynthesis';
+import { getSettings } from '../../Settings/state';
 import { calculateDiskThickness } from '../../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { resolveTwigDiameterAtSegmentT } from '../Twig/twigTaper';
-import type { Knot, Leaf, Twig } from '../../types';
+import type { Knot, Leaf, Twig, Vec3 } from '../../types';
+
+const _tip = new THREE.Vector3();
+const _sn = new THREE.Vector3();
+const _knot = new THREE.Vector3();
+const _axis = new THREE.Vector3();
+const _axisVec3: Vec3 = { x: 0, y: 0, z: 0 };
+const _start = new THREE.Vector3();
+const _coneVec = new THREE.Vector3();
+const _orbitSurfaceScratch: Vec3 = { x: 0, y: 0, z: 0 };
 
 /**
  * A leaf's contact cone, re-derived against a knot that has moved: the cone
@@ -19,29 +30,36 @@ export function recomputeLeafPreviewContactCone(
     if (!cone?.surfaceNormal) return leaf;
 
     const previewKnotPos = previewKnot.pos;
-    const tip = new THREE.Vector3(cone.pos.x, cone.pos.y, cone.pos.z);
-    const sn = new THREE.Vector3(cone.surfaceNormal.x, cone.surfaceNormal.y, cone.surfaceNormal.z);
-    const knot = new THREE.Vector3(previewKnotPos.x, previewKnotPos.y, previewKnotPos.z);
+    const useOrbit = !!(cone.capAnchor && getSettings().smoothContactNormals !== false);
+    const effectiveSurfaceNormal = useOrbit
+        ? orbitLeafCapAnchorTowardKnot(cone.pos, previewKnotPos, cone.capAnchor!, undefined, _orbitSurfaceScratch)
+        : cone.surfaceNormal;
 
-    let axis = knot.clone().sub(tip);
-    if (axis.lengthSq() < 0.000001) {
-        axis.set(sn.x, sn.y, sn.z);
+    _tip.set(cone.pos.x, cone.pos.y, cone.pos.z);
+    _sn.set(effectiveSurfaceNormal.x, effectiveSurfaceNormal.y, effectiveSurfaceNormal.z);
+    _knot.set(previewKnotPos.x, previewKnotPos.y, previewKnotPos.z);
+
+    _axis.subVectors(_knot, _tip);
+    if (_axis.lengthSq() < 0.000001) {
+        _axis.copy(_sn);
     }
-    axis.normalize();
+    _axis.normalize();
 
-    let finalLength = Math.max(0.1, knot.distanceTo(tip));
+    let finalLength = Math.max(0.1, _knot.distanceTo(_tip));
 
     for (let i = 0; i < 3; i++) {
-        const axisVec3 = { x: axis.x, y: axis.y, z: axis.z };
+        _axisVec3.x = _axis.x;
+        _axisVec3.y = _axis.y;
+        _axisVec3.z = _axis.z;
         const thickness = cone.profile.type === 'disk'
-            ? calculateDiskThickness(cone.surfaceNormal, axisVec3, cone.profile)
+            ? calculateDiskThickness(effectiveSurfaceNormal, _axisVec3, cone.profile)
             : 0;
 
-        const start = tip.clone().add(sn.clone().multiplyScalar(thickness));
-        const coneVec = knot.clone().sub(start);
-        const len = coneVec.length();
+        _start.copy(_tip).addScaledVector(_sn, thickness);
+        _coneVec.subVectors(_knot, _start);
+        const len = _coneVec.length();
         if (len > 0.000001) {
-            axis = coneVec.normalize();
+            _axis.copy(_coneVec).multiplyScalar(1 / len);
             finalLength = Math.max(0.1, len);
         }
     }
@@ -58,15 +76,19 @@ export function recomputeLeafPreviewContactCone(
     }
 
     const oldNormal = cone.normal;
+    const oldSurfaceNormal = cone.surfaceNormal;
     const oldLen = cone.profile.lengthMm;
     const oldBodyDia = cone.profile.bodyDiameterMm;
     if (
         oldLen === finalLength
         && oldBodyDia === nextBodyDiameterMm
         && cone.diskLengthOverride === undefined
-        && oldNormal.x === axis.x
-        && oldNormal.y === axis.y
-        && oldNormal.z === axis.z
+        && oldNormal.x === _axis.x
+        && oldNormal.y === _axis.y
+        && oldNormal.z === _axis.z
+        && oldSurfaceNormal.x === effectiveSurfaceNormal.x
+        && oldSurfaceNormal.y === effectiveSurfaceNormal.y
+        && oldSurfaceNormal.z === effectiveSurfaceNormal.z
     ) {
         return leaf;
     }
@@ -75,7 +97,10 @@ export function recomputeLeafPreviewContactCone(
         ...leaf,
         contactCone: {
             ...cone,
-            normal: { x: axis.x, y: axis.y, z: axis.z },
+            normal: { x: _axis.x, y: _axis.y, z: _axis.z },
+            surfaceNormal: useOrbit
+                ? { x: effectiveSurfaceNormal.x, y: effectiveSurfaceNormal.y, z: effectiveSurfaceNormal.z }
+                : cone.surfaceNormal,
             diskLengthOverride: undefined,
             profile: {
                 ...cone.profile,
