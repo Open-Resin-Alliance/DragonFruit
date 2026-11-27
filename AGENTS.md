@@ -159,6 +159,13 @@ list. Never take a directory off the list to turn a build green, and when a
 listed directory is renamed, follow the rename in the list — the check fails on
 missing entries precisely so coverage cannot be lost silently.
 
+## Rust formatting
+
+CI requires every tracked `.rs` file to match the pinned rustfmt. Format with
+`npm run check:rust-format:fix`, which touches this repository's files only.
+`cargo fmt` also rewrites the plugin submodules, which `#[path]` pulls into our
+crates.
+
 ## React Compiler skips
 
 The React Compiler memoises components and hooks automatically, but it skips a
