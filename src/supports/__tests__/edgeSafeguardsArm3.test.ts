@@ -562,6 +562,33 @@ test('Test 4 (edgeSafeguards: false): computeAutoSupportPlan omits thinWallClamp
         assert.equal('thinWallClampedCount' in arm3Metrics, true);
         assert.equal('concaveFloorCount' in arm3Metrics, true);
         assert.ok((arm3Metrics.thinWallClampedCount ?? 0) > 0, 'edgeSafeguards: true must stamp thin-wall clamps on 0.20 mm slab');
+
+        // Regression: partial baseState snapshots omitting optional collections (e.g. stumps/sticks) must not throw
+        const partialSnapshot = {
+            roots: {},
+            trunks: {},
+            branches: {},
+            leaves: {},
+            twigs: {},
+            braces: {},
+            kickstands: {},
+            knots: {},
+            selectedId: null,
+            hoveredId: null,
+            selectedCategory: null,
+            hoveredCategory: 'none',
+            interactionWarning: null,
+        } as unknown as SupportState;
+        for (const es of [true, false]) {
+            const partialPlan = computeAutoSupportPlan(
+                islands,
+                `m-partial-${es}`,
+                { ...baseOpts, edgeSafeguards: es },
+                partialSnapshot,
+                slabMesh,
+            );
+            assert.ok(partialPlan?.analytics.forestReport, `partial snapshot (edgeSafeguards=${es}) must build forestReport`);
+        }
     } finally {
         clearSDFCacheForMesh(slabMesh.uuid);
         setSettings(prevSettings);

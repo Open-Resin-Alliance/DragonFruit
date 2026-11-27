@@ -3438,9 +3438,10 @@ function stripConeThinWallCap(cone: ContactCone): ContactCone {
 }
 
 function stripStickThinWallCaps(draft: SupportState, modelId: string): SupportState {
+    const sticks = draft.sticks ?? {};
     let changed = false;
-    const nextSticks: SupportState['sticks'] = { ...draft.sticks };
-    for (const [sid, stick] of Object.entries(draft.sticks)) {
+    const nextSticks: SupportState['sticks'] = { ...sticks };
+    for (const [sid, stick] of Object.entries(sticks)) {
         if (stick.modelId !== modelId) continue;
         const coneA = stripConeThinWallCap(stick.contactConeA);
         const coneB = stripConeThinWallCap(stick.contactConeB);
@@ -3564,14 +3565,17 @@ function applyEdgeSafeguardsToDraftCones(
         return recomputed;
     };
 
-    const nextTrunks: SupportState['trunks'] = { ...draft.trunks };
-    for (const [tid, t] of Object.entries(draft.trunks)) {
+    const trunks = draft.trunks ?? {};
+    let trunksChanged = false;
+    const nextTrunks: SupportState['trunks'] = { ...trunks };
+    for (const [tid, t] of Object.entries(trunks)) {
         if (t.modelId !== modelId || !t.contactCone) continue;
         const topSeg = t.segments[t.segments.length - 1];
         const fixedSocket = topSeg?.topJoint?.pos ?? getFinalSocketPosition(t.contactCone);
         const nextCone = safeguardCone(t.contactCone, fixedSocket);
         if (nextCone !== t.contactCone) {
             changed = true;
+            trunksChanged = true;
             const bodyChanged = Math.abs(nextCone.profile.bodyDiameterMm - t.contactCone.profile.bodyDiameterMm) > 1e-6;
             nextTrunks[tid] = {
                 ...t,
@@ -3589,14 +3593,17 @@ function applyEdgeSafeguardsToDraftCones(
         }
     }
 
-    const nextBranches: SupportState['branches'] = { ...draft.branches };
-    for (const [bid, b] of Object.entries(draft.branches)) {
+    const branches = draft.branches ?? {};
+    let branchesChanged = false;
+    const nextBranches: SupportState['branches'] = { ...branches };
+    for (const [bid, b] of Object.entries(branches)) {
         if (b.modelId !== modelId || !b.contactCone) continue;
         const topSeg = b.segments[b.segments.length - 1];
         const fixedSocket = topSeg?.topJoint?.pos ?? getFinalSocketPosition(b.contactCone);
         const nextCone = safeguardCone(b.contactCone, fixedSocket);
         if (nextCone !== b.contactCone) {
             changed = true;
+            branchesChanged = true;
             const bodyChanged = Math.abs(nextCone.profile.bodyDiameterMm - b.contactCone.profile.bodyDiameterMm) > 1e-6;
             nextBranches[bid] = {
                 ...b,
@@ -3614,13 +3621,17 @@ function applyEdgeSafeguardsToDraftCones(
         }
     }
 
-    const nextLeaves: SupportState['leaves'] = { ...draft.leaves };
-    for (const [lid, l] of Object.entries(draft.leaves)) {
+    const leaves = draft.leaves ?? {};
+    const knots = draft.knots ?? {};
+    let leavesChanged = false;
+    const nextLeaves: SupportState['leaves'] = { ...leaves };
+    for (const [lid, l] of Object.entries(leaves)) {
         if (l.modelId !== modelId) continue;
-        const fixedSocket = draft.knots[l.parentKnotId]?.pos ?? getFinalSocketPosition(l.contactCone);
+        const fixedSocket = knots[l.parentKnotId]?.pos ?? getFinalSocketPosition(l.contactCone);
         const nextCone = safeguardCone(l.contactCone, fixedSocket);
         if (nextCone !== l.contactCone) {
             changed = true;
+            leavesChanged = true;
             const bodyChanged = Math.abs(nextCone.profile.bodyDiameterMm - l.contactCone.profile.bodyDiameterMm) > 1e-6;
             nextLeaves[lid] = {
                 ...l,
@@ -3638,13 +3649,16 @@ function applyEdgeSafeguardsToDraftCones(
         }
     }
 
-    const nextStumps: SupportState['stumps'] = { ...draft.stumps };
-    for (const [spid, sp] of Object.entries(draft.stumps)) {
+    const stumps = draft.stumps ?? {};
+    let stumpsChanged = false;
+    const nextStumps: SupportState['stumps'] = { ...stumps };
+    for (const [spid, sp] of Object.entries(stumps)) {
         if (sp.modelId !== modelId) continue;
         const fixedSocket = sp.joint?.pos ?? getFinalSocketPosition(sp.contactCone);
         const nextCone = safeguardCone(sp.contactCone, fixedSocket);
         if (nextCone !== sp.contactCone) {
             changed = true;
+            stumpsChanged = true;
             nextStumps[spid] = {
                 ...sp,
                 contactCone: nextCone,
@@ -3652,13 +3666,16 @@ function applyEdgeSafeguardsToDraftCones(
         }
     }
 
-    const nextSticks: SupportState['sticks'] = { ...draft.sticks };
-    for (const [sid, st] of Object.entries(draft.sticks)) {
+    const sticks = draft.sticks ?? {};
+    let sticksChanged = false;
+    const nextSticks: SupportState['sticks'] = { ...sticks };
+    for (const [sid, st] of Object.entries(sticks)) {
         if (st.modelId !== modelId) continue;
         const coneA = applyConeThinWallPenetrationCap(st.contactConeA, mesh);
         const coneB = applyConeThinWallPenetrationCap(st.contactConeB, mesh);
         if (coneA !== st.contactConeA || coneB !== st.contactConeB) {
             changed = true;
+            sticksChanged = true;
             nextSticks[sid] = {
                 ...st,
                 contactConeA: coneA,
@@ -3671,11 +3688,11 @@ function applyEdgeSafeguardsToDraftCones(
     return {
         draft: {
             ...draft,
-            trunks: nextTrunks,
-            branches: nextBranches,
-            leaves: nextLeaves,
-            stumps: nextStumps,
-            sticks: nextSticks,
+            ...(trunksChanged ? { trunks: nextTrunks } : {}),
+            ...(branchesChanged ? { branches: nextBranches } : {}),
+            ...(leavesChanged ? { leaves: nextLeaves } : {}),
+            ...(stumpsChanged ? { stumps: nextStumps } : {}),
+            ...(sticksChanged ? { sticks: nextSticks } : {}),
         },
         concaveFloorCount,
     };
