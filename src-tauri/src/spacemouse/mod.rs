@@ -6,11 +6,17 @@
 //! the driver is absent) and runs the live JS<->Rust camera bridge: JS pushes the
 //! current three.js camera each frame via `spacemouse_native_sync`, navlib's
 //! accessor callbacks read it and write back the navigated pose.
+//!
+//! Linux has no navlib; there the `spnav` submodule reads spacenavd and the
+//! frontend's Gamepad-API controller does the camera math instead.
 
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod navlib_sys;
+
+#[cfg(target_os = "linux")]
+mod spnav;
 
 // ─────────────────────── Diagnostic logging gate ───────────────────────
 //
@@ -803,4 +809,23 @@ pub fn spacemouse_native_sync(cam: CameraInput) -> NavOutput {
             extents_seq: 0,
         }
     }
+}
+
+/// Start the spacenavd client (Linux) and return the puck's current state.
+/// Later changes arrive as `spacemouse://spnav` events carrying the same shape.
+/// Idempotent. The frontend feeds the axes to the Gamepad-API path; see
+/// `src/components/scene/camera/spnavSpaceMouse.ts`.
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub fn spacemouse_spnav_start<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<spnav::SpnavState, String> {
+    Ok(spnav::start(app))
+}
+
+/// spacenavd is Linux-only; Windows and macOS use navlib.
+#[cfg(not(target_os = "linux"))]
+#[tauri::command]
+pub fn spacemouse_spnav_start() -> Result<(), String> {
+    Err("spacenavd is only available on Linux".into())
 }

@@ -112,6 +112,7 @@ The Flatpak is granted:
 | `--device=dri` | GPU acceleration for Three.js preview |
 | `--filesystem=xdg-documents` `--filesystem=xdg-download` | Initial read/write for common save locations |
 | `--filesystem=/mnt:ro` `--filesystem=/media:ro` `--filesystem=/run/media:ro` | Drag and drop from network shares and removable drives |
+| `--filesystem=/run/spnav.sock` | 3D mice through spacenavd (see `docs/dev/camera-navigation.md`); bound as a file, so a spacenavd (re)started after the app needs an app restart |
 | `--talk-name=org.freedesktop.portal.*` | File picker + notifications + open-uri via `rfd` crate |
 
 **Not granted** (deliberate): `--filesystem=host`, `--share=home`, USB/serial

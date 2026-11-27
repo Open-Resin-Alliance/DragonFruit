@@ -51,6 +51,11 @@ finish-args:
   - --filesystem=/media:ro
   - --filesystem=/run/media:ro
 
+  # spacenavd's socket, read for 3D mice (src-tauri/src/spacemouse/spnav.rs).
+  # Flatpak binds the socket file itself: a spacenavd started or restarted
+  # after the app is only seen after the app restarts.
+  - --filesystem=/run/spnav.sock
+
   # Portal access for file chooser, notifications, open-uri
   - --talk-name=org.freedesktop.portal.Desktop
   - --talk-name=org.freedesktop.portal.FileChooser
