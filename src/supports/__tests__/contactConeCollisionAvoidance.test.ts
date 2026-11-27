@@ -8,9 +8,10 @@ import { recomputeContactConeForMovedDisk } from '../SupportPrimitives/ContactDi
 import type { ContactCone } from '../SupportPrimitives/ContactCone/types';
 import type { Vec3 } from '../types';
 import { getSocketPosition } from '../SupportPrimitives/ContactCone';
+import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from '../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { isContactConeBlocked } from '../PlacementLogic/CollisionAvoidance';
-import { getOrCreateSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
+import { clearSDFCacheForMesh, getOrCreateSDFCache, hasWarmSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
 import { initializeBVH, accelerateGeometry } from '../../utils/bvh';
 import { calculateSmartPlacementV3 } from '../PlacementLogicV3/SmartPlacementV3';
 import { setSettings } from '../Settings/state';
@@ -61,7 +62,104 @@ test('recomputeContactConeForMovedDisk never reduces the resolved standoff when 
         makeBlockingMesh(),
     );
 
-    assert.ok((withAvoidance.diskLengthOverride ?? 0) >= (withoutAvoidance.diskLengthOverride ?? 0));
+    assert.equal(withoutAvoidance.diskLengthOverride, undefined);
+    if (withoutAvoidance.profile.type !== 'disk' || withAvoidance.profile.type !== 'disk') {
+        assert.fail('expected disk profiles');
+    }
+    const effectiveWithout = withoutAvoidance.diskLengthOverride
+        ?? calculateDiskThickness(withoutAvoidance.surfaceNormal!, withoutAvoidance.normal, withoutAvoidance.profile);
+    const effectiveWith = withAvoidance.diskLengthOverride
+        ?? calculateDiskThickness(withAvoidance.surfaceNormal!, withAvoidance.normal, withAvoidance.profile);
+    assert.ok(effectiveWith >= effectiveWithout);
+});
+
+test('recomputeContactConeForMovedDisk omits diskLengthOverride on uncollided 65-degree oblique cone and pins socket', () => {
+    const angleRad = (65 * Math.PI) / 180;
+    const targetSocket = {
+        x: 3 * Math.cos(angleRad),
+        y: 0,
+        z: 3 * Math.sin(angleRad),
+    };
+    const recomputed = recomputeContactConeForMovedDisk(
+        makeCone(),
+        { x: 0, y: 0, z: 0 },
+        { x: 1, y: 0, z: 0 },
+        targetSocket,
+    );
+
+    assert.equal(recomputed.diskLengthOverride, undefined);
+    const finalSocket = getFinalSocketPosition(recomputed);
+    const err = Math.hypot(
+        finalSocket.x - targetSocket.x,
+        finalSocket.y - targetSocket.y,
+        finalSocket.z - targetSocket.z,
+    );
+    assert.ok(err < 1e-5, `expected socket error < 1e-5, got ${err}`);
+});
+
+test('recomputeContactConeForMovedDisk with allowColdCollision: false skips cold SDF build and does not poison diskThicknessCache', () => {
+    initializeBVH();
+    const geometry = new THREE.BoxGeometry(20, 20, 0.1);
+    accelerateGeometry(geometry);
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
+    mesh.position.set(0, 0, 0.2);
+    mesh.updateMatrixWorld(true);
+
+    const cone: ContactCone = {
+        id: 'cold-cache-cone',
+        pos: { x: 0, y: 0, z: 0 },
+        normal: { x: 0, y: 0, z: 1 },
+        surfaceNormal: { x: 0, y: 0, z: 1 },
+        profile: {
+            type: 'disk',
+            contactDiameterMm: 0.4,
+            bodyDiameterMm: 1.2,
+            lengthMm: 3,
+            penetrationMm: 0.05,
+            diskThicknessMm: 0.1,
+            maxStandoffMm: 1.6,
+            standoffAngleThreshold: Math.PI / 4,
+        },
+    };
+    const contactPos = { x: 0, y: 0, z: 0 };
+    const surfaceNormal = { x: 0, y: 0, z: 1 };
+    const socketTarget = { x: 0, y: 0, z: 4 };
+
+    try {
+        assert.equal(hasWarmSDFCache(mesh), false);
+        const coldResult = recomputeContactConeForMovedDisk(
+            cone,
+            contactPos,
+            surfaceNormal,
+            socketTarget,
+            mesh,
+            { allowColdCollision: false },
+        );
+        assert.equal(hasWarmSDFCache(mesh), false);
+        assert.equal(coldResult.diskLengthOverride, undefined);
+        if (coldResult.profile.type !== 'disk') {
+            assert.fail('expected disk profile');
+        }
+
+        const uncollidedThickness = calculateDiskThickness(
+            coldResult.surfaceNormal!,
+            coldResult.normal,
+            coldResult.profile,
+        );
+        const warmResult = recomputeContactConeForMovedDisk(
+            cone,
+            contactPos,
+            surfaceNormal,
+            socketTarget,
+            mesh,
+            { allowColdCollision: true },
+        );
+        assert.equal(hasWarmSDFCache(mesh), true);
+        assert.ok(warmResult.diskLengthOverride !== undefined);
+        assert.ok(warmResult.diskLengthOverride > uncollidedThickness);
+    } finally {
+        clearSDFCacheForMesh(mesh.uuid);
+    }
 });
 
 test('SmartPlacementV3 detects a thin feature between the tip and the plate', () => {

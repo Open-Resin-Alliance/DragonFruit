@@ -94,6 +94,7 @@ import { createOwnedDraft, draftAddEntity, draftAddPrimitive, draftCommitSupport
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 import { buildTrunkData, buildTrunkDataFromPlacement } from '../SupportTypes/Trunk/trunkBuilder';
 import { getFinalSocketPosition, getSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
+import { recomputeContactConeForMovedDisk } from '../SupportPrimitives/ContactDisk/ContactDiskInteraction';
 import {
     synthesizeTreeClusters,
     findOffsetSilhouetteRoute,
@@ -3169,6 +3170,7 @@ export function syncContactConeDiameters(
     draft: SupportState,
     modelId?: string,
     autoSettings?: Partial<AutoSupportSettings>,
+    collisionMesh?: THREE.Mesh,
 ): SupportState {
     // Which types contribute their segment diameters, from each type's declared
     // `coneBodyFollows`. A type whose cone body is left alone (stick, stump)
@@ -3205,18 +3207,44 @@ export function syncContactConeDiameters(
         // the socket rim rises by (body / 2) * lean. Following a thick host
         // blindly lifted Claptrap's contact 0.269 mm over its own tip. Cap the
         // body to the largest rim that still sits below the contact.
-        const socket = getFinalSocketPosition({ ...cone, profile: { ...cone.profile, bodyDiameterMm: hostDia } });
+        const originalSocket = getFinalSocketPosition(cone);
         const maxBody = maxConeBodyDiameterForContact({
             coneAxis: cone.normal,
-            socketPos: socket,
+            socketPos: originalSocket,
             tipPos: cone.pos,
         }) - 0.005;
-        const nextBody = Math.max(contact, Math.min(hostDia, maxBody));
-        if (Math.abs(body - nextBody) > 1e-6 || Math.abs(contact - nextContact) > 1e-6) {
-            changed = true;
-            return { ...cone, profile: { ...cone.profile, bodyDiameterMm: nextBody, contactDiameterMm: nextContact } };
+        const candidateBody = Math.max(nextContact, Math.min(hostDia, maxBody));
+        if (Math.abs(body - candidateBody) <= 1e-6 && Math.abs(contact - nextContact) <= 1e-6) {
+            return cone;
         }
-        return cone;
+        changed = true;
+        const resized: ContactCone = {
+            ...cone,
+            profile: { ...cone.profile, bodyDiameterMm: candidateBody, contactDiameterMm: nextContact },
+        };
+        if (!cone.surfaceNormal) {
+            return resized;
+        }
+        const recomputed = recomputeContactConeForMovedDisk(
+            resized,
+            cone.pos,
+            cone.surfaceNormal,
+            originalSocket,
+            collisionMesh,
+        );
+        const recomputedMaxBody = maxConeBodyDiameterForContact({
+            coneAxis: recomputed.normal,
+            socketPos: getFinalSocketPosition(recomputed),
+            tipPos: recomputed.pos,
+        }) - 0.005;
+        const nextBody = Math.max(nextContact, Math.min(hostDia, recomputedMaxBody));
+        if (Math.abs(recomputed.profile.bodyDiameterMm - nextBody) <= 1e-6) {
+            return recomputed;
+        }
+        return {
+            ...recomputed,
+            profile: { ...recomputed.profile, bodyDiameterMm: nextBody },
+        };
     };
 
     const reencodeConeSettingsHex = (
@@ -7652,7 +7680,7 @@ export function computeAutoSupportPlan(
             // "snapped it correct"; do that globally instead of waiting
             // for a click.
             perfMark('resize:cone-sync');
-            const coneSynced = syncContactConeDiameters(draft, modelId, autoSettings);
+            const coneSynced = syncContactConeDiameters(draft, modelId, autoSettings, resolvedMesh);
             perfMeasure('resize:cone-sync', 'resize:cone-sync');
             bumpDraftVersion(coneSynced);
             if (coneSynced !== draft) {

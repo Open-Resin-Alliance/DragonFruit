@@ -6,6 +6,7 @@ import { initializeBVH, accelerateGeometry } from '../../utils/bvh';
 import { buildStick } from '../SupportTypes/Stick/stickBuilder';
 import { buildTwig } from '../SupportTypes/Twig/twigBuilder';
 import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
+import { calculateDiskThickness } from '../SupportPrimitives/ContactDisk/contactDiskUtils';
 import { recomputeContactConeForMovedDisk } from '../SupportPrimitives/ContactDisk/ContactDiskInteraction';
 import type { ContactCone } from '../SupportPrimitives/ContactCone/types';
 import { setSettings } from '../Settings/state';
@@ -164,8 +165,12 @@ test('hybrid segmentBlockedMethod detects thin feature in standoff calculation',
     // 0.2mm is the 0.4mm contact's ball radius, which floors the nib (the ball is
     // centered on the nib's top face, so a shorter nib would let it poke out).
     const withoutMesh = recomputeContactConeForMovedDisk(cone, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: 4 });
-    assert.ok(withoutMesh.diskLengthOverride !== undefined);
-    assert.equal(withoutMesh.diskLengthOverride, 0.2);
+    assert.equal(withoutMesh.diskLengthOverride, undefined);
+    assert.equal(withoutMesh.profile.type, 'disk');
+    assert.equal(
+        calculateDiskThickness(withoutMesh.surfaceNormal!, withoutMesh.normal, withoutMesh.profile),
+        0.2,
+    );
 
     // Recompute contact cone with mesh -> standoff is pushed out past the thin plate (standoff > 0.2mm)
     const withMesh = recomputeContactConeForMovedDisk(cone, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: 4 }, mesh);

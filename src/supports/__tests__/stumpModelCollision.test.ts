@@ -159,18 +159,36 @@ test('a stump aligns joint.pos and socketJointId with getFinalSocketPosition und
   }
 });
 
-test('a short-span stump aligns joint.pos.z and socketJointId when socketPos.z shifts off 1.1', () => {
+test('an uncollided side-wall or short-span stump converges socket.z to 1.1 without diskLengthOverride and aligns joint.pos', () => {
   resetStore();
   setSettings(createDefaultSettings());
 
   try {
+    const sideSpan = buildStumpData({
+      tipPos: { x: 0, y: 0, z: 1.5 },
+      tipNormal: { x: 1, y: 0, z: 0 },
+      modelId: 'model-a',
+    }).stump;
+    const sideSocket = getFinalSocketPosition(sideSpan.contactCone);
+    assert.equal(sideSpan.contactCone.diskLengthOverride, undefined);
+    assert.ok(sideSocket.x > 0.6, `side socket.x extended laterally > 0.6 (got ${sideSocket.x})`);
+    assert.ok(Math.abs(sideSocket.z - 1.1) < 1e-6, `side socket.z converged to 1.1 (got ${sideSocket.z})`);
+    for (const axis of ['x', 'y', 'z'] as const) {
+      assert.ok(
+        Math.abs(sideSpan.joint.pos[axis] - sideSocket[axis]) < 1e-9,
+        `side stump joint.pos.${axis} (${sideSpan.joint.pos[axis]}) matches getFinalSocketPosition (${sideSocket[axis]})`,
+      );
+    }
+    assert.equal(sideSpan.contactCone.socketJointId, sideSpan.joint.id);
+
     const shortSpan = buildStumpData({
       tipPos: { x: 0, y: 0, z: 1.23 },
       tipNormal: { x: 0, y: 0, z: -1 },
       modelId: 'model-a',
     }).stump;
     const shortSocket = getFinalSocketPosition(shortSpan.contactCone);
-    assert.ok(Math.abs(shortSocket.z - 1.1) > 0.02, `socket.z shifted off 1.1 (got ${shortSocket.z})`);
+    assert.equal(shortSpan.contactCone.diskLengthOverride, undefined);
+    assert.ok(Math.abs(shortSocket.z - 1.1) < 1e-6, `short socket.z converged to 1.1 (got ${shortSocket.z})`);
     for (const axis of ['x', 'y', 'z'] as const) {
       assert.ok(
         Math.abs(shortSpan.joint.pos[axis] - shortSocket[axis]) < 1e-9,

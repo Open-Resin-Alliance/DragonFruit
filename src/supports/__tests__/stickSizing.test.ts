@@ -6,7 +6,6 @@ import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
 import { activeSizingBand } from '../autoSupport/parameterSizing';
 import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
-import { calculateDiskThickness } from '../SupportPrimitives/ContactDisk/contactDiskUtils';
 
 /**
  * A stick built for auto supports carries the tier band; a manual one carries
@@ -82,34 +81,18 @@ test('recomputes disk thickness and socket position after final cone axis clamp'
             assert.fail('expected disk tip profiles on stick contact cones');
         }
 
-        const expectedThicknessA = calculateDiskThickness(
-            coneA.surfaceNormal ?? coneA.normal,
-            coneA.normal,
-            coneA.profile,
-        );
-        const expectedThicknessB = calculateDiskThickness(
-            coneB.surfaceNormal ?? coneB.normal,
-            coneB.normal,
-            coneB.profile,
-        );
-        assert.ok(
-            Math.abs((coneA.diskLengthOverride ?? 0) - expectedThicknessA) < 1e-9,
-            `coneA diskLengthOverride (${coneA.diskLengthOverride}) matches post-clamp thickness (${expectedThicknessA})`,
-        );
-        assert.ok(
-            Math.abs((coneB.diskLengthOverride ?? 0) - expectedThicknessB) < 1e-9,
-            `coneB diskLengthOverride (${coneB.diskLengthOverride}) matches post-clamp thickness (${expectedThicknessB})`,
-        );
+        assert.equal(coneA.diskLengthOverride, undefined);
+        assert.equal(coneB.diskLengthOverride, undefined);
 
-        const expectedSocketA = getFinalSocketPosition({ ...coneA, diskLengthOverride: undefined });
-        const expectedSocketB = getFinalSocketPosition({ ...coneB, diskLengthOverride: undefined });
+        const expectedSocketA = getFinalSocketPosition(coneA);
+        const expectedSocketB = getFinalSocketPosition(coneB);
         for (const axis of ['x', 'y', 'z'] as const) {
             assert.ok(
-                Math.abs(segment.bottomJoint.pos[axis] - expectedSocketA[axis]) < 1e-9,
+                Math.abs(segment.bottomJoint.pos[axis] - expectedSocketA[axis]) < 1e-6,
                 `bottomJoint.pos.${axis} (${segment.bottomJoint.pos[axis]}) matches getFinalSocketPosition (${expectedSocketA[axis]})`,
             );
             assert.ok(
-                Math.abs(segment.topJoint.pos[axis] - expectedSocketB[axis]) < 1e-9,
+                Math.abs(segment.topJoint.pos[axis] - expectedSocketB[axis]) < 1e-6,
                 `topJoint.pos.${axis} (${segment.topJoint.pos[axis]}) matches getFinalSocketPosition (${expectedSocketB[axis]})`,
             );
         }

@@ -63,6 +63,7 @@ export function recomputeLeafPreviewContactCone(
     if (
         oldLen === finalLength
         && oldBodyDia === nextBodyDiameterMm
+        && cone.diskLengthOverride === undefined
         && oldNormal.x === axis.x
         && oldNormal.y === axis.y
         && oldNormal.z === axis.z
@@ -75,6 +76,7 @@ export function recomputeLeafPreviewContactCone(
         contactCone: {
             ...cone,
             normal: { x: axis.x, y: axis.y, z: axis.z },
+            diskLengthOverride: undefined,
             profile: {
                 ...cone.profile,
                 lengthMm: finalLength,

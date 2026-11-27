@@ -160,8 +160,12 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
     );
     coneAxisB.set(finalClampedAxisB.x, finalClampedAxisB.y, finalClampedAxisB.z);
 
-    diskThicknessA = calculateDiskThickness(toVec3(surfaceNormalA), toVec3(coneAxisA), tipProfile);
-    diskThicknessB = calculateDiskThickness(toVec3(surfaceNormalB), toVec3(coneAxisB), tipProfile);
+    diskThicknessA = tipProfile.type === 'disk'
+        ? calculateDiskThickness(toVec3(surfaceNormalA), toVec3(coneAxisA), tipProfile)
+        : 0;
+    diskThicknessB = tipProfile.type === 'disk'
+        ? calculateDiskThickness(toVec3(surfaceNormalB), toVec3(coneAxisB), tipProfile)
+        : 0;
     coneStartA.set(aPos.x, aPos.y, aPos.z).addScaledVector(surfaceNormalA, diskThicknessA);
     coneStartB.set(bPos.x, bPos.y, bPos.z).addScaledVector(surfaceNormalB, diskThicknessB);
 
@@ -205,7 +209,7 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
         pos: aPos,
         normal: toVec3(coneAxisA),
         surfaceNormal: toVec3(surfaceNormalA),
-        diskLengthOverride: diskThicknessA,
+        diskLengthOverride: undefined,
         profile: profileA,
         socketJointId: socketJointA.id,
     };
@@ -215,7 +219,7 @@ export function buildStick(input: StickBuildInput): StickBuildResult {
         pos: bPos,
         normal: toVec3(coneAxisB),
         surfaceNormal: toVec3(surfaceNormalB),
-        diskLengthOverride: diskThicknessB,
+        diskLengthOverride: undefined,
         profile: profileB,
         socketJointId: socketJointB.id,
     };

@@ -24,6 +24,12 @@ const sdfCachePool = new Map<string, SDFCache>();
  */
 export const SDF_DEFAULT_CELL_SIZE_MM = 0.5;
 
+/** Whether `mesh` already has a warm distance field for its current geometry. */
+export function hasWarmSDFCache(mesh: THREE.Mesh): boolean {
+    const existing = sdfCachePool.get(mesh.uuid);
+    return existing !== undefined && existing.geometry === mesh.geometry;
+}
+
 /** The cached distance field for a mesh, built on first use. */
 export function getOrCreateSDFCache(mesh: THREE.Mesh): SDFCache {
     const existing = sdfCachePool.get(mesh.uuid);

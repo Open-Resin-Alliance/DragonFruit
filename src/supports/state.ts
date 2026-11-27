@@ -18,6 +18,9 @@ import { migrateLegacySupportPayload } from './importMigrations';
 import type { SupportCollectionKey } from './supportTypeRegistry';
 import type { ContactCone, SupportTipProfile } from './SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
+import { recomputeContactConeForMovedDisk } from './SupportPrimitives/ContactDisk/ContactDiskInteraction';
+import { getModelMesh } from './autoSupport/meshStore';
+import { hasWarmSDFCache } from './PlacementLogic/Pathfinding/SDFCachePool';
 import { resolveSegmentEndpoints, type ShaftEntity } from './SupportPrimitives/Knot/segmentEndpoints';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { emitSupportInteractionReset } from './interaction/supportInteractionReset';
@@ -417,20 +420,43 @@ export function recomputeKnotDependentGeometry(
     for (const leaf of Object.values(leaves)) {
         const knotPos = updatedKnotPosById[leaf.parentKnotId];
         if (!knotPos) continue;
-        if (!leaf.contactCone?.surfaceNormal) continue;
+        const cone = leaf.contactCone;
+        if (!cone?.surfaceNormal) continue;
 
-        const { axis, lengthMm } = recomputeLeafContactConeAxisAndLength(
-            leaf.contactCone.pos,
-            leaf.contactCone.surfaceNormal,
-            knotPos,
-            leaf.contactCone.profile
-        );
+        const modelMesh = leaf.modelId ? getModelMesh(leaf.modelId) : null;
+        const warmMesh = modelMesh && hasWarmSDFCache(modelMesh) ? modelMesh : undefined;
 
-        const oldNormal = leaf.contactCone.normal;
-        const oldLen = leaf.contactCone.profile.lengthMm;
+        let axis: Vec3;
+        let lengthMm: number;
+        let nextOverride: number | undefined;
+        if (warmMesh && cone.surfaceNormal) {
+            const recomputed = recomputeContactConeForMovedDisk(
+                cone,
+                cone.pos,
+                cone.surfaceNormal,
+                knotPos,
+                warmMesh,
+                { allowColdCollision: false },
+            );
+            lengthMm = Math.max(0.1, recomputed.profile.lengthMm);
+            axis = recomputed.normal;
+            nextOverride = recomputed.diskLengthOverride;
+        } else {
+            ({ axis, lengthMm } = recomputeLeafContactConeAxisAndLength(
+                cone.pos,
+                cone.surfaceNormal,
+                knotPos,
+                cone.profile,
+            ));
+            nextOverride = undefined;
+        }
+
+        const oldNormal = cone.normal;
+        const oldLen = cone.profile.lengthMm;
 
         if (
             oldLen === lengthMm &&
+            cone.diskLengthOverride === nextOverride &&
             oldNormal.x === axis.x &&
             oldNormal.y === axis.y &&
             oldNormal.z === axis.z
@@ -446,10 +472,11 @@ export function recomputeKnotDependentGeometry(
         nextLeaves[leaf.id] = {
             ...leaf,
             contactCone: {
-                ...leaf.contactCone,
+                ...cone,
                 normal: axis,
+                diskLengthOverride: nextOverride,
                 profile: {
-                    ...leaf.contactCone.profile,
+                    ...cone.profile,
                     lengthMm,
                 },
             },
