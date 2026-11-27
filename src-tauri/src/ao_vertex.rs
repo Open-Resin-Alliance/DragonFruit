@@ -44,14 +44,25 @@ const BAKED_RAYS: usize = 32;
 /// (measured on a real model: the same vertex set, a bit-identical field), the 208 ms
 /// the weld costs is not paid, and the soup it would have been sent — 36 bytes a
 /// triangle, 430 MB across a scene — never crosses the IPC.
-fn bake_mesh_on_gpu(mesh: &IndexedMesh, rays: usize) -> Result<(Vec<f32>, usize), String> {
+fn bake_mesh_on_gpu(
+    mesh: &IndexedMesh,
+    rays: usize,
+    per_vertex: bool,
+) -> Result<(Vec<f32>, usize), String> {
     let baked_at = std::time::Instant::now();
     let values = dragonfruit_ao_gpu::bake_smoothed(mesh, rays)?;
     let bake_ms = baked_at.elapsed().as_millis();
 
-    // The caller's geometry is a corner soup in this mesh's triangle order, so the
-    // expansion is the mesh's own indices — the corner map exists only because a soup
-    // has to be welded before it can be indexed.
+    if per_vertex {
+        log::info!(
+            "[ao] phases: kept mesh (no weld, per-vertex), tree+kernel {}ms ({} welded vertices)",
+            bake_ms,
+            mesh.positions.len(),
+        );
+        return Ok((values, mesh.positions.len()));
+    }
+
+    // Legacy soup geometry in triangle order: expand per-vertex AO to corners.
     let expand_at = std::time::Instant::now();
     let mut out = Vec::with_capacity(mesh.triangles.len() * 3);
     for triangle in &mesh.triangles {
@@ -149,20 +160,33 @@ pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, Str
             .get("expectedCorners")
             .and_then(|value| value.as_u64())
             .unwrap_or(0) as usize;
+        let expected_vertices = payload
+            .get("expectedVertices")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0) as usize;
+        let per_vertex = payload
+            .get("perVertex")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
         let rays = payload
             .get("rays")
             .and_then(|value| value.as_u64())
             .map_or(BAKED_RAYS, |value| value as usize);
-        let mesh = crate::mesh_repair::mesh_for_bake(token, expected_corners)
-            .map_err(|error| format!("bake_vertex_occlusion: {error}"))?;
-        let (occlusion, welded) = bake_mesh_on_gpu(&mesh, rays)?;
+        let mesh = crate::mesh_repair::mesh_for_bake_checked(
+            token,
+            expected_corners,
+            expected_vertices,
+        )
+        .map_err(|error| format!("bake_vertex_occlusion: {error}"))?;
+        let (occlusion, welded) = bake_mesh_on_gpu(&mesh, rays, per_vertex)?;
         let mut out = Vec::with_capacity(occlusion.len() * 4);
         for value in &occlusion {
             out.extend_from_slice(&value.to_le_bytes());
         }
         log::info!(
-            "[ao] baked {} corners from the loader's mesh (token {token}, {welded} welded vertices, {rays} rays)",
+            "[ao] baked {} {} from the loader's mesh (token {token}, {welded} welded vertices, {rays} rays)",
             occlusion.len(),
+            if per_vertex { "vertices" } else { "corners" },
         );
         return Ok(Response::new(out));
     }

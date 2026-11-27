@@ -9,6 +9,7 @@ export function NormalDebugMaterial({
     <meshNormalMaterial
       clippingPlanes={clippingPlanes}
       side={THREE.FrontSide}
+      flatShading
     />
   );
 }

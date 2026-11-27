@@ -30,6 +30,7 @@ import {
   isEmptyFootprint,
 } from './voxelFootprint';
 import { dropNativeMeshes, putNativeSoup, withNativeSoup } from '@/utils/nativeMeshStore';
+import { buildWorldTriangleSoup } from '@/utils/compactIndexedGeometry';
 import { loadTauriCore, type TauriCoreModule } from '@/utils/tauriMeshBridge';
 
 /** Self-support angle for mesh-normal overhang detection (surfaces flatter
@@ -321,31 +322,12 @@ export function useIslands({ geom, transform, layerHeightMm, supportTips, plateZ
    */
   const prepareWorldGeom = useCallback((): { positions: Float32Array; bbox: THREE.Box3 } | null => {
     if (!geom) return null;
-    const g = geom.geometry.clone();
-    try {
-      const bb = g.boundingBox ?? new THREE.Box3().setFromBufferAttribute(g.getAttribute('position') as THREE.BufferAttribute);
-      const center = bb.getCenter(new THREE.Vector3());
-      g.translate(-center.x, -center.y, -center.z);
-      const matrix = new THREE.Matrix4().compose(
-        transform.position.clone(),
-        quaternionFromGlobalEuler(transform.rotation),
-        transform.scale.clone(),
-      );
-      g.applyMatrix4(matrix);
-      const soup = g.index ? g.toNonIndexed() : g;
-      try {
-        soup.computeBoundingBox();
-        const positions = (soup.getAttribute('position').array as Float32Array).slice();
-        const bbox = soup.boundingBox!.clone();
-        return { positions, bbox };
-      } finally {
-        if (soup !== g) {
-          soup.dispose();
-        }
-      }
-    } finally {
-      g.dispose();
-    }
+    const matrix = new THREE.Matrix4().compose(
+      transform.position.clone(),
+      quaternionFromGlobalEuler(transform.rotation),
+      transform.scale.clone(),
+    );
+    return buildWorldTriangleSoup(geom.geometry, matrix);
   }, [geom, transform]);
 
   // World-space transform signature for the scan cache. Island coordinates are

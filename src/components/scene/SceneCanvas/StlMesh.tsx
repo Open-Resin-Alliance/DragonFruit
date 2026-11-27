@@ -1199,18 +1199,15 @@ if (uDitherAmount > 0.0) {
       },
       vertexShader: `
         varying vec3 vWorldPos;
-        varying vec3 vWorldNormal;
 
         void main() {
           vec4 worldPos = modelMatrix * vec4(position, 1.0);
           vWorldPos = worldPos.xyz;
-          vWorldNormal = normalize(mat3(modelMatrix) * normal);
           gl_Position = projectionMatrix * viewMatrix * worldPos;
         }
       `,
       fragmentShader: `
         varying vec3 vWorldPos;
-        varying vec3 vWorldNormal;
         uniform float uPlaneZ;
         uniform float uLineWidthMm;
         uniform vec3 uLineColor;
@@ -1219,7 +1216,11 @@ if (uDitherAmount > 0.0) {
         void main() {
           // How steeply the surface crosses the guide plane: 1 on a vertical
           // wall, 0 on a face lying in the plane.
-          vec3 worldNormal = normalize(vWorldNormal);
+          vec3 rawWorldNormal = cross(dFdx(vWorldPos), dFdy(vWorldPos));
+          float rawWorldNormalLen = length(rawWorldNormal);
+          vec3 worldNormal = rawWorldNormalLen > 1e-12
+            ? (rawWorldNormal / rawWorldNormalLen)
+            : vec3(0.0, 0.0, 1.0);
           float slope = sqrt(max(0.0, 1.0 - worldNormal.z * worldNormal.z));
 
           // Distance from the plane's contour measured *along the surface*, so
@@ -2035,6 +2036,7 @@ if (uDitherAmount > 0.0) {
             metalness={0.02}
             clippingPlanes={planes}
             side={THREE.FrontSide}
+            flatShading
             polygonOffset
             polygonOffsetFactor={-1}
             polygonOffsetUnits={-1}

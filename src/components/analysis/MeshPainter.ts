@@ -118,15 +118,22 @@ export function applyIslandSoftBrushByLabel(
     seedsZ[id] = sz.subarray(0, w);
   }
 
+  const index = geometry.getIndex();
+  const idxArr = index ? index.array : null;
+  const cornerCount = idxArr ? idxArr.length : pos.count;
+
   const br = baseColor.r, bg = baseColor.g, bb = baseColor.b;
   const radius = Math.max(0.001, brushRadiusMm);
   const radius2 = radius * radius;
   let painted = 0;
 
-  for (let i = 0; i < pos.count; i += 3) {
-    const ax = arrPos[i * 3 + 0], ay = arrPos[i * 3 + 1], az = arrPos[i * 3 + 2];
-    const bx = arrPos[(i + 1) * 3 + 0], by = arrPos[(i + 1) * 3 + 1], bz = arrPos[(i + 1) * 3 + 2];
-    const cx = arrPos[(i + 2) * 3 + 0], cy = arrPos[(i + 2) * 3 + 1], cz = arrPos[(i + 2) * 3 + 2];
+  for (let i = 0; i + 2 < cornerCount; i += 3) {
+    const i0 = idxArr ? Number(idxArr[i]) : i;
+    const i1 = idxArr ? Number(idxArr[i + 1]) : i + 1;
+    const i2 = idxArr ? Number(idxArr[i + 2]) : i + 2;
+    const ax = arrPos[i0 * 3 + 0], ay = arrPos[i0 * 3 + 1], az = arrPos[i0 * 3 + 2];
+    const bx = arrPos[i1 * 3 + 0], by = arrPos[i1 * 3 + 1], bz = arrPos[i1 * 3 + 2];
+    const cx = arrPos[i2 * 3 + 0], cy = arrPos[i2 * 3 + 1], cz = arrPos[i2 * 3 + 2];
 
     const centX = (ax + bx + cx) / 3;
     const centY = (ay + by + cy) / 3;
@@ -166,15 +173,14 @@ export function applyIslandSoftBrushByLabel(
     const smooth = u * u * (3 - 2 * u);
     const s = smooth; // darkest at center
 
-    for (let k = 0; k < 3; k++) {
-      const vi = i + k;
-      tmpColor.setRGB(
-        lerp(br, tint.r, s),
-        lerp(bg, tint.g, s),
-        lerp(bb, tint.b, s)
-      );
-      writeColorAt(arrCol, vi, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
-    }
+    tmpColor.setRGB(
+      lerp(br, tint.r, s),
+      lerp(bg, tint.g, s),
+      lerp(bb, tint.b, s)
+    );
+    writeColorAt(arrCol, i0, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
+    writeColorAt(arrCol, i1, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
+    writeColorAt(arrCol, i2, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
     painted++;
   }
 
@@ -206,6 +212,9 @@ export function applyIslandGradientByLabel(
   const useByteColors = isByteColorBuffer(col);
   const tmpColor = new THREE.Color();
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+  const index = geometry.getIndex();
+  const idxArr = index ? index.array : null;
+  const cornerCount = idxArr ? idxArr.length : pos.count;
 
   const { width, height, originX, originZ, px_mm } = grid;
 
@@ -222,10 +231,13 @@ export function applyIslandGradientByLabel(
   const br = baseColor.r, bg = baseColor.g, bb = baseColor.b;
   const span = Math.max(1, Math.floor(fadeSpanLayers));
 
-  for (let i = 0; i < pos.count; i += 3) {
-    const ax = arrPos[i * 3 + 0], ay = arrPos[i * 3 + 1], az = arrPos[i * 3 + 2];
-    const bx = arrPos[(i + 1) * 3 + 0], by = arrPos[(i + 1) * 3 + 1], bz = arrPos[(i + 1) * 3 + 2];
-    const cx = arrPos[(i + 2) * 3 + 0], cy = arrPos[(i + 2) * 3 + 1], cz = arrPos[(i + 2) * 3 + 2];
+  for (let i = 0; i + 2 < cornerCount; i += 3) {
+    const i0 = idxArr ? Number(idxArr[i]) : i;
+    const i1 = idxArr ? Number(idxArr[i + 1]) : i + 1;
+    const i2 = idxArr ? Number(idxArr[i + 2]) : i + 2;
+    const ax = arrPos[i0 * 3 + 0], ay = arrPos[i0 * 3 + 1], az = arrPos[i0 * 3 + 2];
+    const bx = arrPos[i1 * 3 + 0], by = arrPos[i1 * 3 + 1], bz = arrPos[i1 * 3 + 2];
+    const cx = arrPos[i2 * 3 + 0], cy = arrPos[i2 * 3 + 1], cz = arrPos[i2 * 3 + 2];
 
     const centX = (ax + bx + cx) / 3;
     const centY = (ay + by + cy) / 3;
@@ -251,15 +263,14 @@ export function applyIslandGradientByLabel(
     const gamma = 1.6; // darken mid-tones so fade is visible
     s = Math.pow(Math.min(1, Math.max(0, s)), gamma);
 
-    for (let k = 0; k < 3; k++) {
-      const vi = i + k;
-      tmpColor.setRGB(
-        lerp(br, tint.r, s),
-        lerp(bg, tint.g, s),
-        lerp(bb, tint.b, s)
-      );
-      writeColorAt(arrCol, vi, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
-    }
+    tmpColor.setRGB(
+      lerp(br, tint.r, s),
+      lerp(bg, tint.g, s),
+      lerp(bb, tint.b, s)
+    );
+    writeColorAt(arrCol, i0, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
+    writeColorAt(arrCol, i1, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
+    writeColorAt(arrCol, i2, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
     painted++;
   }
 
@@ -299,6 +310,9 @@ export function applyIslandGradientSinglePass(
   const useByteColors = isByteColorBuffer(col);
   const tmpColor = new THREE.Color();
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+  const index = geometry.getIndex();
+  const idxArr = index ? index.array : null;
+  const cornerCount = idxArr ? idxArr.length : pos.count;
 
   const { width, height, originX, originZ, px_mm } = grid;
 
@@ -315,10 +329,13 @@ export function applyIslandGradientSinglePass(
   const br = baseColor.r, bg = baseColor.g, bb = baseColor.b;
   const span = Math.max(1, Math.floor(fadeSpanLayers));
 
-  for (let i = 0; i < pos.count; i += 3) {
-    const ax = arrPos[i * 3 + 0], ay = arrPos[i * 3 + 1], az = arrPos[i * 3 + 2];
-    const bx = arrPos[(i + 1) * 3 + 0], by = arrPos[(i + 1) * 3 + 1], bz = arrPos[(i + 1) * 3 + 2];
-    const cx = arrPos[(i + 2) * 3 + 0], cy = arrPos[(i + 2) * 3 + 1], cz = arrPos[(i + 2) * 3 + 2];
+  for (let i = 0; i + 2 < cornerCount; i += 3) {
+    const i0 = idxArr ? Number(idxArr[i]) : i;
+    const i1 = idxArr ? Number(idxArr[i + 1]) : i + 1;
+    const i2 = idxArr ? Number(idxArr[i + 2]) : i + 2;
+    const ax = arrPos[i0 * 3 + 0], ay = arrPos[i0 * 3 + 1], az = arrPos[i0 * 3 + 2];
+    const bx = arrPos[i1 * 3 + 0], by = arrPos[i1 * 3 + 1], bz = arrPos[i1 * 3 + 2];
+    const cx = arrPos[i2 * 3 + 0], cy = arrPos[i2 * 3 + 1], cz = arrPos[i2 * 3 + 2];
 
     const centX = (ax + bx + cx) / 3;
     const centY = (ay + by + cy) / 3;
@@ -339,15 +356,14 @@ export function applyIslandGradientSinglePass(
     const gamma = 0.4;
     s = Math.pow(Math.min(1, Math.max(0, s)), gamma);
 
-    for (let k = 0; k < 3; k++) {
-      const vi = i + k;
-      tmpColor.setRGB(
-        lerp(br, tint.r, s),
-        lerp(bg, tint.g, s),
-        lerp(bb, tint.b, s)
-      );
-      writeColorAt(arrCol, vi, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
-    }
+    tmpColor.setRGB(
+      lerp(br, tint.r, s),
+      lerp(bg, tint.g, s),
+      lerp(bb, tint.b, s)
+    );
+    writeColorAt(arrCol, i0, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
+    writeColorAt(arrCol, i1, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
+    writeColorAt(arrCol, i2, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
     painted++;
   }
 
@@ -378,6 +394,9 @@ export function applyTintMaskBandVariableStrength(
   const useByteColors = isByteColorBuffer(col);
   const tmpColor = new THREE.Color();
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+  const index = geometry.getIndex();
+  const idxArr = index ? index.array : null;
+  const cornerCount = idxArr ? idxArr.length : pos.count;
 
   const { data, width, height, originX, originZ, px_mm, y0, y1 } = band;
 
@@ -391,10 +410,13 @@ export function applyTintMaskBandVariableStrength(
   }
 
   let painted = 0;
-  for (let i = 0; i < pos.count; i += 3) {
-    const ax = arrPos[i * 3 + 0], ay = arrPos[i * 3 + 1], az = arrPos[i * 3 + 2];
-    const bx = arrPos[(i + 1) * 3 + 0], by = arrPos[(i + 1) * 3 + 1], bz = arrPos[(i + 1) * 3 + 2];
-    const cx = arrPos[(i + 2) * 3 + 0], cy = arrPos[(i + 2) * 3 + 1], cz = arrPos[(i + 2) * 3 + 2];
+  for (let i = 0; i + 2 < cornerCount; i += 3) {
+    const i0 = idxArr ? Number(idxArr[i]) : i;
+    const i1 = idxArr ? Number(idxArr[i + 1]) : i + 1;
+    const i2 = idxArr ? Number(idxArr[i + 2]) : i + 2;
+    const ax = arrPos[i0 * 3 + 0], ay = arrPos[i0 * 3 + 1], az = arrPos[i0 * 3 + 2];
+    const bx = arrPos[i1 * 3 + 0], by = arrPos[i1 * 3 + 1], bz = arrPos[i1 * 3 + 2];
+    const cx = arrPos[i2 * 3 + 0], cy = arrPos[i2 * 3 + 1], cz = arrPos[i2 * 3 + 2];
 
     const centX = (ax + bx + cx) / 3;
     const centY = (ay + by + cy) / 3;
@@ -411,15 +433,14 @@ export function applyTintMaskBandVariableStrength(
 
     // Derive solely from baseColor for this triangle with current strength (no accumulation)
     const br = baseColor.r, bg = baseColor.g, bb = baseColor.b;
-    for (let k = 0; k < 3; k++) {
-      const idx = i + k;
-      tmpColor.setRGB(
-        lerp(br, tint.r, s),
-        lerp(bg, tint.g, s),
-        lerp(bb, tint.b, s)
-      );
-      writeColorAt(arrCol, idx, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
-    }
+    tmpColor.setRGB(
+      lerp(br, tint.r, s),
+      lerp(bg, tint.g, s),
+      lerp(bb, tint.b, s)
+    );
+    writeColorAt(arrCol, i0, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
+    writeColorAt(arrCol, i1, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
+    writeColorAt(arrCol, i2, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
   }
 
   col.needsUpdate = true;
@@ -440,19 +461,16 @@ export function applyTintAll(
   const useByteColors = isByteColorBuffer(col);
   const tmpColor = new THREE.Color();
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-  let painted = 0;
-  for (let i = 0; i < pos.count; i += 3) {
-    painted++;
-    for (let k = 0; k < 3; k++) {
-      const idx = i + k;
-      const { r, g, b } = readColorAt(arrCol, idx, useByteColors);
-      tmpColor.setRGB(
-        lerp(r, tint.r, strength),
-        lerp(g, tint.g, strength),
-        lerp(b, tint.b, strength)
-      );
-      writeColorAt(arrCol, idx, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
-    }
+  const index = geometry.getIndex();
+  const painted = Math.floor((index ? index.count : pos.count) / 3);
+  for (let vi = 0; vi < pos.count; vi += 1) {
+    const { r, g, b } = readColorAt(arrCol, vi, useByteColors);
+    tmpColor.setRGB(
+      lerp(r, tint.r, strength),
+      lerp(g, tint.g, strength),
+      lerp(b, tint.b, strength)
+    );
+    writeColorAt(arrCol, vi, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
   }
   col.needsUpdate = true;
   return painted;
@@ -486,6 +504,9 @@ export function applyTintMaskBand(
   const arrCol = col.array as ColorStorageArray;
   const useByteColors = isByteColorBuffer(col);
   const tmpColor = new THREE.Color();
+  const index = geometry.getIndex();
+  const idxArr = index ? index.array : null;
+  const cornerCount = idxArr ? idxArr.length : pos.count;
 
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
@@ -501,11 +522,15 @@ export function applyTintMaskBand(
     return data[rowIdx * width + colIdx] === 1;
   }
 
+  const visited = idxArr ? new Uint8Array(pos.count) : null;
   let painted = 0;
-  for (let i = 0; i < pos.count; i += 3) {
-    const ax = arrPos[i * 3 + 0], ay = arrPos[i * 3 + 1], az = arrPos[i * 3 + 2];
-    const bx = arrPos[(i + 1) * 3 + 0], by = arrPos[(i + 1) * 3 + 1], bz = arrPos[(i + 1) * 3 + 2];
-    const cx = arrPos[(i + 2) * 3 + 0], cy = arrPos[(i + 2) * 3 + 1], cz = arrPos[(i + 2) * 3 + 2];
+  for (let i = 0; i + 2 < cornerCount; i += 3) {
+    const i0 = idxArr ? Number(idxArr[i]) : i;
+    const i1 = idxArr ? Number(idxArr[i + 1]) : i + 1;
+    const i2 = idxArr ? Number(idxArr[i + 2]) : i + 2;
+    const ax = arrPos[i0 * 3 + 0], ay = arrPos[i0 * 3 + 1], az = arrPos[i0 * 3 + 2];
+    const bx = arrPos[i1 * 3 + 0], by = arrPos[i1 * 3 + 1], bz = arrPos[i1 * 3 + 2];
+    const cx = arrPos[i2 * 3 + 0], cy = arrPos[i2 * 3 + 1], cz = arrPos[i2 * 3 + 2];
 
     const centX = (ax + bx + cx) / 3;
     const centY = (ay + by + cy) / 3;
@@ -515,15 +540,20 @@ export function applyTintMaskBand(
     if (!sampleMask(centX, centZ)) continue;
     painted++;
 
+    const verts = [i0, i1, i2];
     for (let k = 0; k < 3; k++) {
-      const idx = i + k;
-      const { r, g, b } = readColorAt(arrCol, idx, useByteColors);
+      const vi = verts[k];
+      if (visited) {
+        if (visited[vi]) continue;
+        visited[vi] = 1;
+      }
+      const { r, g, b } = readColorAt(arrCol, vi, useByteColors);
       tmpColor.setRGB(
         lerp(r, tint.r, strength),
         lerp(g, tint.g, strength),
         lerp(b, tint.b, strength)
       );
-      writeColorAt(arrCol, idx, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
+      writeColorAt(arrCol, vi, tmpColor.r, tmpColor.g, tmpColor.b, useByteColors);
     }
   }
 

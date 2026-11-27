@@ -70,7 +70,7 @@ export function OverhangHeatmapMaterial({
             envMapIntensity={0.34}
             clippingPlanes={clippingPlanes}
             side={THREE.FrontSide}
-            flatShading={false}
+            flatShading={true}
             onBeforeCompile={(shader) => {
                 shader.uniforms.uFakeAoStrength = uniformsRef.current.uFakeAoStrength;
                 shader.uniforms.uFakeLightDir = uniformsRef.current.uFakeLightDir;
@@ -79,14 +79,14 @@ export function OverhangHeatmapMaterial({
                 shader.uniforms.uHeatmapColors = uniformsRef.current.uHeatmapColors;
 
                 shader.vertexShader = `
-          varying vec3 vWorldNormalCustom;
+          varying vec3 vWorldPosCustom;
         ` + shader.vertexShader;
 
                 shader.vertexShader = shader.vertexShader.replace(
                     '#include <worldpos_vertex>',
                     `
             #include <worldpos_vertex>
-            vWorldNormalCustom = normalize((modelMatrix * vec4(objectNormal, 0.0)).xyz);
+            vWorldPosCustom = (modelMatrix * vec4(transformed, 1.0)).xyz;
           `
                 );
 
@@ -96,7 +96,7 @@ export function OverhangHeatmapMaterial({
           uniform float uMinAngle;
           uniform float uMaxAngle;
           uniform vec3 uHeatmapColors[5];
-          varying vec3 vWorldNormalCustom;
+          varying vec3 vWorldPosCustom;
         ` + shader.fragmentShader;
 
                 shader.fragmentShader = shader.fragmentShader.replace(
@@ -104,10 +104,17 @@ export function OverhangHeatmapMaterial({
                     `
             #include <color_fragment>
 
+            // Geometric world-space face normal from screen-space derivatives so
+            // indexed meshes render sharp per-facet overhang angles with no normal buffer.
+            vec3 rawWorldN = cross(dFdx(vWorldPosCustom), dFdy(vWorldPosCustom));
+            float rawWorldNLen = length(rawWorldN);
+            vec3 worldN = rawWorldNLen > 1e-12 ? (rawWorldN / rawWorldNLen) : vec3(0.0, 0.0, 1.0);
+            if (!gl_FrontFacing) worldN = -worldN;
+
             // Surface inclination from horizontal, 0° = flat underside (most overhang),
             // 90° = vertical wall (no overhang). Surfaces facing up (nz > 0) clamp to
             // 90° and therefore land in the safe/grey band.
-            float overhangDeg = degrees(acos(clamp(-vWorldNormalCustom.z, 0.0, 1.0)));
+            float overhangDeg = degrees(acos(clamp(-worldN.z, 0.0, 1.0)));
             float t = clamp((overhangDeg - uMinAngle) / max(uMaxAngle - uMinAngle, 0.001), 0.0, 1.0);
 
             // Custom heatmap colors
