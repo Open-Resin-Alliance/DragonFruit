@@ -22,9 +22,8 @@ const SOUP_BYTES_PER_TRIANGLE = 9 * Float32Array.BYTES_PER_ELEMENT * 2;
  * geometry) and the bodies are unpacked here with the platform's
  * `DecompressionStream`, off the main thread.
  */
-const MESH_RESPONSE_VERSION_SOUP = 2;
-const MESH_RESPONSE_VERSION_INDEXED = 3;
-/** Bodies unpacked at once: kept bounded so multi-body scenes do not spike heap. */
+const MESH_RESPONSE_VERSION = 2;
+/** Bodies unpacked at once: 52-129 MB each once inflated, so not all at once. */
 const BODY_INFLATE_CONCURRENCY = 4;
 
 /** One decoded native payload: its bodies plus the header facts the STL preview
@@ -50,9 +49,16 @@ export type DecodedMesh = {
 };
 
 /**
- * Unpack one version-2 soup body into a non-indexed geometry.
+ * Unpack one packed body into its geometry.
+ *
+ * The stream is the platform's own decompressor — genuinely off the main thread,
+ * unlike `fflate`'s pool, which waits on its workers through `SharedArrayBuffer` in
+ * a `crossOriginIsolated` webview and blocks the thread it should free. Its output
+ * is a fresh `ArrayBuffer`, so the geometry can view it directly rather than copying
+ * the soup again. `inflateZlib` falls back to a synchronous inflate on webviews
+ * older than Safari 16.4.
  */
-async function decodeSoupBody(packed: Uint8Array, triangleCount: number): Promise<THREE.BufferGeometry> {
+async function decodeBody(packed: Uint8Array, triangleCount: number): Promise<THREE.BufferGeometry> {
   const soup = await inflateZlib(packed);
   const expected = triangleCount * SOUP_BYTES_PER_TRIANGLE;
   if (soup.byteLength !== expected) {
@@ -78,49 +84,12 @@ async function decodeSoupBody(packed: Uint8Array, triangleCount: number): Promis
 }
 
 /**
- * Unpack one version-3 indexed body into an indexed geometry:
- *   `[vertexCount: u32 LE][positions: V * 3 f32 LE][indices: T * 3 u16|u32 LE]`
- *
- * The inflated `Uint8Array` owns a fresh 4-byte-aligned `ArrayBuffer`, so
- * `position` and `index` view it directly without an extra copy.
- */
-async function decodeIndexedBody(packed: Uint8Array, triangleCount: number): Promise<THREE.BufferGeometry> {
-  const raw = await inflateZlib(packed);
-  if (raw.byteLength < 4) {
-    throw new Error('Native mesh loader returned a truncated indexed DFMX body.');
-  }
-  const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-  const vertexCount = view.getUint32(0, true);
-  const useU16 = vertexCount <= 0xffff;
-  const indexStride = useU16 ? 2 : 4;
-  const posByteLength = vertexCount * 12;
-  const indexCount = triangleCount * 3;
-  const expected = 4 + posByteLength + indexCount * indexStride;
-  if (raw.byteLength !== expected) {
-    throw new Error(
-      `Native mesh loader returned an indexed body that unpacks to ${raw.byteLength} bytes, ` +
-      `not the ${expected} expected for ${vertexCount} vertices and ${triangleCount} triangles.`,
-    );
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  const positions = new Float32Array(raw.buffer, raw.byteOffset + 4, vertexCount * 3);
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
-  const indexOffset = raw.byteOffset + 4 + posByteLength;
-  const indices = useU16
-    ? new Uint16Array(raw.buffer, indexOffset, indexCount)
-    : new Uint32Array(raw.buffer, indexOffset, indexCount);
-  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-  return geometry;
-}
-
-/**
  * Decode a DFMX payload into one geometry per body.
  *
- * Supports version 3 (indexed bodies, current) and version 2 (legacy non-indexed
- * soup bodies). Bodies are unpacked four at a time with the platform's
- * `DecompressionStream` off the main thread.
+ * Each body arrives packed (version 2) and is unpacked four at a time; the packed
+ * bytes are views into the payload buffer, which belongs to this call — Tauri's IPC
+ * is a `fetch` against a custom-protocol URL (`tauri`'s `ipc-protocol.js`), so
+ * `response.arrayBuffer()` hands back a buffer nothing reuses or shortens.
  */
 export async function decodeDfmx(payload: Uint8Array | ArrayBuffer): Promise<DecodedMesh> {
   const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
@@ -134,8 +103,7 @@ export async function decodeDfmx(payload: Uint8Array | ArrayBuffer): Promise<Dec
   if (magic !== 'DFMX') {
     throw new Error(`Native mesh loader returned an unsupported payload (${magic}).`);
   }
-  const version = header.getUint32(4, true);
-  if (version !== MESH_RESPONSE_VERSION_INDEXED && version !== MESH_RESPONSE_VERSION_SOUP) {
+  if (header.getUint32(4, true) !== MESH_RESPONSE_VERSION) {
     throw new Error('Native mesh loader returned an unsupported DFMX version.');
   }
 
@@ -156,7 +124,6 @@ export async function decodeDfmx(payload: Uint8Array | ArrayBuffer): Promise<Dec
   }
 
   const bodies = new Array<THREE.BufferGeometry>(bodyCount);
-  const decodeBody = version === MESH_RESPONSE_VERSION_INDEXED ? decodeIndexedBody : decodeSoupBody;
   await runWithConcurrency(table, BODY_INFLATE_CONCURRENCY, async (body) => {
     bodies[body.index] = await decodeBody(body.packed, body.triangleCount);
   });

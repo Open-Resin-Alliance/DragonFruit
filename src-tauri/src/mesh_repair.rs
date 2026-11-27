@@ -1630,14 +1630,15 @@ fn classify_single_body(mesh: IndexedMesh) -> (Vec<IndexedMesh>, Option<String>)
 }
 
 /// DragonFruit Mesh Transfer (DFMX) Binary IPC Protocol Specification:
-/// Format Version: 3
+/// Format Version: 1
 ///
 /// The one wire format a native load returns, for a single body (STL, OBJ) or
-/// several (a 3MF). Versioned, so encoding changes do not break readers.
+/// several (a 3MF). Versioned, so an encoding flag (quantized positions,
+/// compression) can be added without breaking readers.
 ///
 /// Header (32 bytes):
 ///   0 ..  3 : ASCII Magic "DFMX" (0x44464D58)
-///   4 ..  7 : Version u32 LE (currently 3)
+///   4 ..  7 : Version u32 LE (currently 1)
 ///   8 .. 11 : Flags u32 LE (Bit 0: IS_PREVIEW)
 ///  12 .. 15 : Body count u32 LE
 ///  16 .. 19 : Original input triangle count u32 LE
@@ -1651,11 +1652,9 @@ fn classify_single_body(mesh: IndexedMesh) -> (Vec<IndexedMesh>, Option<String>)
 ///   0 .. 3 : Triangle count u32 LE
 ///   4 .. 7 : Length of this body's packed stream u32 LE
 ///
-/// Payload: each body in table order, as a zlib stream. A version-3 body unpacks to:
-///   - `vertex_count: u32 LE`
-///   - `positions: vertex_count * 3 f32 LE`
-///   - `indices: triangle_count * 3` (`u16 LE` when `vertex_count <= u16::MAX`, else `u32 LE`)
-/// The metadata JSON, when present, is the last `metadataLength` bytes of the payload
+/// Payload: each body in table order, as a zlib stream. A body unpacks to its
+/// soup: positions then normals, 9 f32 per triangle each (72 bytes/triangle). The
+/// metadata JSON, when present, is the last `metadataLength` bytes of the payload
 /// — a reader that does not know the key reads the bodies and ignores the tail.
 /// The meshes a load (or a display-mesh refine) just built, waiting for the AO bake
 /// that needs one.
@@ -1742,16 +1741,6 @@ pub(crate) fn mesh_for_bake(
     token: u32,
     expected_corners: usize,
 ) -> Result<std::sync::Arc<IndexedMesh>, String> {
-    mesh_for_bake_checked(token, expected_corners, 0)
-}
-
-/// As [`mesh_for_bake`], additionally verifying the unique vertex count when
-/// the caller holds an indexed geometry and requests per-vertex values.
-pub(crate) fn mesh_for_bake_checked(
-    token: u32,
-    expected_corners: usize,
-    expected_vertices: usize,
-) -> Result<std::sync::Arc<IndexedMesh>, String> {
     let mesh = registry::get(token)
         .ok_or_else(|| format!("mesh token {token} is no longer registered"))?;
     if expected_corners != 0 && mesh.triangles.len() * 3 != expected_corners {
@@ -1760,29 +1749,26 @@ pub(crate) fn mesh_for_bake_checked(
             mesh.triangles.len() * 3
         ));
     }
-    if expected_vertices != 0 && mesh.positions.len() != expected_vertices {
-        return Err(format!(
-            "mesh token {token} has {} vertices, the caller has {expected_vertices}",
-            mesh.positions.len()
-        ));
-    }
     Ok(mesh)
 }
 
 const MESH_RESPONSE_MAGIC: &[u8; 4] = b"DFMX";
-/// Version 3: each body is a zlib stream holding an indexed mesh:
-///   `[vertex_count: u32 LE][positions: V * 3 f32 LE][indices: T * 3 u16|u32 LE]`
+/// Version 2: each body is a zlib stream holding that body's soup.
 ///
-/// Indices are `u16` when `vertex_count <= u16::MAX` and `u32` otherwise.
-/// Keeping the loader's `IndexedMesh` indexed across the wire eliminates the
-/// 6x vertex duplication and the 36 B/tri per-corner normal block (the
-/// viewport shades flat geometric facets directly on the GPU), cutting both
-/// IPC payload size and frontend CPU/GPU memory by ~4-5x.
-const MESH_RESPONSE_VERSION: u32 = 3;
+/// Version 1 wrote the soup raw, and a soup is 72 bytes a triangle — 910 MB across
+/// the 15-model scene this is measured on, which is the largest single cost in a
+/// scene load. Tauri's IPC does 189 MB/s with thirteen transfers in flight but only
+/// ~75 MB/s effective during an import, because the transfer and the single main
+/// thread that receives and prepares each model take turns; the volume is what the
+/// load pays. The same soup deflates 2.7x at zlib level 1 (65.8 -> 24.2 MB on an
+/// 869k-triangle model), and the renderer inflates it with the platform's
+/// `DecompressionStream` — off the main thread, unlike `fflate`'s pool, which waits
+/// on its workers through SharedArrayBuffer and blocks the thread it should free.
+const MESH_RESPONSE_VERSION: u32 = 2;
 const MESH_RESPONSE_HEADER_BYTES: usize = 32;
 const MESH_RESPONSE_BODY_ENTRY_BYTES: usize = 8;
 const MESH_RESPONSE_FLAG_PREVIEW: u32 = 1;
-/// Unindexed positions+normals soup baseline (used only for compression-ratio logging).
+/// Positions plus normals, both 9 f32 per triangle.
 const SOUP_BYTES_PER_TRIANGLE: usize = 9 * std::mem::size_of::<f32>() * 2;
 
 pub(crate) fn encode_mesh_bodies(
@@ -1846,7 +1832,7 @@ pub(crate) fn encode_mesh_bodies(
     debug_assert_eq!(result.len(), response_len);
 
     log::info!(
-        "[load_mesh] {} bodies, {} triangles, {:.1} MB payload ({:.1}x vs soup), {} B metadata",
+        "[load_mesh] {} bodies, {} triangles, {:.1} MB payload ({:.1}x deflated), {} B metadata",
         bodies.len(),
         total_triangles,
         (response_len - MESH_RESPONSE_HEADER_BYTES) as f64 / 1_000_000.0,
@@ -1856,28 +1842,17 @@ pub(crate) fn encode_mesh_bodies(
     Ok(result)
 }
 
-/// Unpacked byte size of a version-3 indexed DFMX body.
-fn indexed_body_byte_len(vertex_count: usize, triangle_count: usize) -> Option<usize> {
-    let index_stride = if vertex_count <= u16::MAX as usize { 2usize } else { 4usize };
-    let pos_bytes = vertex_count.checked_mul(12)?;
-    let idx_bytes = triangle_count.checked_mul(3)?.checked_mul(index_stride)?;
-    4usize.checked_add(pos_bytes)?.checked_add(idx_bytes)
-}
-
-/// One indexed body, zlib-packed at the fastest level.
+/// One body's soup, zlib-packed at the fastest level.
+///
+/// Level 1 rather than the default: the encoder runs per model on the import's
+/// critical path, and on this data the difference is 2.7x against 3.6x for six
+/// times the CPU (36 ms against 226 ms on an 869k-triangle model, measured with
+/// Node's zlib on a real soup).
 fn encode_body_deflated(body: &IndexedMesh) -> Result<Vec<u8>, String> {
     use std::io::Write;
 
-    let vertex_count = body.positions.len();
-    let vertex_count_u32 = u32::try_from(vertex_count)
-        .map_err(|_| format!("DFMX body vertex count exceeds u32: {vertex_count}"))?;
-    let raw_len = indexed_body_byte_len(vertex_count, body.triangles.len())
-        .ok_or_else(|| "DFMX indexed body size overflow".to_string())?;
-    let mut raw = Vec::new();
-    raw.try_reserve_exact(raw_len)
-        .map_err(|_| format!("Not enough memory to encode DFMX body ({raw_len} bytes)"))?;
-    write_indexed_body(body, vertex_count_u32, &mut raw);
-
+    let mut raw = vec![0u8; body.triangles.len() * SOUP_BYTES_PER_TRIANGLE];
+    write_soup(body, &mut raw);
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
     encoder
         .write_all(&raw)
@@ -1887,30 +1862,45 @@ fn encode_body_deflated(body: &IndexedMesh) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("DFMX body compression failed: {e}"))
 }
 
-/// Write an indexed body into `out`:
-///   - `vertex_count: u32 LE`
-///   - `positions: vertex_count * 3 f32 LE`
-///   - `indices: triangle_count * 3 u16 LE` (when `vertex_count <= u16::MAX`) or `u32 LE`
-fn write_indexed_body(mesh: &IndexedMesh, vertex_count: u32, out: &mut Vec<u8>) {
-    out.extend_from_slice(&vertex_count.to_le_bytes());
-    for v in &mesh.positions {
-        out.extend_from_slice(&v.x.to_le_bytes());
-        out.extend_from_slice(&v.y.to_le_bytes());
-        out.extend_from_slice(&v.z.to_le_bytes());
-    }
-    if mesh.positions.len() <= u16::MAX as usize {
-        for tri in &mesh.triangles {
-            out.extend_from_slice(&(tri[0] as u16).to_le_bytes());
-            out.extend_from_slice(&(tri[1] as u16).to_le_bytes());
-            out.extend_from_slice(&(tri[2] as u16).to_le_bytes());
-        }
-    } else {
-        for tri in &mesh.triangles {
-            out.extend_from_slice(&tri[0].to_le_bytes());
-            out.extend_from_slice(&tri[1].to_le_bytes());
-            out.extend_from_slice(&tri[2].to_le_bytes());
-        }
-    }
+/// Write a mesh's soup — positions (9 f32 per triangle), then one normal per
+/// corner — into `out`, which must be exactly `triangleCount * 72` bytes.
+///
+/// Every corner carries its own triangle's geometric normal, so the viewport
+/// shades the facets the file describes (see `dragonfruit_mesh_core::normals`).
+/// The geometry a repair pass hands back gets the same normals from the
+/// renderer's per-face recompute, so repairing a model no longer changes how it
+/// looks.
+fn write_soup(mesh: &IndexedMesh, out: &mut [u8]) {
+    let positions_len = mesh.triangles.len() * 9 * std::mem::size_of::<f32>();
+    let (position_output, normal_output) = out.split_at_mut(positions_len);
+    position_output
+        .par_chunks_mut(9 * std::mem::size_of::<f32>())
+        .zip(mesh.triangles.par_iter())
+        .for_each(|(output, triangle)| {
+            let vertices = [
+                mesh.positions[triangle[0] as usize],
+                mesh.positions[triangle[1] as usize],
+                mesh.positions[triangle[2] as usize],
+            ];
+            for (vertex_output, vertex) in output.chunks_exact_mut(12).zip(vertices) {
+                vertex_output[0..4].copy_from_slice(&vertex.x.to_le_bytes());
+                vertex_output[4..8].copy_from_slice(&vertex.y.to_le_bytes());
+                vertex_output[8..12].copy_from_slice(&vertex.z.to_le_bytes());
+            }
+        });
+    // One face normal per triangle, written onto its three corners: see
+    // `dragonfruit_mesh_core::normals` for why the welded average is gone.
+    let normals = dragonfruit_mesh_core::normals::face_normals(mesh);
+    normal_output
+        .par_chunks_mut(9 * std::mem::size_of::<f32>())
+        .zip(normals.par_iter())
+        .for_each(|(output, normal)| {
+            for normal_output in output.chunks_exact_mut(12) {
+                normal_output[0..4].copy_from_slice(&normal.x.to_le_bytes());
+                normal_output[4..8].copy_from_slice(&normal.y.to_le_bytes());
+                normal_output[8..12].copy_from_slice(&normal.z.to_le_bytes());
+            }
+        });
 }
 
 fn read_binary_stl_vertex(record: &[u8; 50], offset: usize) -> Vec3 {
@@ -2356,8 +2346,10 @@ fn replace_staging_with_mesh(mesh: &IndexedMesh) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// Parse the first body of an encoded `DFMX` v3 response into `(positions, triangles)`.
-    fn decode_indexed_body(bytes: &[u8]) -> (Vec<[f32; 3]>, Vec<[u32; 3]>) {
+    /// Parse the first body of an encoded `DFMX` response into (positions,
+    /// normals) as f32 triples. These fixtures carry one body, so the soup
+    /// starts right after the header and its single table entry.
+    fn decode_positions_and_normals(bytes: &[u8]) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
         use std::io::Read;
 
         let entry = MESH_RESPONSE_HEADER_BYTES;
@@ -2372,53 +2364,30 @@ mod tests {
             u32::from_le_bytes(bytes[entry + 4..entry + 8].try_into().unwrap()) as usize;
         let start = entry + MESH_RESPONSE_BODY_ENTRY_BYTES;
 
-        let mut raw = Vec::new();
+        // Bodies ship packed (version 2): unpack the one this fixture carries.
+        let mut soup = Vec::with_capacity(tri_count * SOUP_BYTES_PER_TRIANGLE);
         flate2::read::ZlibDecoder::new(&bytes[start..start + packed_len])
-            .read_to_end(&mut raw)
+            .read_to_end(&mut soup)
             .expect("the body must inflate");
-        let vertex_count = u32::from_le_bytes(raw[0..4].try_into().unwrap()) as usize;
-        let expected_len = indexed_body_byte_len(vertex_count, tri_count).unwrap();
-        assert_eq!(raw.len(), expected_len, "indexed body byte length");
+        assert_eq!(soup.len(), tri_count * SOUP_BYTES_PER_TRIANGLE, "soup size");
 
-        let positions = (0..vertex_count)
-            .map(|v| {
-                let at = 4 + v * 12;
-                [
-                    f32::from_le_bytes(raw[at..at + 4].try_into().unwrap()),
-                    f32::from_le_bytes(raw[at + 4..at + 8].try_into().unwrap()),
-                    f32::from_le_bytes(raw[at + 8..at + 12].try_into().unwrap()),
-                ]
-            })
-            .collect();
-
-        let idx_offset = 4 + vertex_count * 12;
-        let triangles = if vertex_count <= u16::MAX as usize {
-            (0..tri_count)
-                .map(|t| {
-                    let at = idx_offset + t * 6;
+        let floats = |offset: usize| -> Vec<[f32; 3]> {
+            (0..tri_count * 3)
+                .map(|v| {
+                    let at = offset + v * 12;
                     [
-                        u16::from_le_bytes(raw[at..at + 2].try_into().unwrap()) as u32,
-                        u16::from_le_bytes(raw[at + 2..at + 4].try_into().unwrap()) as u32,
-                        u16::from_le_bytes(raw[at + 4..at + 6].try_into().unwrap()) as u32,
-                    ]
-                })
-                .collect()
-        } else {
-            (0..tri_count)
-                .map(|t| {
-                    let at = idx_offset + t * 12;
-                    [
-                        u32::from_le_bytes(raw[at..at + 4].try_into().unwrap()),
-                        u32::from_le_bytes(raw[at + 4..at + 8].try_into().unwrap()),
-                        u32::from_le_bytes(raw[at + 8..at + 12].try_into().unwrap()),
+                        f32::from_le_bytes(soup[at..at + 4].try_into().unwrap()),
+                        f32::from_le_bytes(soup[at + 4..at + 8].try_into().unwrap()),
+                        f32::from_le_bytes(soup[at + 8..at + 12].try_into().unwrap()),
                     ]
                 })
                 .collect()
         };
-
-        (positions, triangles)
+        (floats(0), floats(tri_count * 36))
     }
 
+    /// A coarsely triangulated cylinder: every adjacent face pair differs by enough
+    /// that a flat-shaded import is unmistakable.
     fn cylinder_mesh(sides: usize) -> IndexedMesh {
         let mut positions = Vec::new();
         for z in [0.0f32, 1.0] {
@@ -2438,52 +2407,137 @@ mod tests {
         IndexedMesh { positions, triangles }
     }
 
+    /// The soup carries each triangle's own geometric normal, not an average.
+    ///
+    /// The viewport shades the facets the file describes, so a position two faces
+    /// meet at is shaded by two normals. It used to be one: the encoder averaged
+    /// the faces incident to a welded vertex, and later only those within a crease
+    /// angle of the corner's own. That painted a smooth surface over the
+    /// triangulation — a scan's facets and an imported edge both came out soft —
+    /// and it disagreed with the geometry a repair pass hands back, which the
+    /// renderer recomputes per face, so the same model changed its shading the
+    /// moment it was repaired. `face_normals` owns the rule; this pins what the
+    /// payload ships.
     #[test]
-    fn dfmx_v3_preserves_indexed_vertices_and_triangles_bit_exactly() {
-        let mesh = cylinder_mesh(16);
-        let bytes = encode_mesh_bodies(
-            std::slice::from_ref(&mesh),
-            mesh.triangles.len() as u32,
-            false,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-        let (positions, triangles) = decode_indexed_body(&bytes);
+    fn imported_normals_are_each_face_own_geometric_normal() {
+        let sides = 8;
+        let mesh = cylinder_mesh(sides);
+        let bytes = encode_mesh_bodies(std::slice::from_ref(&mesh), mesh.triangles.len() as u32, false, None, None, None)
+            .unwrap();
+        let (positions, normals) = decode_positions_and_normals(&bytes);
 
-        assert_eq!(positions.len(), mesh.positions.len());
-        assert_eq!(triangles, mesh.triangles);
-        for (decoded, original) in positions.iter().zip(&mesh.positions) {
-            assert_eq!(decoded[0].to_bits(), original.x.to_bits());
-            assert_eq!(decoded[1].to_bits(), original.y.to_bits());
-            assert_eq!(decoded[2].to_bits(), original.z.to_bits());
+        // Read back from the payload's own numbers: every corner of a triangle
+        // carries that triangle's geometric normal, right-handed with its winding.
+        for tri in 0..mesh.triangles.len() {
+            let a = positions[tri * 3];
+            let b = positions[tri * 3 + 1];
+            let c = positions[tri * 3 + 2];
+            let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let cross = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            let length = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
+            assert!(length > 1e-6, "the fixture must not be degenerate");
+            for corner in 0..3 {
+                for axis in 0..3 {
+                    let shipped = normals[tri * 3 + corner][axis];
+                    let expected = cross[axis] / length;
+                    assert!(
+                        (shipped - expected).abs() < 1e-4,
+                        "face {tri} corner {corner} axis {axis}: shipped {shipped}, expected \
+                         {expected} - the payload is not the face's own normal"
+                    );
+                }
+            }
         }
+
+        // A shared position is therefore shaded by more than one normal.
+        // Indexed by position, which is what the consumer sees, so this does not
+        // depend on the builder's corner ordering.
+        let mut shared: std::collections::HashMap<[i64; 3], Vec<[f32; 3]>> =
+            std::collections::HashMap::new();
+        for (corner, position) in positions.iter().enumerate() {
+            let key = [
+                (position[0] * 4096.0).round() as i64,
+                (position[1] * 4096.0).round() as i64,
+                (position[2] * 4096.0).round() as i64,
+            ];
+            shared.entry(key).or_default().push(normals[corner]);
+        }
+        let mut faceted = 0usize;
+        for (key, list) in &shared {
+            if list.len() < 2 {
+                continue;
+            }
+            let differs = list.iter().any(|normal| {
+                (0..3).any(|axis| (normal[axis] - list[0][axis]).abs() > 1e-6)
+            });
+            assert!(
+                differs,
+                "position {key:?} is shaded by one averaged normal ({:?}) - the mesh will render \
+                 smooth over its own facets",
+                list[0]
+            );
+            faceted += 1;
+        }
+        assert!(faceted >= sides, "the fixture must have shared vertices, got {faceted}");
     }
 
+    /// The fold angle decides nothing: no two faces are averaged, however shallow.
+    ///
+    /// The crease rule this replaces averaged a shallow fold and split a hard one,
+    /// so a scanned surface came out smooth and a right angle crisp — the angle is
+    /// a property of the model's shape, not of what its shading should show. The
+    /// second half of that rule is also what a repair pass disagreed with: it
+    /// recomputes normals per face, so repairing a model changed how it looked.
     #[test]
-    fn dfmx_v3_switches_to_u32_indices_above_u16_vertex_limit() {
-        let vertex_count = (u16::MAX as usize) + 5;
-        let positions: Vec<Vec3> = (0..vertex_count)
-            .map(|i| Vec3::new(i as f32, 0.0, 0.0))
-            .collect();
-        let last = (vertex_count - 1) as u32;
-        let mesh = IndexedMesh {
-            positions,
-            triangles: vec![[0, 1, last]],
+    fn a_fold_keeps_its_two_normals_at_any_angle() {
+        // Two quads sharing the edge x = 0, folded by `fold_deg` about it: a
+        // floor to the left, a wall rising to the right at that angle. The two
+        // crease vertices are shared, which is what the welding produces on a
+        // model where an organic shape meets a base.
+        let folded = |fold_deg: f32| -> IndexedMesh {
+            let angle = fold_deg.to_radians();
+            let (sin, cos) = angle.sin_cos();
+            let positions = vec![
+                Vec3::new(0.0, 0.0, 0.0),  // 0: crease
+                Vec3::new(0.0, 1.0, 0.0),  // 1: crease
+                Vec3::new(-1.0, 0.0, 0.0), // 2: floor
+                Vec3::new(-1.0, 1.0, 0.0), // 3: floor
+                Vec3::new(0.0, 1.0, 0.0),  // 4: wall
+                Vec3::new(0.0, 0.0, 0.0),  // 5: wall
+            ];
+            let mut positions = positions;
+            positions[4] = Vec3::new(cos, 1.0, sin);
+            positions[5] = Vec3::new(cos, 0.0, sin);
+            IndexedMesh {
+                positions,
+                triangles: vec![[0, 2, 3], [0, 3, 1], [1, 4, 5], [1, 5, 0]],
+            }
         };
-        let bytes = encode_mesh_bodies(
-            std::slice::from_ref(&mesh),
-            1,
-            false,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-        let (decoded_positions, decoded_triangles) = decode_indexed_body(&bytes);
-        assert_eq!(decoded_positions.len(), vertex_count);
-        assert_eq!(decoded_triangles, vec![[0, 1, last]]);
+
+        // The two faces at the shared vertices keep their own normals at either
+        // angle: up for the floor, turned by the fold for the wall.
+        for fold_deg in [20.0f32, 90.0] {
+            let mesh = folded(fold_deg);
+            let bytes = encode_mesh_bodies(std::slice::from_ref(&mesh), mesh.triangles.len() as u32, false, None, None, None)
+                .unwrap();
+            let (_, normals) = decode_positions_and_normals(&bytes);
+            let floor_normal = normals[0];
+            let fold_normal = normals[2 * 3];
+            assert!(
+                floor_normal[2].abs() > 0.9,
+                "the floor face should keep an upward normal, got {floor_normal:?}"
+            );
+            let dot: f32 = (0..3).map(|i| floor_normal[i] * fold_normal[i]).sum();
+            assert!(
+                dot < 0.999,
+                "a {fold_deg} degree fold must not be averaged into one normal, got dot {dot}"
+            );
+        }
     }
 
     #[test]
@@ -2698,14 +2752,6 @@ mod tests {
             mesh_for_bake(token, 3).expect("matching corners").triangles.len(),
             1
         );
-        assert_eq!(
-            mesh_for_bake_checked(token, 3, 3)
-                .expect("matching corners and vertices")
-                .positions
-                .len(),
-            3
-        );
-        assert!(mesh_for_bake_checked(token, 3, 4).is_err());
         // A geometry that has grown or been replaced since: refused, so the caller
         // falls back to sending the soup rather than taking a stale field.
         assert!(mesh_for_bake(token, 9).is_err());
@@ -2823,23 +2869,23 @@ mod tests {
             MESH_RESPONSE_HEADER_BYTES + 2 * MESH_RESPONSE_BODY_ENTRY_BYTES + packed0 + packed1
         );
 
-        // Bodies are independent streams, each unpacking to its own indexed body.
+        // Bodies are independent streams, each unpacking to its own soup: body 1's
+        // vertices are the origin it was built with, so a reader that shared one
+        // stream between them would see body 0's data here.
         use std::io::Read;
         let first = MESH_RESPONSE_HEADER_BYTES + 2 * MESH_RESPONSE_BODY_ENTRY_BYTES;
-        let mut raw0 = Vec::new();
+        let mut soup0 = Vec::new();
         flate2::read::ZlibDecoder::new(&bytes[first..first + packed0])
-            .read_to_end(&mut raw0)
+            .read_to_end(&mut soup0)
             .unwrap();
-        let mut raw1 = Vec::new();
+        let mut soup1 = Vec::new();
         flate2::read::ZlibDecoder::new(&bytes[first + packed0..first + packed0 + packed1])
-            .read_to_end(&mut raw1)
+            .read_to_end(&mut soup1)
             .unwrap();
-        assert_eq!(raw0.len(), indexed_body_byte_len(3, 1).unwrap());
-        assert_eq!(raw1.len(), indexed_body_byte_len(4, 2).unwrap());
-        assert_eq!(u32::from_le_bytes(raw0[0..4].try_into().unwrap()), 3);
-        assert_eq!(f32::from_le_bytes(raw0[16..20].try_into().unwrap()), 1.0);
-        assert_eq!(u32::from_le_bytes(raw1[0..4].try_into().unwrap()), 4);
-        assert!(raw1[4..4 + 4 * 12].iter().all(|byte| *byte == 0), "body 1 positions are at origin");
+        assert_eq!(soup0.len(), SOUP_BYTES_PER_TRIANGLE);
+        assert_eq!(soup1.len(), 2 * SOUP_BYTES_PER_TRIANGLE);
+        assert_eq!(f32::from_le_bytes(soup0[12..16].try_into().unwrap()), 1.0);
+        assert!(soup1.iter().all(|byte| *byte == 0), "body 1 is the degenerate fixture");
     }
 }
 

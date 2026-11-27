@@ -13,7 +13,6 @@ import type { VoxlMeshRange } from '@/features/scene/voxl/types';
 import { accelerateGeometry } from '@/utils/bvh';
 import { logToNativeFile } from '@/utils/nativeLog';
 import { decodeDfmx, type DecodedMesh } from '@/utils/dfmx';
-import { compactGeometryToIndexed, mergeGeometriesPreservingIndex } from '@/utils/compactIndexedGeometry';
 import { computeFlatteningPlanes, type FlatteningPlane } from '@/features/placeOnFace/logic/computeFlatteningPlanes';
 import {
   analyzeFromGeometry,
@@ -322,43 +321,6 @@ function stripEmbeddedColorAttributes(geometry: THREE.BufferGeometry): void {
  * Returns null when the boundary does not address this geometry — out of
  * range, or the whole mesh is one section.
  */
-function extractIndexedSection(
-  posArray: Float32Array,
-  vertexCount: number,
-  indices: ArrayLike<number>,
-  cornerStart: number,
-  cornerEnd: number,
-): THREE.BufferGeometry {
-  const cornerCount = cornerEnd - cornerStart;
-  const remap = new Int32Array(vertexCount).fill(-1);
-  let nextId = 0;
-  for (let i = cornerStart; i < cornerEnd; i += 1) {
-    const v = Number(indices[i]);
-    if (remap[v] === -1) {
-      remap[v] = nextId;
-      nextId += 1;
-    }
-  }
-  const positions = new Float32Array(nextId * 3);
-  for (let v = 0; v < vertexCount; v += 1) {
-    const dst = remap[v];
-    if (dst === -1) continue;
-    const so = v * 3;
-    const doff = dst * 3;
-    positions[doff] = posArray[so];
-    positions[doff + 1] = posArray[so + 1];
-    positions[doff + 2] = posArray[so + 2];
-  }
-  const sectionIndices = nextId <= 0xffff ? new Uint16Array(cornerCount) : new Uint32Array(cornerCount);
-  for (let i = 0; i < cornerCount; i += 1) {
-    sectionIndices[i] = remap[Number(indices[cornerStart + i])];
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geo.setIndex(new THREE.BufferAttribute(sectionIndices, 1));
-  return geo;
-}
-
 function buildSectionGeometries(
   geometry: THREE.BufferGeometry,
   modelTriangleCount: number,
@@ -366,15 +328,6 @@ function buildSectionGeometries(
   const posAttr = geometry.getAttribute('position') as THREE.BufferAttribute | null;
   if (!posAttr) return null;
   const allPos = posAttr.array as Float32Array;
-  const index = geometry.getIndex();
-  if (index) {
-    const modelCornerEnd = modelTriangleCount * 3;
-    if (modelCornerEnd >= index.count) return null;
-    const supportGeo = extractIndexedSection(allPos, posAttr.count, index.array, modelCornerEnd, index.count);
-    const modelGeo = extractIndexedSection(allPos, posAttr.count, index.array, 0, modelCornerEnd);
-    return { supportSectionGeometry: supportGeo, modelSectionGeometry: modelGeo };
-  }
-
   const modelFloatEnd = modelTriangleCount * 9; // 3 vertices × 3 floats per tri
   if (modelFloatEnd >= allPos.length) return null;
 
@@ -675,15 +628,18 @@ export async function processGeometry(bufferGeometry: THREE.BufferGeometry, opti
   // Yield to let the loading indicator repaint before each heavy synchronous op
   await new Promise<void>(r => setTimeout(r, 0));
 
-  // Model materials render with `flatShading`, deriving exact geometric face
-  // normals on the GPU without needing a per-vertex normal buffer. Only compute
-  // normals for non-indexed geometries that still request them.
-  const isIndexed = geometry.getIndex() !== null;
-  if (!isIndexed && (!options._skipComputeNormals || nativeModifiedGeometry || !geometry.getAttribute('normal'))) {
+  // A geometry with no `normal` attribute at all must be given one, whatever the
+  // caller asked for: `_skipComputeNormals` means "the loader already computed
+  // them", and a native repair invalidates that promise by rewriting the
+  // positions and index and dropping the stale normals for the caller to
+  // recompute. Without this the repaired geometry kept no normals, so it shaded
+  // from a zeroed attribute — which reads as garbage on exactly the imports that
+  // needed repair, and is easy to mistake for the baked occlusion being wrong.
+  if (!options._skipComputeNormals || nativeModifiedGeometry || !geometry.getAttribute('normal')) {
     console.log(`[${new Date().toISOString()}] [processGeometry] Computing Normals${nativeModifiedGeometry ? ' (geometry modified by native processing)' : geometry.getAttribute('normal') ? '' : ' (geometry has none)'}`);
     geometry.computeVertexNormals();
   } else {
-    console.log(`[${new Date().toISOString()}] [processGeometry] Skipping computeVertexNormals (${isIndexed ? 'indexed flat-shaded geometry' : 'normals already present'})`);
+    console.log(`[${new Date().toISOString()}] [processGeometry] Normals already present — skipping computeVertexNormals`);
   }
 
   console.log(`[${new Date().toISOString()}] [processGeometry] Computing BBox`);
@@ -959,7 +915,6 @@ export async function loadStlBinaryStreaming(fileUrl: string): Promise<THREE.Buf
       posIndex === positions.length ? positions : positions.slice(0, posIndex),
       3,
     ));
-    compactGeometryToIndexed(geometry);
 
     return geometry;
   } catch (error) {
@@ -1194,10 +1149,10 @@ export async function loadMeshGeometryFromRange(
     ),
   });
 }
-/** Merge native bodies into one geometry, preserving their relative positions and indexing. */
+/** Merge native bodies into one geometry, preserving their relative positions. */
 function mergeBodyGeometries(bodies: THREE.BufferGeometry[]): THREE.BufferGeometry {
   if (bodies.length === 1) return bodies[0];
-  const merged = mergeGeometriesPreservingIndex(bodies);
+  const merged = mergeGeometries(bodies, false);
   if (!merged) throw new Error('Failed to merge mesh bodies.');
   return merged;
 }
@@ -1255,7 +1210,6 @@ export async function loadStlGeometry(fileUrl: string, options: ProcessGeometryO
       fileUrl,
       (bufferGeometry) => {
         console.log(`[${new Date().toISOString()}] [loadStlGeometry] STLLoader finished. Took ${(performance.now() - startLoad).toFixed(2)}ms`);
-        compactGeometryToIndexed(bufferGeometry);
         processGeometry(bufferGeometry, options).then(resolve).catch(reject);
       },
       undefined,
@@ -1294,7 +1248,7 @@ export async function loadStlGeometryFromBuffer(buffer: Uint8Array, options: Pro
 
   const loader = new STLLoader();
   const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
-  const geometry = compactGeometryToIndexed(loader.parse(arrayBuffer));
+  const geometry = loader.parse(arrayBuffer);
 
   // No native decode here, so nothing produced a report to check the stored one
   // against — check it against what three parsed: the same rule the native paths

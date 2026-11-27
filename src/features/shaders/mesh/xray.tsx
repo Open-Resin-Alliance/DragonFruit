@@ -48,7 +48,6 @@ export function XrayMaterial({
       depthWrite={false}
       clippingPlanes={clippingPlanes}
       side={THREE.DoubleSide}
-      flatShading
     />
   );
 }

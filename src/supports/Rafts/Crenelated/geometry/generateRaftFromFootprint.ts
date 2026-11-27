@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { mergeGeometriesPreservingIndex } from '@/utils/compactIndexedGeometry';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { RaftSettings, SupportBaseCircle } from '../RaftTypes';
 import { generateChamferedBase } from './generateChamferedBase';
 import { generatePerimeterWall } from './generatePerimeterWall';
@@ -177,13 +177,21 @@ export function generateChamferedBaseFromPolygons(
 }
 
 function mergeWallParts(parts: THREE.BufferGeometry[]): THREE.BufferGeometry | null {
-  // The crenelated wall is indexed while ExtrudeGeometry is non-indexed and
-  // carries UVs; merge into a single indexed geometry keeping only position and
-  // normal instead of expanding indexed parts into a triangle soup.
-  return mergeGeometriesPreservingIndex(parts, {
-    ensureNormals: true,
-    keepAttributes: ['position', 'normal'],
-  });
+  // mergeGeometries refuses mixed indexed/non-indexed or mixed attribute sets:
+  // the crenelated wall is indexed, ExtrudeGeometry's is not, and only one of
+  // them carries UVs.
+  const prepared: THREE.BufferGeometry[] = [];
+  for (const geometry of parts) {
+    const nonIndexed = geometry.index ? geometry.toNonIndexed() : geometry.clone();
+    if (!nonIndexed) continue;
+    for (const name of Object.keys(nonIndexed.attributes)) {
+      if (name !== 'position' && name !== 'normal') nonIndexed.deleteAttribute(name);
+    }
+    if (!nonIndexed.getAttribute('normal')) nonIndexed.computeVertexNormals();
+    prepared.push(nonIndexed);
+  }
+  if (prepared.length === 0) return null;
+  return mergeGeometries(prepared, false);
 }
 
 /**

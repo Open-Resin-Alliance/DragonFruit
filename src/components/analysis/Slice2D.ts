@@ -67,18 +67,13 @@ function buildLoops(segments: Array<[THREE.Vector2, THREE.Vector2]>): THREE.Vect
 
 export function computeLoopsAtY(geometry: THREE.BufferGeometry, y: number): THREE.Vector2[][] {
   const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
-  const index = geometry.getIndex();
-  const cornerCount = index ? index.count : pos.count;
   const segments: Array<[THREE.Vector2, THREE.Vector2]> = [];
   // Nudge the slicing plane slightly upward to capture coplanar top faces as outlines
   const ySlice = y + 1e-5;
-  for (let i = 0; i + 2 < cornerCount; i += 3) {
-    const i0 = index ? index.getX(i) : i;
-    const i1 = index ? index.getX(i + 1) : i + 1;
-    const i2 = index ? index.getX(i + 2) : i + 2;
-    const v0 = new THREE.Vector3(pos.getX(i0), pos.getY(i0), pos.getZ(i0));
-    const v1 = new THREE.Vector3(pos.getX(i1), pos.getY(i1), pos.getZ(i1));
-    const v2 = new THREE.Vector3(pos.getX(i2), pos.getY(i2), pos.getZ(i2));
+  for (let i = 0; i < pos.count; i += 3) {
+    const v0 = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
+    const v1 = new THREE.Vector3(pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1));
+    const v2 = new THREE.Vector3(pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2));
     const vs = [v0, v1, v2];
     const above = vs.map(v => v.y >= ySlice + 10 * EPS);
     const below = vs.map(v => v.y <= ySlice - 10 * EPS);
@@ -99,8 +94,6 @@ export function computeLoopsAtY(geometry: THREE.BufferGeometry, y: number): THRE
 // Slice at Z height (for Z-up coordinate system)
 export function computeLoopsAtZ(geometry: THREE.BufferGeometry, z: number): THREE.Vector2[][] {
   const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
-  const index = geometry.getIndex();
-  const cornerCount = index ? index.count : pos.count;
   const segments: Array<[THREE.Vector2, THREE.Vector2]> = [];
   const zSlice = z + 1e-5;
 
@@ -112,13 +105,10 @@ export function computeLoopsAtZ(geometry: THREE.BufferGeometry, z: number): THRE
     return new THREE.Vector3(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), zSlice);
   }
 
-  for (let i = 0; i + 2 < cornerCount; i += 3) {
-    const i0 = index ? index.getX(i) : i;
-    const i1 = index ? index.getX(i + 1) : i + 1;
-    const i2 = index ? index.getX(i + 2) : i + 2;
-    const v0 = new THREE.Vector3(pos.getX(i0), pos.getY(i0), pos.getZ(i0));
-    const v1 = new THREE.Vector3(pos.getX(i1), pos.getY(i1), pos.getZ(i1));
-    const v2 = new THREE.Vector3(pos.getX(i2), pos.getY(i2), pos.getZ(i2));
+  for (let i = 0; i < pos.count; i += 3) {
+    const v0 = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
+    const v1 = new THREE.Vector3(pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1));
+    const v2 = new THREE.Vector3(pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2));
     const vs = [v0, v1, v2];
     const above = vs.map(v => v.z >= zSlice + 10 * EPS);
     const below = vs.map(v => v.z <= zSlice - 10 * EPS);
