@@ -6,12 +6,14 @@ import { MeshBVH } from 'three-mesh-bvh';
 
 import {
     buildLeafCapAnchor,
+    computeThinWallMaxSafePenetrationMm,
     extractSphericalCapDescriptor,
     orbitLeafCapAnchorTowardKnot,
     resolveKnotWeightedCapNormal,
     resolvePlacementNormalAndCap,
     synthesizePlacementNormal,
 } from '../PlacementLogic/PlacementNormalSynthesis';
+import { hasWarmSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
 
 type BvhGeometry = THREE.BufferGeometry & { boundsTree?: MeshBVH };
 
@@ -656,4 +658,165 @@ test('10. Upgrade B: 96°-125° sloped-cantilever +Y lip expands cap only in res
     const emptyCap = { ...combined.cap, downwardTriCount: 0 };
     assert.equal(buildLeafCapAnchor(lipPt, emptyCap, { x: 0, y: 0, z: 0.5 }), undefined);
     assert.ok(buildLeafCapAnchor(lipPt, emptyCap, { x: 0, y: 0, z: -1 }), 'downward baseNormal builds fallback anchor even when downwardTriCount === 0');
+});
+
+test('11. synthesizePlacementNormal populates thetaSpreadRad and isConcave on convex edge, concave L-valley, flat, and raw', () => {
+    const faceDown = new THREE.Vector3(0, 0, -1);
+
+    // (a) Flat face -> thetaSpreadRad === 0, isConcave === false
+    const cubeMesh = makeNonIndexedMesh(new THREE.BoxGeometry(10, 10, 10));
+    const flatRes = synthesizePlacementNormal(cubeMesh, new THREE.Vector3(0, 0, -5), faceDown, {
+        mode: 'bisector',
+        contactRadiusMm: 0.15,
+    });
+    assert.equal(flatRes.regime, 'flat');
+    assert.equal(flatRes.thetaSpreadRad, 0);
+    assert.equal(flatRes.isConcave, false);
+
+    // (b) 'raw' mode and missing-BVH fallback -> thetaSpreadRad === 0, isConcave === false
+    const rawRes = synthesizePlacementNormal(cubeMesh, new THREE.Vector3(5, 0, -5), faceDown, {
+        mode: 'raw',
+        contactRadiusMm: 0.15,
+    });
+    assert.equal(rawRes.regime, 'raw');
+    assert.equal(rawRes.thetaSpreadRad, 0);
+    assert.equal(rawRes.isConcave, false);
+
+    const noBvhMesh = makeNonIndexedMesh(new THREE.BoxGeometry(10, 10, 10), false);
+    const fallbackRes = synthesizePlacementNormal(noBvhMesh, new THREE.Vector3(5, 0, -5), faceDown, {
+        mode: 'bisector',
+        contactRadiusMm: 0.15,
+    });
+    assert.equal(fallbackRes.regime, 'raw');
+    assert.equal(fallbackRes.thetaSpreadRad, 0);
+    assert.equal(fallbackRes.isConcave, false);
+
+    // (c) 90° convex cube edge -> thetaSpreadRad ≈ 45° at crease, isConcave === false
+    const convexEdgeRes = synthesizePlacementNormal(cubeMesh, new THREE.Vector3(5, 0, -5), faceDown, {
+        mode: 'bisector',
+        contactRadiusMm: 0.15,
+    });
+    assert.equal(convexEdgeRes.regime, 'edge-bisector');
+    assert.equal(convexEdgeRes.isConcave, false);
+    assert.ok(
+        Math.abs((convexEdgeRes.thetaSpreadRad ?? -1) - Math.PI / 4) < 1e-4,
+        `expected 45° spread at 90° convex crease, got ${THREE.MathUtils.radToDeg(convexEdgeRes.thetaSpreadRad ?? 0)}°`,
+    );
+
+    // Away from crease (d=0.15, r=0.45 -> u=1/3, tau=4/9) radially attenuates thetaSpreadRad
+    const convexNearRes = synthesizePlacementNormal(cubeMesh, new THREE.Vector3(4.85, 0, -5), faceDown, {
+        mode: 'bisector',
+        contactRadiusMm: 0.15,
+    });
+    assert.equal(convexNearRes.isConcave, false);
+    assert.ok((convexNearRes.thetaSpreadRad ?? 0) > 0 && (convexNearRes.thetaSpreadRad ?? 10) < Math.PI / 4);
+
+    // (d) 90° concave L-valley: bottom z=0 (x in [-4,0], outward -Z) meeting wall x=0 (z in [-4,0], outward -X)
+    const concaveMesh = buildTriangleSoupMesh([
+        [-4, -2, 0, -4, 2, 0, 0, 2, 0],
+        [-4, -2, 0, 0, 2, 0, 0, -2, 0],
+        [0, -2, 0, 0, 2, 0, 0, 2, -4],
+        [0, -2, 0, 0, 2, -4, 0, -2, -4],
+    ]);
+    const concaveRes = synthesizePlacementNormal(concaveMesh, new THREE.Vector3(0, 0, 0), faceDown, {
+        mode: 'bisector',
+        contactRadiusMm: 0.15,
+    });
+    assert.equal(concaveRes.regime, 'edge-bisector');
+    assert.equal(concaveRes.isConcave, true);
+    assert.ok(
+        Math.abs((concaveRes.thetaSpreadRad ?? -1) - Math.PI / 4) < 1e-4,
+        `expected 45° spread at 90° concave L-valley, got ${THREE.MathUtils.radToDeg(concaveRes.thetaSpreadRad ?? 0)}°`,
+    );
+});
+
+test('12. computeThinWallMaxSafePenetrationMm measures DoubleSide exit wall cleanly without normal mutation or SDF build', () => {
+    // (a) 0.20 mm closed FrontSide wall -> 0.45 * 0.20 = 0.09 mm
+    const thinWallMesh = makeNonIndexedMesh(new THREE.BoxGeometry(10, 10, 0.2));
+    thinWallMesh.material = new THREE.MeshBasicMaterial({ side: THREE.FrontSide });
+    const thinNormalsBefore = new Float32Array(thinWallMesh.geometry.attributes.normal.array as Float32Array);
+
+    assert.equal(hasWarmSDFCache(thinWallMesh), false);
+    const thinPen = computeThinWallMaxSafePenetrationMm(
+        thinWallMesh,
+        { x: 0, y: 0, z: -0.1 },
+        { x: 0, y: 0, z: -1 },
+    );
+    assert.equal(thinPen, 0.09);
+    assert.equal(Object.is(thinPen, -0), false);
+    assert.equal(hasWarmSDFCache(thinWallMesh), false, 'must not warm SDFCache');
+    assert.deepEqual(thinWallMesh.geometry.attributes.normal.array as Float32Array, thinNormalsBefore, '#797 normal buffer untouched');
+
+    // (b) 3 mm slab -> undefined (exceeds 0.80 mm maxProbeMm)
+    const thickSlab = makeNonIndexedMesh(new THREE.BoxGeometry(10, 10, 3));
+    assert.equal(
+        computeThinWallMaxSafePenetrationMm(thickSlab, { x: 0, y: 0, z: -1.5 }, { x: 0, y: 0, z: -1 }),
+        undefined,
+    );
+
+    // (c) Mirrored (scale.x = -1), non-uniformly scaled, rotated 0.20 mm wall -> 0.09 mm
+    const mirroredWall = makeNonIndexedMesh(new THREE.BoxGeometry(0.2, 10, 10));
+    mirroredWall.scale.set(-1, 2, 0.5);
+    mirroredWall.rotation.set(0.25, -0.4, 0.35);
+    mirroredWall.position.set(5, -3, 2);
+    mirroredWall.updateMatrixWorld(true);
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(mirroredWall.matrixWorld);
+    const mirroredWorldPt = new THREE.Vector3(0.1, 0, 0).applyMatrix4(mirroredWall.matrixWorld);
+    const mirroredWorldNormal = new THREE.Vector3(1, 0, 0).applyMatrix3(normalMatrix).normalize();
+    assert.equal(
+        computeThinWallMaxSafePenetrationMm(mirroredWall, mirroredWorldPt, mirroredWorldNormal),
+        0.09,
+    );
+    assert.equal(hasWarmSDFCache(mirroredWall), false);
+
+    // (d) Single PlaneGeometry -> undefined (no opposite exiting wall)
+    const singlePlane = makeNonIndexedMesh(new THREE.PlaneGeometry(10, 10));
+    assert.equal(
+        computeThinWallMaxSafePenetrationMm(singlePlane, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }),
+        undefined,
+    );
+    assert.equal(
+        computeThinWallMaxSafePenetrationMm(singlePlane, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: -1 }),
+        undefined,
+    );
+
+    // (e) #797 raycastGeometry isolation + invalid inputs
+    const renderGeom = new THREE.BoxGeometry(10, 10, 0.2).toNonIndexed();
+    renderGeom.computeVertexNormals();
+    const raycastGeom = new THREE.BoxGeometry(10, 10, 0.2).toNonIndexed();
+    raycastGeom.computeVertexNormals();
+    attachBvh(raycastGeom);
+    const renderNormalsBefore = new Float32Array(renderGeom.attributes.normal.array as Float32Array);
+    const raycastNormalsBefore = new Float32Array(raycastGeom.attributes.normal.array as Float32Array);
+    const splitMesh = new THREE.Mesh(renderGeom);
+    splitMesh.userData = { raycastGeometry: raycastGeom };
+    splitMesh.updateMatrixWorld(true);
+    assert.equal(
+        computeThinWallMaxSafePenetrationMm(splitMesh, { x: 0, y: 0, z: -0.1 }, { x: 0, y: 0, z: -1 }),
+        0.09,
+    );
+    assert.deepEqual(renderGeom.attributes.normal.array as Float32Array, renderNormalsBefore);
+    assert.deepEqual(raycastGeom.attributes.normal.array as Float32Array, raycastNormalsBefore);
+    assert.equal(hasWarmSDFCache(splitMesh), false);
+    assert.equal(
+        computeThinWallMaxSafePenetrationMm(splitMesh, { x: 0, y: 0, z: -0.1 }, { x: 0, y: 0, z: 0 }),
+        undefined,
+    );
+
+    // (f) Multi-hit skip: intervening same-facing baffle at z=0.05 is skipped before exiting opposite wall at z=0.20
+    const multiHitWall = buildTriangleSoupMesh([
+        // Entry face z=0 (outward -Z)
+        [-2, -2, 0, -2, 2, 0, 2, 2, 0],
+        [-2, -2, 0, 2, 2, 0, 2, -2, 0],
+        // Intervening baffle z=0.05 (outward -Z, same-facing as entry -> dot <= 0.1 -> skipped)
+        [-2, -2, 0.05, -2, 2, 0.05, 2, 2, 0.05],
+        [-2, -2, 0.05, 2, 2, 0.05, 2, -2, 0.05],
+        // Exit face z=0.20 (outward +Z -> dot > 0.1 -> 0.45 * 0.20 = 0.09)
+        [-2, -2, 0.2, 2, 2, 0.2, -2, 2, 0.2],
+        [-2, -2, 0.2, 2, -2, 0.2, 2, 2, 0.2],
+    ]);
+    assert.equal(
+        computeThinWallMaxSafePenetrationMm(multiHitWall, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: -1 }),
+        0.09,
+    );
 });

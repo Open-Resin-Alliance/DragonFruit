@@ -32,6 +32,8 @@ export interface PlacementNormalSynthesisResult {
     normal: THREE.Vector3;
     regime: PlacementNormalRegime;
     acceptedSphereTris: number;
+    thetaSpreadRad?: number;
+    isConcave?: boolean;
 }
 
 export interface SphericalCapDescriptor {
@@ -92,11 +94,15 @@ const _desiredVec = new THREE.Vector3();
 const _tangent = new THREE.Vector3();
 const _capNormalSum = new THREE.Vector3();
 const _capDirSum = new THREE.Vector3();
+const _synthDirSum = new THREE.Vector3();
 const _capMean = new THREE.Vector3();
 const _nAnchor = new THREE.Vector3();
 const _baseDown = new THREE.Vector3();
+const _wHitPt = new THREE.Vector3();
+const _localRayEnd = new THREE.Vector3();
 
 const _localQueryBox = new THREE.Box3();
+const _localRay = new THREE.Ray();
 const _worldTri = new THREE.Triangle();
 const _invMatrix = new THREE.Matrix4();
 
@@ -539,18 +545,24 @@ function writeSynthesisResult(
     normal: THREE.Vector3,
     regime: PlacementNormalRegime,
     acceptedSphereTris: number,
+    thetaSpreadRad = 0,
+    isConcave = false,
     target?: PlacementNormalSynthesisResult,
 ): PlacementNormalSynthesisResult {
     if (target) {
         target.normal.copy(normal);
         target.regime = regime;
         target.acceptedSphereTris = acceptedSphereTris;
+        target.thetaSpreadRad = thetaSpreadRad;
+        target.isConcave = isConcave;
         return target;
     }
     return {
         normal: normal.clone(),
         regime,
         acceptedSphereTris,
+        thetaSpreadRad,
+        isConcave,
     };
 }
 
@@ -614,6 +626,7 @@ function finalizeSynthesis(
     synthOptions: PlacementNormalSynthesisOptions,
     params: ResolvedSynthesisParams,
     acceptedSphereTris: number,
+    synthDirWeightSum: number,
     target?: PlacementNormalSynthesisResult,
 ): PlacementNormalSynthesisResult {
     let regime: PlacementNormalRegime;
@@ -631,7 +644,28 @@ function finalizeSynthesis(
         applyDragSlerpClamp(_outNormal, synthOptions.prevNormal, synthOptions.maxDragStepDeg ?? 15);
     }
 
-    return writeSynthesisResult(_outNormal, regime, acceptedSphereTris, target);
+    let thetaSpreadRad = 0;
+    let isConcave = false;
+    if (regime !== 'raw' && _synthPool.count > 0) {
+        for (let i = 0; i < _synthPool.count; i++) {
+            const dot = THREE.MathUtils.clamp(
+                _synthPool.nx[i] * _outNormal.x
+                + _synthPool.ny[i] * _outNormal.y
+                + _synthPool.nz[i] * _outNormal.z,
+                -1,
+                1,
+            );
+            const u = params.radius > 1e-9
+                ? THREE.MathUtils.clamp(_synthPool.dist[i] / params.radius, 0, 1)
+                : 0;
+            const tau = (1 - u) * (1 - u);
+            const ang = tau * Math.acos(dot);
+            if (ang > thetaSpreadRad) thetaSpreadRad = ang;
+        }
+        isConcave = synthDirWeightSum > 0 && (_synthDirSum.dot(_outNormal) / synthDirWeightSum) > CONCAVITY_EPS;
+    }
+
+    return writeSynthesisResult(_outNormal, regime, acceptedSphereTris, thetaSpreadRad, isConcave, target);
 }
 
 function finalizeCapDescriptor(
@@ -732,7 +766,7 @@ function executeSharedShapecast(
     const det = bvh ? mesh.matrixWorld.determinant() : 0;
     if (!bvh || !Number.isFinite(det) || Math.abs(det) < 1e-18) {
         return {
-            synthesis: wantSynthesis ? writeSynthesisResult(_rawNormal, 'raw', 0, synthTarget) : null,
+            synthesis: wantSynthesis ? writeSynthesisResult(_rawNormal, 'raw', 0, 0, false, synthTarget) : null,
             cap: wantCap ? buildFallbackCap(capRadiusMm, leafRimSlackDeg, capTarget) : null,
         };
     }
@@ -753,8 +787,10 @@ function executeSharedShapecast(
     resetBoundedPool(_capPool);
 
     let acceptedSphereTris = 0;
+    let synthDirWeightSum = 0;
     let capTriTotal = 0;
     let capWeightSum = 0;
+    _synthDirSum.set(0, 0, 0);
     _capNormalSum.set(0, 0, 0);
     _capDirSum.set(0, 0, 0);
 
@@ -794,6 +830,20 @@ function executeSharedShapecast(
             if (params && distSq <= rSynthSq && dot0 >= synthDihedralCos) {
                 acceptedSphereTris += 1;
                 pushBoundedPool(_synthPool, _triNormal.x, _triNormal.y, _triNormal.z, dist, area, triIndex);
+                const uSynth = rSynth > 1e-9 ? THREE.MathUtils.clamp(dist / rSynth, 0, 1) : 0;
+                const wSynth = area * (1 - uSynth) * (1 - uSynth);
+                if (wSynth > 0) {
+                    _centroid.copy(_wA).add(_wB).add(_wC).multiplyScalar(1 / 3);
+                    _cDir.subVectors(_centroid, _closestPt);
+                    const cLenSq = _cDir.lengthSq();
+                    if (cLenSq > 1e-18) {
+                        const invCLen = 1 / Math.sqrt(cLenSq);
+                        _synthDirSum.x += _cDir.x * invCLen * wSynth;
+                        _synthDirSum.y += _cDir.y * invCLen * wSynth;
+                        _synthDirSum.z += _cDir.z * invCLen * wSynth;
+                        synthDirWeightSum += wSynth;
+                    }
+                }
             }
 
             if (wantCap && distSq <= rCapSq && _triNormal.z <= DOWNWARD_NZ_LIMIT && dot0 >= DEFAULT_CAP_DIHEDRAL_COS) {
@@ -824,7 +874,7 @@ function executeSharedShapecast(
     });
 
     const synthesis = wantSynthesis && synthOptions && params
-        ? finalizeSynthesis(synthOptions, params, acceptedSphereTris, synthTarget)
+        ? finalizeSynthesis(synthOptions, params, acceptedSphereTris, synthDirWeightSum, synthTarget)
         : null;
     const expansionSynthesisNormal =
         wantCap && synthesis && synthesis.regime !== 'raw' && capTriTotal > 0
@@ -852,7 +902,7 @@ export function synthesizePlacementNormal(
 ): PlacementNormalSynthesisResult {
     if (options.mode === 'raw') {
         normalizeInto(rawWorldNormal, _rawNormal);
-        return writeSynthesisResult(_rawNormal, 'raw', 0, target);
+        return writeSynthesisResult(_rawNormal, 'raw', 0, 0, false, target);
     }
 
     const { synthesis } = executeSharedShapecast(
@@ -1009,7 +1059,7 @@ export function resolvePlacementNormalAndCap(
             capTarget,
         );
         normalizeInto(rawWorldNormal, _rawNormal);
-        const synthesis = writeSynthesisResult(_rawNormal, 'raw', 0, synthesisTarget);
+        const synthesis = writeSynthesisResult(_rawNormal, 'raw', 0, 0, false, synthesisTarget);
         return { synthesis, cap };
     }
 
@@ -1095,4 +1145,86 @@ export function orbitLeafCapAnchorTowardKnot(
         y: _orbitOutVec.y,
         z: _orbitOutVec.z,
     };
+}
+
+/**
+ * Probes inward from `worldPoint` along `-surfaceNormal` using strictly read-only
+ * `DoubleSide` BVH raycasts on `modelGeometryOf(mesh)` (Issue #797) to measure thin-wall
+ * thickness and return a safe maximum penetration depth `0.45 * wallThicknessMm`.
+ */
+export function computeThinWallMaxSafePenetrationMm(
+    mesh: THREE.Mesh,
+    worldPoint: Vec3Like | THREE.Vector3,
+    surfaceNormal: Vec3Like | THREE.Vector3,
+    maxProbeMm = 0.80,
+): number | undefined {
+    if (!Number.isFinite(maxProbeMm) || maxProbeMm <= 0.015) return undefined;
+    if (
+        !Number.isFinite(worldPoint.x)
+        || !Number.isFinite(worldPoint.y)
+        || !Number.isFinite(worldPoint.z)
+    ) {
+        return undefined;
+    }
+
+    const bvh = getBoundsTree(mesh);
+    if (!bvh || typeof bvh.raycastFirst !== 'function') return undefined;
+    const geom = modelGeometryOf(mesh);
+    const posAttr = geom.getAttribute('position');
+    if (!posAttr) return undefined;
+
+    const det = mesh.matrixWorld.determinant();
+    if (!Number.isFinite(det) || Math.abs(det) < 1e-18) return undefined;
+    const detSign = det < 0 ? -1 : 1;
+
+    if (!normalizeInto(surfaceNormal, _rawNormal, 0, 0, 0)) return undefined;
+    _rawNormal.multiplyScalar(-1);
+    _worldPoint.set(worldPoint.x, worldPoint.y, worldPoint.z);
+
+    _invMatrix.copy(mesh.matrixWorld).invert();
+    _localRay.origin.copy(_worldPoint).applyMatrix4(_invMatrix);
+    _localRayEnd.copy(_worldPoint).addScaledVector(_rawNormal, maxProbeMm).applyMatrix4(_invMatrix);
+    _localRay.direction.subVectors(_localRayEnd, _localRay.origin);
+    const farLocal = _localRay.direction.length();
+    if (!Number.isFinite(farLocal) || !(farLocal > 1e-12)) return undefined;
+    _localRay.direction.multiplyScalar(1 / farLocal);
+
+    const stepEps = farLocal * 1e-4;
+    let curNear = farLocal * (0.015 / maxProbeMm);
+
+    for (let iter = 0; iter < 4; iter++) {
+        if (curNear >= farLocal) break;
+        const hit = bvh.raycastFirst(_localRay, THREE.DoubleSide, curNear, farLocal);
+        if (!hit) return undefined;
+        if (!hit.face) {
+            curNear = hit.distance + stepEps;
+            continue;
+        }
+
+        _wA.fromBufferAttribute(posAttr, hit.face.a).applyMatrix4(mesh.matrixWorld);
+        _wB.fromBufferAttribute(posAttr, hit.face.b).applyMatrix4(mesh.matrixWorld);
+        _wC.fromBufferAttribute(posAttr, hit.face.c).applyMatrix4(mesh.matrixWorld);
+        _edgeAB.subVectors(_wB, _wA);
+        _edgeAC.subVectors(_wC, _wA);
+        _triNormal.crossVectors(_edgeAB, _edgeAC);
+        const crossLenSq = _triNormal.lengthSq();
+        if (!Number.isFinite(crossLenSq) || crossLenSq <= 1e-24) {
+            curNear = hit.distance + stepEps;
+            continue;
+        }
+        _triNormal.multiplyScalar(detSign / Math.sqrt(crossLenSq));
+
+        if (_rawNormal.dot(_triNormal) > 0.1) {
+            const worldDist = _wHitPt.copy(hit.point).applyMatrix4(mesh.matrixWorld).distanceTo(_worldPoint);
+            if (worldDist >= 0.015 && worldDist < maxProbeMm) {
+                const clamped = Math.round(0.45 * worldDist * 1e6) / 1e6;
+                return clamped === 0 ? 0 : clamped;
+            }
+            return undefined;
+        }
+
+        curNear = hit.distance + stepEps;
+    }
+
+    return undefined;
 }

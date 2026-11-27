@@ -1,8 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { initializeBVH, accelerateGeometry } from '@/utils/bvh';
+import { calculateSafeOffset, isContactConeBlocked } from '../PlacementLogic/CollisionAvoidance';
 import { SDFCache } from '../PlacementLogic/Pathfinding/SDFCache';
+import { clearSDFCacheForMesh, getOrCreateSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
 
 initializeBVH();
 
@@ -82,4 +85,93 @@ test('segmentBlocked: a segment inside clearance is never reported clear', () =>
 
     assert.ok(checked > 200, `sweep should exercise many segments, saw ${checked}`);
     assert.equal(missed, 0, `${missed} of ${checked} segments inside clearance were reported clear`);
+});
+
+test('calculateSafeOffset with exact contact-cone sweep clears 90° concave inside corner where legacy quantized path saturates 0.35 mm', () => {
+    // L-bracket concave inside corner along (0, y, 0):
+    // ceiling slab x in [-10, 0], z in [0, 2] (outward -Z at z=0) + vertical wall x in [0, 2], z in [-10, 2] (outward -X at x=0)
+    const ceiling = new THREE.BoxGeometry(10, 10, 2).translate(-5, 0, 1);
+    const wall = new THREE.BoxGeometry(2, 10, 12).translate(1, 0, -4);
+    const merged = mergeGeometries([ceiling, wall], false);
+    assert.ok(merged);
+    accelerateGeometry(merged);
+    const mesh = new THREE.Mesh(merged);
+    mesh.updateMatrixWorld(true);
+
+    try {
+        const surfacePos = { x: 0, y: 0, z: 0 };
+        const surfaceNormal = { x: -Math.SQRT1_2, y: 0, z: -Math.SQRT1_2 };
+        const minOffset = 0.1;
+        const maxOffset = 0.35;
+        const startPos = {
+            x: surfacePos.x + surfaceNormal.x * minOffset,
+            y: surfacePos.y + surfaceNormal.y * minOffset,
+            z: surfacePos.z + surfaceNormal.z * minOffset,
+        };
+        const targetPos = { x: startPos.x, y: startPos.y, z: startPos.z - 2.0 };
+        const exactConeRadii = { startRadius: 0.15, endRadius: 0.25 };
+
+        const legacyOffset = calculateSafeOffset(
+            surfacePos,
+            surfaceNormal,
+            targetPos,
+            exactConeRadii.endRadius + 0.05,
+            mesh,
+            minOffset,
+            maxOffset,
+            0.2,
+            {
+                startRadius: exactConeRadii.startRadius + 0.05,
+                endRadius: exactConeRadii.endRadius + 0.05,
+            },
+        );
+        assert.equal(legacyOffset, maxOffset, `expected legacy calculateSafeOffset to saturate at ${maxOffset}, got ${legacyOffset}`);
+
+        const exactOffset = calculateSafeOffset(
+            surfacePos,
+            surfaceNormal,
+            targetPos,
+            exactConeRadii.endRadius,
+            mesh,
+            minOffset,
+            maxOffset,
+            0.2,
+            undefined,
+            {
+                useExactContactConeSweep: true,
+                exactConeRadii,
+                shiftTargetRigidly: true,
+                maxOffsetScale: Math.SQRT2,
+            },
+        );
+        const scaledCeiling = maxOffset * Math.SQRT2;
+        assert.ok(
+            exactOffset > maxOffset && exactOffset < scaledCeiling - 1e-4,
+            `expected exact sub-ceiling backoff in (${maxOffset}, ${scaledCeiling}), got ${exactOffset}`,
+        );
+
+        const sdf = getOrCreateSDFCache(mesh);
+        sdf.refreshMatrix();
+        const delta = exactOffset - minOffset;
+        assert.equal(
+            isContactConeBlocked(sdf, {
+                start: {
+                    x: surfacePos.x + surfaceNormal.x * exactOffset,
+                    y: surfacePos.y + surfaceNormal.y * exactOffset,
+                    z: surfacePos.z + surfaceNormal.z * exactOffset,
+                },
+                end: {
+                    x: targetPos.x + surfaceNormal.x * delta,
+                    y: targetPos.y + surfaceNormal.y * delta,
+                    z: targetPos.z + surfaceNormal.z * delta,
+                },
+                startRadius: exactConeRadii.startRadius,
+                endRadius: exactConeRadii.endRadius,
+            }),
+            false,
+            'resolved exactOffset with rigidly shifted target must be verified clear by isContactConeBlocked',
+        );
+    } finally {
+        clearSDFCacheForMesh(mesh.uuid);
+    }
 });

@@ -227,6 +227,13 @@ export function isContactConeBlocked(sdf: SDFCache, cone: ContactConeSweep): boo
     return false;
 }
 
+export interface CalculateSafeOffsetOptions {
+    useExactContactConeSweep?: boolean;
+    exactConeRadii?: { startRadius: number; endRadius: number };
+    shiftTargetRigidly?: boolean;
+    maxOffsetScale?: number;
+}
+
 /**
  * Calculates the required standoff distance (offset) from a surface to ensure
  * a connecting element (like a cone) does not collide with the mesh.
@@ -251,21 +258,58 @@ export function calculateSafeOffset(
     maxOffset: number,
     step: number = 0.2,
     collisionFrustum?: CollisionFrustumProfile,
+    options?: CalculateSafeOffsetOptions,
 ): number {
     const start = new THREE.Vector3(surfacePos.x, surfacePos.y, surfacePos.z);
     const normal = new THREE.Vector3(surfaceNormal.x, surfaceNormal.y, surfaceNormal.z).normalize();
     const normalizedStep = Math.max(0.025, step);
+    const scale = (
+        options?.maxOffsetScale !== undefined
+        && Number.isFinite(options.maxOffsetScale)
+        && options.maxOffsetScale > 0
+    )
+        ? options.maxOffsetScale
+        : 1;
+    const effectiveMaxOffset = Math.max(minOffset, maxOffset * scale);
+    const exactConeRadii = options?.exactConeRadii;
+    const useExactContactConeSweep = Boolean(options?.useExactContactConeSweep && exactConeRadii);
+    const exactSdf = useExactContactConeSweep ? getOrCreateCollisionSdf(mesh) : null;
     let previousBlockedOffset = minOffset;
 
     const testOffset = (offset: number): boolean => {
         // Calculate proposed start position: Surface + (Normal * t)
         const testStartVec = start.clone().add(normal.clone().multiplyScalar(offset));
         const testStart: Vec3 = { x: testStartVec.x, y: testStartVec.y, z: testStartVec.z };
+        const deltaOffset = offset - minOffset;
+        const effectiveTarget: Vec3 = options?.shiftTargetRigidly
+            ? {
+                x: targetPos.x + normal.x * deltaOffset,
+                y: targetPos.y + normal.y * deltaOffset,
+                z: targetPos.z + normal.z * deltaOffset,
+            }
+            : targetPos;
+
+        if (useExactContactConeSweep && exactConeRadii) {
+            return exactSdf
+                ? isContactConeBlocked(exactSdf, {
+                    start: testStart,
+                    end: effectiveTarget,
+                    startRadius: exactConeRadii.startRadius,
+                    endRadius: exactConeRadii.endRadius,
+                })
+                : isCollisionFrustumBlocked(
+                    testStart,
+                    effectiveTarget,
+                    exactConeRadii.startRadius,
+                    exactConeRadii.endRadius,
+                    mesh,
+                );
+        }
 
         if (collisionFrustum) {
             return isCollisionFrustumBlocked(
                 testStart,
-                targetPos,
+                effectiveTarget,
                 collisionFrustum.startRadius,
                 collisionFrustum.endRadius,
                 mesh,
@@ -275,7 +319,7 @@ export function calculateSafeOffset(
 
         return segmentBlockedWithBestAvailableMethod(
             testStart.x, testStart.y, testStart.z,
-            targetPos.x, targetPos.y, targetPos.z,
+            effectiveTarget.x, effectiveTarget.y, effectiveTarget.z,
             collisionRadius,
             mesh,
         );
@@ -285,8 +329,8 @@ export function calculateSafeOffset(
         return minOffset;
     }
 
-    for (let t = minOffset + normalizedStep; t <= maxOffset + 0.000001; t += normalizedStep) {
-        const clampedOffset = Math.min(t, maxOffset);
+    for (let t = minOffset + normalizedStep; previousBlockedOffset < effectiveMaxOffset - 1e-6; t += normalizedStep) {
+        const clampedOffset = Math.min(t, effectiveMaxOffset);
         if (!testOffset(clampedOffset)) {
             let low = previousBlockedOffset;
             let high = clampedOffset;
@@ -304,7 +348,10 @@ export function calculateSafeOffset(
         }
 
         previousBlockedOffset = clampedOffset;
+        if (clampedOffset >= effectiveMaxOffset - 1e-9) {
+            break;
+        }
     }
 
-    return maxOffset;
+    return effectiveMaxOffset;
 }

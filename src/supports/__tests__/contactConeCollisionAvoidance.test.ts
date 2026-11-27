@@ -10,7 +10,7 @@ import type { Vec3 } from '../types';
 import { getSocketPosition } from '../SupportPrimitives/ContactCone';
 import { getFinalSocketPosition } from '../SupportPrimitives/ContactCone/contactConeUtils';
 import { calculateDiskThickness } from '../SupportPrimitives/ContactDisk/contactDiskUtils';
-import { isContactConeBlocked } from '../PlacementLogic/CollisionAvoidance';
+import { calculateSafeOffset, isContactConeBlocked } from '../PlacementLogic/CollisionAvoidance';
 import { clearSDFCacheForMesh, getOrCreateSDFCache, hasWarmSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
 import { initializeBVH, accelerateGeometry } from '../../utils/bvh';
 import { calculateSmartPlacementV3 } from '../PlacementLogicV3/SmartPlacementV3';
@@ -449,5 +449,177 @@ test('recomputeContactConeForMovedDisk converges uncollided disk-thickness fixpo
             finalSocket.z - c.fixedSocketPos.z,
         );
         assert.ok(err < 1e-12, `${c.label}: expected socket error < 1e-12 mm, got ${err}`);
+    }
+});
+
+test('calculateSafeOffset resolves 90° concave inside corner with exact SDF sweep + rigid shift while keeping flat collision invariant', () => {
+    initializeBVH();
+    const ceiling = new THREE.BoxGeometry(10, 10, 2).translate(-5, 0, 1);
+    const wall = new THREE.BoxGeometry(2, 10, 12).translate(1, 0, -4);
+    const cornerGeom = mergeGeometries([ceiling, wall], false);
+    assert.ok(cornerGeom);
+    accelerateGeometry(cornerGeom);
+    const cornerMesh = new THREE.Mesh(cornerGeom, new THREE.MeshBasicMaterial());
+    cornerMesh.updateMatrixWorld(true);
+
+    const flatGeom = new THREE.BoxGeometry(20, 20, 2).translate(0, 0, 1);
+    accelerateGeometry(flatGeom);
+    const flatMesh = new THREE.Mesh(flatGeom, new THREE.MeshBasicMaterial());
+    flatMesh.updateMatrixWorld(true);
+
+    try {
+        const surfacePos = { x: 0, y: 0, z: 0 };
+        const cornerNormal = { x: -Math.SQRT1_2, y: 0, z: -Math.SQRT1_2 };
+        const minOffset = 0.1;
+        const maxOffset = 0.35;
+        const cornerTarget = {
+            x: surfacePos.x + cornerNormal.x * minOffset,
+            y: surfacePos.y + cornerNormal.y * minOffset,
+            z: surfacePos.z + cornerNormal.z * minOffset - 2.0,
+        };
+        const exactConeRadii = { startRadius: 0.15, endRadius: 0.25 };
+
+        const legacyCorner = calculateSafeOffset(
+            surfacePos,
+            cornerNormal,
+            cornerTarget,
+            exactConeRadii.endRadius + 0.05,
+            cornerMesh,
+            minOffset,
+            maxOffset,
+            0.2,
+            {
+                startRadius: exactConeRadii.startRadius + 0.05,
+                endRadius: exactConeRadii.endRadius + 0.05,
+            },
+        );
+        assert.equal(legacyCorner, maxOffset, `legacy corner solver should saturate at ${maxOffset}`);
+
+        const exactCorner = calculateSafeOffset(
+            surfacePos,
+            cornerNormal,
+            cornerTarget,
+            exactConeRadii.endRadius,
+            cornerMesh,
+            minOffset,
+            maxOffset,
+            0.2,
+            undefined,
+            {
+                useExactContactConeSweep: true,
+                exactConeRadii,
+                shiftTargetRigidly: true,
+                maxOffsetScale: Math.SQRT2,
+            },
+        );
+        assert.ok(exactCorner > maxOffset && exactCorner < maxOffset * Math.SQRT2 - 1e-4);
+
+        const cornerSdf = getOrCreateSDFCache(cornerMesh);
+        cornerSdf.refreshMatrix();
+        const delta = exactCorner - minOffset;
+        assert.equal(
+            isContactConeBlocked(cornerSdf, {
+                start: {
+                    x: surfacePos.x + cornerNormal.x * exactCorner,
+                    y: surfacePos.y + cornerNormal.y * exactCorner,
+                    z: surfacePos.z + cornerNormal.z * exactCorner,
+                },
+                end: {
+                    x: cornerTarget.x + cornerNormal.x * delta,
+                    y: cornerTarget.y + cornerNormal.y * delta,
+                    z: cornerTarget.z + cornerNormal.z * delta,
+                },
+                startRadius: exactConeRadii.startRadius,
+                endRadius: exactConeRadii.endRadius,
+            }),
+            false,
+        );
+
+        // Flat underside invariant: uncollided flat face resolves to minOffset under both legacy and exact-sweep modes
+        const flatNormal = { x: 0, y: 0, z: -1 };
+        const flatTarget = { x: 0, y: 0, z: -2.1 };
+        const legacyFlat = calculateSafeOffset(
+            surfacePos,
+            flatNormal,
+            flatTarget,
+            exactConeRadii.endRadius,
+            flatMesh,
+            minOffset,
+            maxOffset,
+            0.2,
+            undefined,
+        );
+        const exactFlat = calculateSafeOffset(
+            surfacePos,
+            flatNormal,
+            flatTarget,
+            exactConeRadii.endRadius,
+            flatMesh,
+            minOffset,
+            maxOffset,
+            0.2,
+            undefined,
+            {
+                useExactContactConeSweep: true,
+                exactConeRadii,
+                shiftTargetRigidly: true,
+                maxOffsetScale: Math.SQRT2,
+            },
+        );
+        // Note: on flat underside, legacy quantized segmentBlocked reports minOffset=0.1 blocked (near surface < radius),
+        // while exact contact-cone sweep clears at minOffset; check flat standoff with blocking wall stays invariant too!
+        assert.equal(exactFlat, minOffset, 'exact sweep clears tangent cone on flat underside at minOffset');
+        assert.ok(legacyFlat >= minOffset && legacyFlat <= maxOffset);
+
+        // Flat underside with a side blocking rib (face at x = 0.7 mm > 0.30 mm clearance): clears at minOffset
+        const ribGeom = mergeGeometries([
+            new THREE.BoxGeometry(20, 20, 2).translate(0, 0, 1),
+            new THREE.BoxGeometry(1, 4, 2).translate(1.2, 0, -1),
+        ], false);
+        assert.ok(ribGeom);
+        accelerateGeometry(ribGeom);
+        const ribMesh = new THREE.Mesh(ribGeom, new THREE.MeshBasicMaterial());
+        ribMesh.updateMatrixWorld(true);
+        try {
+            const ribTarget = { x: 0, y: 0, z: -2.1 };
+            const ribLegacy = calculateSafeOffset(
+                surfacePos,
+                flatNormal,
+                ribTarget,
+                exactConeRadii.endRadius + 0.05,
+                ribMesh,
+                minOffset,
+                maxOffset,
+                0.2,
+                {
+                    startRadius: exactConeRadii.startRadius + 0.05,
+                    endRadius: exactConeRadii.endRadius + 0.05,
+                },
+            );
+            const ribExact = calculateSafeOffset(
+                surfacePos,
+                flatNormal,
+                ribTarget,
+                exactConeRadii.endRadius,
+                ribMesh,
+                minOffset,
+                maxOffset,
+                0.2,
+                undefined,
+                {
+                    useExactContactConeSweep: true,
+                    exactConeRadii,
+                    shiftTargetRigidly: true,
+                    maxOffsetScale: Math.SQRT2,
+                },
+            );
+            assert.equal(ribExact, minOffset, 'exact sweep clears flat underside beside distant rib (0.7 mm > 0.30 mm)');
+            assert.ok(ribLegacy >= minOffset && ribLegacy <= maxOffset);
+        } finally {
+            clearSDFCacheForMesh(ribMesh.uuid);
+        }
+    } finally {
+        clearSDFCacheForMesh(cornerMesh.uuid);
+        clearSDFCacheForMesh(flatMesh.uuid);
     }
 });
