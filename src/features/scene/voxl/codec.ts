@@ -2,25 +2,40 @@ import type { DragonfruitImportFormat, SupportState } from '@/supports/types';
 import type { ParsedVoxlResult, VoxlPlate, VoxlSceneState } from './types';
 import { isVoxlBinaryV2, parseVoxlBinaryV2 } from './codec-v2';
 import { importPayloadCollections } from '@/supports/supportCollections';
+import {
+  bundledSupportTypeId,
+  getSupportTypeDescriptor,
+  hostKnotFieldsFor,
+} from '@/supports/supportTypeRegistry';
+
+/**
+ * The bundled type's wire entries: `{ <singular>, root, hostKnot }`, dropping any
+ * entity whose root or host knot is missing, since the bundle cannot be read back
+ * without both.
+ */
+function bundledEntries(supportState: SupportState): unknown[] {
+  const typeId = bundledSupportTypeId();
+  const descriptor = getSupportTypeDescriptor(typeId);
+  const rootField = descriptor.edges.find((edge) => edge.to === 'roots')?.field;
+  const knotField = hostKnotFieldsFor(typeId)[0];
+  if (!rootField || !knotField) return [];
+
+  const collection = supportState[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
+  const entries: unknown[] = [];
+  for (const entity of Object.values(collection ?? {})) {
+    const root = supportState.roots[entity[rootField] as string];
+    const hostKnot = supportState.knots[entity[knotField] as string];
+    if (!root || !hostKnot) continue;
+    entries.push({ root, hostKnot, [descriptor.singular]: entity });
+  }
+  return entries;
+}
 
 export function buildSupportExportFromStores(
   supportState: SupportState,
   source = 'dragonfruit-voxl',
 ): DragonfruitImportFormat {
-  const kickstands = Object.values(supportState.kickstands)
-    .map((kickstand) => {
-      const root = supportState.roots[kickstand.rootId];
-      const hostKnot = supportState.knots[kickstand.hostKnotId];
-      if (!root || !hostKnot) {
-        return null;
-      }
-      return {
-        root,
-        hostKnot,
-        kickstand,
-      };
-    })
-    .filter((item): item is NonNullable<typeof item> => item !== null);
+  const bundledKey = getSupportTypeDescriptor(bundledSupportTypeId()).location.key;
 
   return {
     version: 1,
@@ -30,11 +45,11 @@ export function buildSupportExportFromStores(
       updatedAt: Date.now(),
     },
     // Every collection the format carries, walked rather than listed, so a type
-    // added to the registry is saved too. `kickstands` is rebuilt above from the
-    // root and host knot each one owns, so it is written after the walk.
+    // added to the registry is saved too. The bundled type is rebuilt from the
+    // root and host knot it owns, so it is written after the walk.
     ...importPayloadCollections(supportState),
-    kickstands,
-  };
+    [bundledKey]: bundledEntries(supportState),
+  } as DragonfruitImportFormat;
 }
 
 // ─── Obsolete generations ─────────────────────────────────────────────────────
