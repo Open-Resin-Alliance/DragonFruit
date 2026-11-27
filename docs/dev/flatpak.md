@@ -5,7 +5,7 @@ install path alongside the existing `.deb`, `.rpm`, and `.AppImage` bundles.
 
 ## Design summary
 
-- **Runtime**: `org.freedesktop.Platform//24.08`
+- **Runtime**: `org.freedesktop.Platform//26.08`
 - **Bundled CEF**: matches the `.deb`/`.rpm`/`.AppImage` Linux build path
   (Tauri `feat/cef` fork — fixes issue #83 Wayland+Nvidia crash). CEF runs
   with `--no-sandbox` because Flatpak's own bwrap sandbox already provides
@@ -41,8 +41,8 @@ flatpak remote-add --if-not-exists --user flathub \
     https://flathub.org/repo/flathub.flatpakrepo
 
 flatpak install --user -y flathub \
-    org.freedesktop.Platform//24.08 \
-    org.freedesktop.Sdk//24.08
+    org.freedesktop.Platform//26.08 \
+    org.freedesktop.Sdk//26.08
 ```
 
 ### Build steps
@@ -93,7 +93,7 @@ dnf install -y flatpak flatpak-builder appstream desktop-file-utils
 flatpak remote-add --if-not-exists --user flathub \
     https://flathub.org/repo/flathub.flatpakrepo
 flatpak install --user -y flathub \
-    org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
+    org.freedesktop.Platform//26.08 org.freedesktop.Sdk//26.08
 
 cd /build
 npm run tauri:build
