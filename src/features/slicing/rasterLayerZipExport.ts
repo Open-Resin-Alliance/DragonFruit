@@ -614,6 +614,9 @@ function appendJointSphere(
   geom.dispose();
 }
 
+/** What a root-owning entity carries, for the walks that reconcile plate roots. */
+type RootOwner = { modelId: string; rootId: string; segments?: { diameter?: number }[] };
+
 type SupportSliceTessellation = {
   shaftRadialSegments: number;
   bezierRadialSegments: number;
@@ -831,19 +834,15 @@ export function buildSupportAndRaftWorldTriangles(
       })()
     : 0;
 
-  for (const trunk of Object.values(supportState.trunks)) {
-    if (!visibleModelIds.has(trunk.modelId)) continue;
-    visibleRootIds.add(trunk.rootId);
-    if (!rootModelKeyById.has(trunk.rootId)) {
-      rootModelKeyById.set(trunk.rootId, trunk.modelId);
-    }
-  }
-
-  for (const kickstand of Object.values(supportState.kickstands)) {
-    if (!visibleModelIds.has(kickstand.modelId)) continue;
-    visibleRootIds.add(kickstand.rootId);
-    if (!rootModelKeyById.has(kickstand.rootId)) {
-      rootModelKeyById.set(kickstand.rootId, kickstand.modelId);
+  for (const descriptor of SUPPORT_TYPES) {
+    if (!descriptor.ownsRoot) continue;
+    const collection = supportState[descriptor.location.key] as Record<string, RootOwner> | undefined;
+    for (const entity of Object.values(collection ?? {})) {
+      if (!visibleModelIds.has(entity.modelId)) continue;
+      visibleRootIds.add(entity.rootId);
+      if (!rootModelKeyById.has(entity.rootId)) {
+        rootModelKeyById.set(entity.rootId, entity.modelId);
+      }
     }
   }
 
@@ -855,16 +854,14 @@ export function buildSupportAndRaftWorldTriangles(
   };
 
   const rootTopRadiusByRootId = new Map<string, number>();
-  for (const trunk of Object.values(supportState.trunks)) {
-    const firstDiameter = trunk.segments[0]?.diameter;
-    if (Number.isFinite(firstDiameter) && firstDiameter! > 0) {
-      rootTopRadiusByRootId.set(trunk.rootId, Math.max(0.05, firstDiameter! * 0.5));
-    }
-  }
-  for (const kickstand of Object.values(supportState.kickstands)) {
-    const firstDiameter = kickstand.segments[0]?.diameter;
-    if (Number.isFinite(firstDiameter) && firstDiameter! > 0) {
-      rootTopRadiusByRootId.set(kickstand.rootId, Math.max(0.05, firstDiameter! * 0.5));
+  for (const descriptor of SUPPORT_TYPES) {
+    if (!descriptor.ownsRoot) continue;
+    const collection = supportState[descriptor.location.key] as Record<string, RootOwner> | undefined;
+    for (const entity of Object.values(collection ?? {})) {
+      const firstDiameter = entity.segments?.[0]?.diameter;
+      if (Number.isFinite(firstDiameter) && firstDiameter! > 0) {
+        rootTopRadiusByRootId.set(entity.rootId, Math.max(0.05, firstDiameter! * 0.5));
+      }
     }
   }
 
