@@ -241,7 +241,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
             let scan = dragonfruit_mesh_repair::repair::scan_cavities(&mesh);
-            let removed = dragonfruit_mesh_repair::repair::remove_cavities(&mut mesh, include_broken);
+            let removed =
+                dragonfruit_mesh_repair::repair::remove_cavities(&mut mesh, include_broken);
             if let Some(p) = &out_stl {
                 dragonfruit_mesh_repair::io::stl::write_binary(&mesh, p)?;
             }
@@ -260,7 +261,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             println!("{s}");
         }
-        Command::SolidRemesh { input, out_stl, tolerance, smooth_iterations, pretty } => {
+        Command::SolidRemesh {
+            input,
+            out_stl,
+            tolerance,
+            smooth_iterations,
+            pretty,
+        } => {
             let mesh = load_mesh(&input)?;
             let options = dragonfruit_mesh_repair::solid_remesh::SolidRemeshOptions {
                 tolerance,
@@ -388,7 +395,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     true
                 };
                 if uses_auto {
-                    dragonfruit_mesh_repair::repair_auto_with_progress(mesh, &options, Some(&mut { sink }))
+                    dragonfruit_mesh_repair::repair_auto_with_progress(
+                        mesh,
+                        &options,
+                        Some(&mut { sink }),
+                    )
                 } else {
                     repair_with_progress(mesh, &options, Some(&mut { sink }))
                 }

@@ -385,21 +385,41 @@ fn pipeline_deterministic() {
 
     // Compare island content as sorted tuples (ignoring ID assignment order)
     // Round area to 0.01mm² to avoid float precision noise
-    let mut areas1: Vec<(u32, u32, i64)> = r1.islands.iter()
-        .map(|i| (i.first_layer, i.last_layer, (i.total_area_mm2 * 100.0).round() as i64))
+    let mut areas1: Vec<(u32, u32, i64)> = r1
+        .islands
+        .iter()
+        .map(|i| {
+            (
+                i.first_layer,
+                i.last_layer,
+                (i.total_area_mm2 * 100.0).round() as i64,
+            )
+        })
         .collect();
-    let mut areas2: Vec<(u32, u32, i64)> = r2.islands.iter()
-        .map(|i| (i.first_layer, i.last_layer, (i.total_area_mm2 * 100.0).round() as i64))
+    let mut areas2: Vec<(u32, u32, i64)> = r2
+        .islands
+        .iter()
+        .map(|i| {
+            (
+                i.first_layer,
+                i.last_layer,
+                (i.total_area_mm2 * 100.0).round() as i64,
+            )
+        })
         .collect();
     areas1.sort();
     areas2.sort();
     assert_eq!(areas1, areas2, "island content differs between runs");
 
     // Parent-child topology must also match exactly across runs.
-    let mut topo1: Vec<(u32, Vec<u32>)> = r1.islands.iter()
+    let mut topo1: Vec<(u32, Vec<u32>)> = r1
+        .islands
+        .iter()
         .map(|i| (i.id.0, i.parent_id.map(|p| p.0).into_iter().collect()))
         .collect();
-    let mut topo2: Vec<(u32, Vec<u32>)> = r2.islands.iter()
+    let mut topo2: Vec<(u32, Vec<u32>)> = r2
+        .islands
+        .iter()
         .map(|i| (i.id.0, i.parent_id.map(|p| p.0).into_iter().collect()))
         .collect();
     topo1.sort();
@@ -407,12 +427,22 @@ fn pipeline_deterministic() {
     assert_eq!(topo1, topo2, "parent topology differs between runs");
 
     // Per-layer label masks: total labeled pixel count must match
-    for (l, (lab1, lab2)) in r1.island_labels_per_layer.iter()
+    for (l, (lab1, lab2)) in r1
+        .island_labels_per_layer
+        .iter()
         .zip(r2.island_labels_per_layer.iter())
         .enumerate()
     {
-        let px1: i32 = lab1.rows.iter().flat_map(|r| r.iter().map(|run| run.length)).sum();
-        let px2: i32 = lab2.rows.iter().flat_map(|r| r.iter().map(|run| run.length)).sum();
+        let px1: i32 = lab1
+            .rows
+            .iter()
+            .flat_map(|r| r.iter().map(|run| run.length))
+            .sum();
+        let px2: i32 = lab2
+            .rows
+            .iter()
+            .flat_map(|r| r.iter().map(|run| run.length))
+            .sum();
         assert_eq!(px1, px2, "labeled pixel count differs on layer {}", l);
     }
 }

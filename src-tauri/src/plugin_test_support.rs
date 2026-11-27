@@ -54,7 +54,11 @@ pub fn build_reference_plugin(example: &str) -> PathBuf {
         } else {
             example.to_string()
         });
-    assert!(built.exists(), "{example} binary missing: {}", built.display());
+    assert!(
+        built.exists(),
+        "{example} binary missing: {}",
+        built.display()
+    );
     built
 }
 
@@ -95,9 +99,7 @@ pub fn manifest(id: &str, capabilities: Vec<package::Capability>) -> package::Ma
             proto: package::PROTOCOL_VERSION,
             transport: package::Transport::Shm,
         },
-        publisher: package::Publisher {
-            key: String::new(),
-        },
+        publisher: package::Publisher { key: String::new() },
         payload: package::PayloadRef {
             sha256: String::new(),
             bytes: 0,

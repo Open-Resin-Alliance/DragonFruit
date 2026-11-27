@@ -92,7 +92,9 @@ pub fn output_file_types() -> &'static [OutputFileType] {
 
 /// The file type whose magic a container starts with, if any.
 pub fn output_file_type_for(head: &[u8]) -> Option<&'static OutputFileType> {
-    output_file_types().iter().find(|file_type| file_type.matches_magic(head))
+    output_file_types()
+        .iter()
+        .find(|file_type| file_type.matches_magic(head))
 }
 
 // ---------------------------------------------------------------------------
@@ -220,21 +222,28 @@ impl Locator {
             )
         });
 
-        let flags = entry.get("flags").filter(|v| !v.is_null()).map(|flags| FlagsSpec {
-            field: Field::from_json(flags),
-            sealed_bit: flags["sealedBit"].as_u64().map(|bit| bit as u32),
-            role_mask: flags["roleMask"].as_u64(),
-            role_order: flags["roleOrder"]
-                .as_array()
-                .map(|values| values.iter().filter_map(Value::as_u64).collect())
-                .unwrap_or_default(),
-        });
+        let flags = entry
+            .get("flags")
+            .filter(|v| !v.is_null())
+            .map(|flags| FlagsSpec {
+                field: Field::from_json(flags),
+                sealed_bit: flags["sealedBit"].as_u64().map(|bit| bit as u32),
+                role_mask: flags["roleMask"].as_u64(),
+                role_order: flags["roleOrder"]
+                    .as_array()
+                    .map(|values| values.iter().filter_map(Value::as_u64).collect())
+                    .unwrap_or_default(),
+            });
 
-        let compression = entry.get("compression").filter(|v| !v.is_null()).map(|c| CompressionSpec {
-            field: Field::from_json(c),
-            stored: codes_of(c, "stored"),
-            zlib: codes_of(c, "zlib"),
-        });
+        let compression =
+            entry
+                .get("compression")
+                .filter(|v| !v.is_null())
+                .map(|c| CompressionSpec {
+                    field: Field::from_json(c),
+                    stored: codes_of(c, "stored"),
+                    zlib: codes_of(c, "zlib"),
+                });
 
         Self {
             magic: string_field(value, "magic").into_bytes(),
@@ -254,9 +263,10 @@ impl Locator {
                     .iter()
                     .map(Field::from_json)
                     .collect(),
-                index: entry.get("index").filter(|v| !v.is_null()).map(|index| {
-                    (Field::from_json(index), number_field(index, "value"))
-                }),
+                index: entry
+                    .get("index")
+                    .filter(|v| !v.is_null())
+                    .map(|index| (Field::from_json(index), number_field(index, "value"))),
                 compression,
                 flags,
             },
@@ -281,10 +291,13 @@ impl Locator {
                 ),
                 other => panic!("thumbnail declaration has an unknown payload encoding: {other:?}"),
             },
-            trailer: value.get("trailer").filter(|v| !v.is_null()).map(|trailer| TrailerSpec {
-                magic: string_field(trailer, "magic").into_bytes(),
-                size: number_field(trailer, "size"),
-            }),
+            trailer: value
+                .get("trailer")
+                .filter(|v| !v.is_null())
+                .map(|trailer| TrailerSpec {
+                    magic: string_field(trailer, "magic").into_bytes(),
+                    size: number_field(trailer, "size"),
+                }),
         }
     }
 
@@ -294,7 +307,8 @@ impl Locator {
         reader: &mut R,
         extension: &str,
     ) -> Result<Vec<u8>, ThumbnailError> {
-        let malformed = |reason: String| ThumbnailError::Malformed(format!("{extension}: {reason}"));
+        let malformed =
+            |reason: String| ThumbnailError::Malformed(format!("{extension}: {reason}"));
 
         let file_len = reader.seek(SeekFrom::End(0))?;
 
@@ -309,17 +323,21 @@ impl Locator {
         }
 
         if let Some((field, equals, at_least)) = self.version {
-            let version = field
-                .read(&header)
-                .ok_or_else(|| malformed("the header is too short for its version field".to_string()))?;
+            let version = field.read(&header).ok_or_else(|| {
+                malformed("the header is too short for its version field".to_string())
+            })?;
             if let Some(expected) = equals {
                 if version != expected {
-                    return Err(malformed(format!("version {version} is not the declared {expected}")));
+                    return Err(malformed(format!(
+                        "version {version} is not the declared {expected}"
+                    )));
                 }
             }
             if let Some(minimum) = at_least {
                 if version < minimum {
-                    return Err(malformed(format!("version {version} is below the declared {minimum}")));
+                    return Err(malformed(format!(
+                        "version {version} is below the declared {minimum}"
+                    )));
                 }
             }
         }
@@ -327,29 +345,34 @@ impl Locator {
         // ── Trailer ────────────────────────────────────────────────────────
         if let Some(trailer) = &self.trailer {
             if file_len < trailer.size {
-                return Err(malformed("the file is shorter than its trailer".to_string()));
+                return Err(malformed(
+                    "the file is shorter than its trailer".to_string(),
+                ));
             }
             reader.seek(SeekFrom::Start(file_len - trailer.size))?;
             let mut tail = vec![0u8; trailer.size as usize];
             reader.read_exact(&mut tail)?;
             if !tail.starts_with(&trailer.magic) {
-                return Err(malformed("the file does not end with the declared trailer".to_string()));
+                return Err(malformed(
+                    "the file does not end with the declared trailer".to_string(),
+                ));
             }
         }
 
         // ── Chunk table ────────────────────────────────────────────────────
         let directory_offset = match (self.directory.offset_fixed, self.directory.offset_field) {
             (Some(fixed), _) => fixed,
-            (None, Some(field)) => field
-                .read(&header)
-                .ok_or_else(|| malformed("the header is too short for the table offset".to_string()))?,
-            (None, None) => return Err(malformed("the declaration has no table offset".to_string())),
+            (None, Some(field)) => field.read(&header).ok_or_else(|| {
+                malformed("the header is too short for the table offset".to_string())
+            })?,
+            (None, None) => {
+                return Err(malformed("the declaration has no table offset".to_string()))
+            }
         };
-        let entry_count = self
-            .directory
-            .count
-            .read(&header)
-            .ok_or_else(|| malformed("the header is too short for the entry count".to_string()))?;
+        let entry_count =
+            self.directory.count.read(&header).ok_or_else(|| {
+                malformed("the header is too short for the entry count".to_string())
+            })?;
 
         let table_len = entry_count
             .checked_mul(self.directory.entry_size)
@@ -360,7 +383,9 @@ impl Locator {
         // Compared the safe way round: a corrupt count would otherwise wrap the bound
         // in a release build instead of being refused.
         if table_end > file_len {
-            return Err(malformed("the chunk table lies outside the file".to_string()));
+            return Err(malformed(
+                "the chunk table lies outside the file".to_string(),
+            ));
         }
 
         reader.seek(SeekFrom::Start(directory_offset))?;
@@ -376,7 +401,11 @@ impl Locator {
             };
 
             let chunk = entry.get(self.entry.type_at..).unwrap_or_default();
-            if !self.preview_chunks.iter().any(|preview| chunk.starts_with(preview)) {
+            if !self
+                .preview_chunks
+                .iter()
+                .any(|preview| chunk.starts_with(preview))
+            {
                 continue;
             }
 
@@ -489,7 +518,8 @@ struct Candidate {
 /// The base64 PNG at a JSON path inside a chunk payload, or `None` when that path is
 /// absent — an extension chunk without a preview is not an error, merely unhelpful.
 fn png_from_json(payload: &[u8], path: &[String]) -> Result<Option<Vec<u8>>, String> {
-    let parsed: Value = serde_json::from_slice(payload).map_err(|error| format!("JSON parse failed: {error}"))?;
+    let parsed: Value =
+        serde_json::from_slice(payload).map_err(|error| format!("JSON parse failed: {error}"))?;
 
     let mut cursor = &parsed;
     for key in path {

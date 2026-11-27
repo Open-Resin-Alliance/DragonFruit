@@ -42,7 +42,13 @@ impl Encoder for EchoEncoder {
             .get("metadata_json")
             .and_then(|value| value.as_str())
             .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
-            .and_then(|metadata| metadata.get("echo")?.get("sceneBase64")?.as_str().map(str::len));
+            .and_then(|metadata| {
+                metadata
+                    .get("echo")?
+                    .get("sceneBase64")?
+                    .as_str()
+                    .map(str::len)
+            });
         Ok(())
     }
 
@@ -60,14 +66,19 @@ impl Encoder for EchoEncoder {
 
     fn finish(&mut self, output: &std::path::Path) -> Result<u64, String> {
         let mut file = std::fs::File::create(output).map_err(|error| error.to_string())?;
-        file.write_all(b"ECHOENC1").map_err(|error| error.to_string())?;
-        file.write_all(self.format.as_bytes()).map_err(|error| error.to_string())?;
+        file.write_all(b"ECHOENC1")
+            .map_err(|error| error.to_string())?;
+        file.write_all(self.format.as_bytes())
+            .map_err(|error| error.to_string())?;
         for (index, kind, runs, bytes) in &self.layers {
-            file.write_all(&index.to_le_bytes()).map_err(|error| error.to_string())?;
+            file.write_all(&index.to_le_bytes())
+                .map_err(|error| error.to_string())?;
             file.write_all(&(bytes.len() as u32).to_le_bytes())
                 .map_err(|error| error.to_string())?;
-            file.write_all(kind.as_bytes()).map_err(|error| error.to_string())?;
-            file.write_all(&runs.to_le_bytes()).map_err(|error| error.to_string())?;
+            file.write_all(kind.as_bytes())
+                .map_err(|error| error.to_string())?;
+            file.write_all(&runs.to_le_bytes())
+                .map_err(|error| error.to_string())?;
             file.write_all(bytes).map_err(|error| error.to_string())?;
         }
         file.write_all(format!("layers={}", self.layers.len()).as_bytes())

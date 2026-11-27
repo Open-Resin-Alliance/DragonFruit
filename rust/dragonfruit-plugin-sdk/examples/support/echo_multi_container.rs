@@ -135,7 +135,11 @@ struct BitWriter {
 
 impl BitWriter {
     fn new(capacity: usize) -> Self {
-        Self { bytes: Vec::with_capacity(capacity), buf: 0, nbits: 0 }
+        Self {
+            bytes: Vec::with_capacity(capacity),
+            buf: 0,
+            nbits: 0,
+        }
     }
 
     fn bits_lsb(&mut self, value: u32, count: u8) {
@@ -185,8 +189,16 @@ fn emit_match(writer: &mut BitWriter, length: u16) {
         11..=18 => (265 + (length - 11) as u32 / 2, (length - 11) as u32 % 2, 1),
         19..=34 => (269 + (length - 19) as u32 / 4, (length - 19) as u32 % 4, 2),
         35..=66 => (273 + (length - 35) as u32 / 8, (length - 35) as u32 % 8, 3),
-        67..=130 => (277 + (length - 67) as u32 / 16, (length - 67) as u32 % 16, 4),
-        131..=257 => (281 + (length - 131) as u32 / 32, (length - 131) as u32 % 32, 5),
+        67..=130 => (
+            277 + (length - 67) as u32 / 16,
+            (length - 67) as u32 % 16,
+            4,
+        ),
+        131..=257 => (
+            281 + (length - 131) as u32 / 32,
+            (length - 131) as u32 % 32,
+            5,
+        ),
         258 => (285, 0, 0),
         _ => unreachable!(),
     };
@@ -277,7 +289,8 @@ impl ZipWriter {
         self.body.extend_from_slice(&crc.to_le_bytes());
         self.body.extend_from_slice(&size.to_le_bytes());
         self.body.extend_from_slice(&size.to_le_bytes());
-        self.body.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+        self.body
+            .extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
         self.body.extend_from_slice(&0u16.to_le_bytes()); // extra
         self.body.extend_from_slice(name_bytes);
         self.body.extend_from_slice(payload);

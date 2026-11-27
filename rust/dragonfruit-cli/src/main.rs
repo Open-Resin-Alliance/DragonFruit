@@ -19,15 +19,18 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use dragonfruit_cli::io::*;
-use dragonfruit_slicing_engine::geometry::parse_triangles;
 use dragonfruit_islands::model::*;
 use dragonfruit_islands::rasterize::rasterize_for_island_scan;
 use dragonfruit_islands::rle;
 use dragonfruit_islands::scan::scan_layer;
 use dragonfruit_islands::tracker::IslandTracker;
+use dragonfruit_slicing_engine::geometry::parse_triangles;
 
 #[derive(Parser)]
-#[command(name = "dragonfruit-cli", about = "DragonFruit pipeline CLI — every stage observable")]
+#[command(
+    name = "dragonfruit-cli",
+    about = "DragonFruit pipeline CLI — every stage observable"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -489,14 +492,25 @@ fn cmd_mesh_read_stl(input: &PathBuf, output: &PathBuf) -> Result<(), String> {
     });
     write_json(&output.join("mesh-info.json"), &info)?;
 
-    eprintln!("read-stl: {} triangles, bbox ({:.2},{:.2},{:.2})-({:.2},{:.2},{:.2})",
-        triangles.len(), bbox.min_x, bbox.min_y, bbox.min_z, bbox.max_x, bbox.max_y, bbox.max_z);
+    eprintln!(
+        "read-stl: {} triangles, bbox ({:.2},{:.2},{:.2})-({:.2},{:.2},{:.2})",
+        triangles.len(),
+        bbox.min_x,
+        bbox.min_y,
+        bbox.min_z,
+        bbox.max_x,
+        bbox.max_y,
+        bbox.max_z
+    );
     Ok(())
 }
 
 fn cmd_mesh_info(input: &PathBuf, json_output: bool) -> Result<(), String> {
     let (flat, source) = if input.is_dir() {
-        (read_positions_bin(&input.join("positions.bin"))?, "directory")
+        (
+            read_positions_bin(&input.join("positions.bin"))?,
+            "directory",
+        )
     } else if is_voxl_file(input) {
         let (positions, used_orig) = load_voxl_triangles(input)?;
         if !json_output {
@@ -539,10 +553,16 @@ fn cmd_mesh_info(input: &PathBuf, json_output: bool) -> Result<(), String> {
     } else {
         eprintln!("mesh info ({}):", source);
         eprintln!("  triangles: {}", triangles.len());
-        eprintln!("  bbox: ({:.2},{:.2},{:.2}) to ({:.2},{:.2},{:.2})",
-            bbox.min_x, bbox.min_y, bbox.min_z, bbox.max_x, bbox.max_y, bbox.max_z);
-        eprintln!("  size: {:.2} x {:.2} x {:.2} mm",
-            bbox.max_x - bbox.min_x, bbox.max_y - bbox.min_y, bbox.max_z - bbox.min_z);
+        eprintln!(
+            "  bbox: ({:.2},{:.2},{:.2}) to ({:.2},{:.2},{:.2})",
+            bbox.min_x, bbox.min_y, bbox.min_z, bbox.max_x, bbox.max_y, bbox.max_z
+        );
+        eprintln!(
+            "  size: {:.2} x {:.2} x {:.2} mm",
+            bbox.max_x - bbox.min_x,
+            bbox.max_y - bbox.min_y,
+            bbox.max_z - bbox.min_z
+        );
         eprintln!("  volume: {:.2} mm^3", volume.abs());
     }
     Ok(())
@@ -551,14 +571,22 @@ fn cmd_mesh_info(input: &PathBuf, json_output: bool) -> Result<(), String> {
 fn cmd_mesh_export_stl(input: &PathBuf, output: &PathBuf) -> Result<(), String> {
     let positions = read_positions_bin(&input.join("positions.bin"))?;
     write_binary_stl(output, &positions)?;
-    eprintln!("export-stl: {} triangles -> {}", positions.len() / 9, output.display());
+    eprintln!(
+        "export-stl: {} triangles -> {}",
+        positions.len() / 9,
+        output.display()
+    );
     Ok(())
 }
 
 fn cmd_mesh_export_3mf(input: &PathBuf, output: &PathBuf) -> Result<(), String> {
     let positions = read_positions_bin(&input.join("positions.bin"))?;
     write_3mf(output, &positions)?;
-    eprintln!("export-3mf: {} triangles -> {}", positions.len() / 9, output.display());
+    eprintln!(
+        "export-3mf: {} triangles -> {}",
+        positions.len() / 9,
+        output.display()
+    );
     Ok(())
 }
 
@@ -566,14 +594,19 @@ fn cmd_mesh_export_3mf(input: &PathBuf, output: &PathBuf) -> Result<(), String> 
 // Island command implementations — wraps islands::* (unchanged from original)
 // ===========================================================================
 
-fn cmd_rasterize(input: &PathBuf, output: &PathBuf, px_mm: f64, layer_height: f64) -> Result<(), String> {
+fn cmd_rasterize(
+    input: &PathBuf,
+    output: &PathBuf,
+    px_mm: f64,
+    layer_height: f64,
+) -> Result<(), String> {
     ensure_dir(output)?;
     ensure_dir(&output.join("layers"))?;
 
     let flat = read_positions_bin(&input.join("positions.bin"))?;
     let info: serde_json::Value = read_json(&input.join("mesh-info.json"))?;
-    let bbox: BBox = serde_json::from_value(info["bbox"].clone())
-        .map_err(|e| format!("Parse bbox: {e}"))?;
+    let bbox: BBox =
+        serde_json::from_value(info["bbox"].clone()).map_err(|e| format!("Parse bbox: {e}"))?;
 
     let triangles = parse_triangles(&flat);
 
@@ -581,10 +614,14 @@ fn cmd_rasterize(input: &PathBuf, output: &PathBuf, px_mm: f64, layer_height: f6
     let (masks, grid_width, grid_height, num_layers, origin_x, origin_z) =
         rasterize_for_island_scan(
             &triangles,
-            bbox.min_x as f64, bbox.max_x as f64,
-            bbox.min_y as f64, bbox.max_y as f64,
-            bbox.min_z as f64, bbox.max_z as f64,
-            px_mm, layer_height,
+            bbox.min_x as f64,
+            bbox.max_x as f64,
+            bbox.min_y as f64,
+            bbox.max_y as f64,
+            bbox.min_z as f64,
+            bbox.max_z as f64,
+            px_mm,
+            layer_height,
         );
     let raster_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -602,7 +639,12 @@ fn cmd_rasterize(input: &PathBuf, output: &PathBuf, px_mm: f64, layer_height: f6
 
     let total_px: u64 = masks.iter().map(|m| m.pixel_count()).sum();
     for (i, mask) in masks.iter().enumerate() {
-        write_rle_mask_json(&output.join("layers").join(format!("{:03}.mask.rle.json", i)), mask)?;
+        write_rle_mask_json(
+            &output
+                .join("layers")
+                .join(format!("{:03}.mask.rle.json", i)),
+            mask,
+        )?;
     }
 
     let summary = serde_json::json!({
@@ -613,37 +655,57 @@ fn cmd_rasterize(input: &PathBuf, output: &PathBuf, px_mm: f64, layer_height: f6
     });
     write_json(&output.join("raster-summary.json"), &summary)?;
 
-    eprintln!("rasterize: {}x{}, {} layers, {} solid px, {:.0}ms",
-        grid_width, grid_height, num_layers, total_px, raster_ms);
+    eprintln!(
+        "rasterize: {}x{}, {} layers, {} solid px, {:.0}ms",
+        grid_width, grid_height, num_layers, total_px, raster_ms
+    );
     Ok(())
 }
 
-fn cmd_scan(input: &PathBuf, output: &PathBuf, buffer_mm: f64, connectivity: u8) -> Result<(), String> {
+fn cmd_scan(
+    input: &PathBuf,
+    output: &PathBuf,
+    buffer_mm: f64,
+    connectivity: u8,
+) -> Result<(), String> {
     ensure_dir(&output.join("layers"))?;
 
     let params: serde_json::Value = read_json(&input.join("params.json"))?;
     let px_mm = params["px_mm"].as_f64().unwrap();
     let num_layers = params["num_layers"].as_u64().unwrap() as usize;
-    let conn = if connectivity == 8 { Connectivity::Eight } else { Connectivity::Four };
+    let conn = if connectivity == 8 {
+        Connectivity::Eight
+    } else {
+        Connectivity::Four
+    };
 
     let t0 = Instant::now();
     let mut prev_mask: Option<RleMask> = None;
     let mut total_candidates = 0u64;
 
     for l in 0..num_layers {
-        let mask = read_rle_mask_json(&input.join("layers").join(format!("{:03}.mask.rle.json", l)))?;
+        let mask =
+            read_rle_mask_json(&input.join("layers").join(format!("{:03}.mask.rle.json", l)))?;
         let result = scan_layer(&mask, prev_mask.as_ref(), px_mm, buffer_mm, conn);
 
         write_rle_labels_json(
-            &output.join("layers").join(format!("{:03}.candidates.rle.json", l)),
+            &output
+                .join("layers")
+                .join(format!("{:03}.candidates.rle.json", l)),
             &result.labels,
         )?;
         write_json(
-            &output.join("layers").join(format!("{:03}.components.json", l)),
+            &output
+                .join("layers")
+                .join(format!("{:03}.components.json", l)),
             &result.components,
         )?;
 
-        total_candidates += result.components.iter().map(|c| c.area_px as u64).sum::<u64>();
+        total_candidates += result
+            .components
+            .iter()
+            .map(|c| c.area_px as u64)
+            .sum::<u64>();
         prev_mask = Some(mask);
     }
     let scan_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -654,8 +716,12 @@ fn cmd_scan(input: &PathBuf, output: &PathBuf, buffer_mm: f64, connectivity: u8)
     if output != input {
         for l in 0..num_layers {
             let src = input.join("layers").join(format!("{:03}.mask.rle.json", l));
-            let dst = output.join("layers").join(format!("{:03}.mask.rle.json", l));
-            if src != dst { let _ = std::fs::copy(&src, &dst); }
+            let dst = output
+                .join("layers")
+                .join(format!("{:03}.mask.rle.json", l));
+            if src != dst {
+                let _ = std::fs::copy(&src, &dst);
+            }
         }
     }
     write_json(&output.join("params.json"), &out_params)?;
@@ -667,11 +733,19 @@ fn cmd_scan(input: &PathBuf, output: &PathBuf, buffer_mm: f64, connectivity: u8)
     });
     write_json(&output.join("scan-summary.json"), &summary)?;
 
-    eprintln!("scan: {} layers, {} candidate px, {:.0}ms", num_layers, total_candidates, scan_ms);
+    eprintln!(
+        "scan: {} layers, {} candidate px, {:.0}ms",
+        num_layers, total_candidates, scan_ms
+    );
     Ok(())
 }
 
-fn cmd_track(input: &PathBuf, output: &PathBuf, overlap: i32, neighborhood: i32) -> Result<(), String> {
+fn cmd_track(
+    input: &PathBuf,
+    output: &PathBuf,
+    overlap: i32,
+    neighborhood: i32,
+) -> Result<(), String> {
     ensure_dir(&output.join("layers"))?;
     ensure_dir(&output.join("tracker-state"))?;
 
@@ -684,22 +758,49 @@ fn cmd_track(input: &PathBuf, output: &PathBuf, overlap: i32, neighborhood: i32)
 
     let t0 = Instant::now();
     for l in 0..num_layers {
-        let mask = read_rle_mask_json(&input.join("layers").join(format!("{:03}.mask.rle.json", l)))?;
-        let candidates = read_rle_labels_json(&input.join("layers").join(format!("{:03}.candidates.rle.json", l)))?;
-        let components: Vec<ComponentInfo> = read_json(&input.join("layers").join(format!("{:03}.components.json", l)))?;
+        let mask =
+            read_rle_mask_json(&input.join("layers").join(format!("{:03}.mask.rle.json", l)))?;
+        let candidates = read_rle_labels_json(
+            &input
+                .join("layers")
+                .join(format!("{:03}.candidates.rle.json", l)),
+        )?;
+        let components: Vec<ComponentInfo> = read_json(
+            &input
+                .join("layers")
+                .join(format!("{:03}.components.json", l)),
+        )?;
 
-        let prev_labels = if l > 0 { Some(&island_labels_all[l - 1]) } else { None };
+        let prev_labels = if l > 0 {
+            Some(&island_labels_all[l - 1])
+        } else {
+            None
+        };
         let is_top = l == num_layers.saturating_sub(1);
-        let island_labels = tracker.process_layer(l as u32, &candidates, &components, prev_labels, &mask, is_top);
+        let island_labels = tracker.process_layer(
+            l as u32,
+            &candidates,
+            &components,
+            prev_labels,
+            &mask,
+            is_top,
+        );
 
         write_rle_labels_json(
-            &output.join("layers").join(format!("{:03}.island-labels.rle.json", l)),
+            &output
+                .join("layers")
+                .join(format!("{:03}.island-labels.rle.json", l)),
             &island_labels,
         )?;
         island_labels_all.push(island_labels);
 
         let islands = tracker.get_islands();
-        write_json(&output.join("tracker-state").join(format!("{:03}.islands.json", l)), &islands)?;
+        write_json(
+            &output
+                .join("tracker-state")
+                .join(format!("{:03}.islands.json", l)),
+            &islands,
+        )?;
     }
     let track_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -731,14 +832,23 @@ fn cmd_analyze(input: &PathBuf, output: &PathBuf, min_area: f64) -> Result<(), S
     let mut islands: Vec<Island> = read_json(&input.join("islands.json"))?;
 
     for island in &mut islands {
-        let vol: f64 = island.per_layer_area_mm2.values().map(|&a| a * layer_height).sum();
+        let vol: f64 = island
+            .per_layer_area_mm2
+            .values()
+            .map(|&a| a * layer_height)
+            .sum();
         island.volume_mm3 = Some(vol);
-        let max_area = island.per_layer_area_mm2.values().copied().fold(0.0_f64, f64::max);
+        let max_area = island
+            .per_layer_area_mm2
+            .values()
+            .copied()
+            .fold(0.0_f64, f64::max);
         island.max_area_mm2 = Some(max_area);
         island.compute_centroid();
     }
 
-    let filtered: Vec<&Island> = islands.iter()
+    let filtered: Vec<&Island> = islands
+        .iter()
         .filter(|i| !i.is_merged_placeholder && i.max_area_mm2.unwrap_or(0.0) >= min_area)
         .collect();
 
@@ -750,15 +860,27 @@ fn cmd_analyze(input: &PathBuf, output: &PathBuf, min_area: f64) -> Result<(), S
     });
     write_json(&output.join("result.json"), &result)?;
 
-    eprintln!("analyze: {} total -> {} filtered (min_area={} mm2)", islands.len(), filtered.len(), min_area);
+    eprintln!(
+        "analyze: {} total -> {} filtered (min_area={} mm2)",
+        islands.len(),
+        filtered.len(),
+        min_area
+    );
     Ok(())
 }
 
 fn cmd_island_full(
-    input: &PathBuf, output: &PathBuf,
-    px_mm: f64, layer_height: f64, buffer: f64, connectivity: u8,
-    overlap: i32, neighborhood: i32, min_area: f64,
-    params_json: &Option<PathBuf>, json_output: bool,
+    input: &PathBuf,
+    output: &PathBuf,
+    px_mm: f64,
+    layer_height: f64,
+    buffer: f64,
+    connectivity: u8,
+    overlap: i32,
+    neighborhood: i32,
+    min_area: f64,
+    params_json: &Option<PathBuf>,
+    json_output: bool,
 ) -> Result<(), String> {
     ensure_dir(output)?;
     ensure_dir(&output.join("layers"))?;
@@ -769,15 +891,35 @@ fn cmd_island_full(
             let p: serde_json::Value = read_json(pj)?;
             (
                 p.get("px_mm").and_then(|v| v.as_f64()).unwrap_or(px_mm),
-                p.get("layer_height_mm").and_then(|v| v.as_f64()).unwrap_or(layer_height),
-                p.get("support_buffer_mm").and_then(|v| v.as_f64()).unwrap_or(buffer),
-                p.get("connectivity").and_then(|v| v.as_u64()).unwrap_or(connectivity as u64) as u8,
-                p.get("min_overlap_px").and_then(|v| v.as_i64()).unwrap_or(overlap as i64) as i32,
-                p.get("overlap_neighborhood_px").and_then(|v| v.as_i64()).unwrap_or(neighborhood as i64) as i32,
-                p.get("min_island_area_mm2").and_then(|v| v.as_f64()).unwrap_or(min_area),
+                p.get("layer_height_mm")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(layer_height),
+                p.get("support_buffer_mm")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(buffer),
+                p.get("connectivity")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(connectivity as u64) as u8,
+                p.get("min_overlap_px")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(overlap as i64) as i32,
+                p.get("overlap_neighborhood_px")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(neighborhood as i64) as i32,
+                p.get("min_island_area_mm2")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(min_area),
             )
         } else {
-            (px_mm, layer_height, buffer, connectivity, overlap, neighborhood, min_area)
+            (
+                px_mm,
+                layer_height,
+                buffer,
+                connectivity,
+                overlap,
+                neighborhood,
+                min_area,
+            )
         };
 
     let flat = load_binary_stl(input)?;
@@ -785,34 +927,60 @@ fn cmd_island_full(
     let bbox = compute_bbox(&triangles);
 
     write_positions_bin(&output.join("positions.bin"), &flat)?;
-    write_json(&output.join("mesh-info.json"), &serde_json::json!({
-        "triangles": triangles.len(), "bbox": bbox,
-    }))?;
+    write_json(
+        &output.join("mesh-info.json"),
+        &serde_json::json!({
+            "triangles": triangles.len(), "bbox": bbox,
+        }),
+    )?;
 
     let t_raster = Instant::now();
     let (masks, gw, gh, nl, ox, oz) = rasterize_for_island_scan(
         &triangles,
-        bbox.min_x as f64, bbox.max_x as f64,
-        bbox.min_y as f64, bbox.max_y as f64,
-        bbox.min_z as f64, bbox.max_z as f64,
-        px_mm, layer_height,
+        bbox.min_x as f64,
+        bbox.max_x as f64,
+        bbox.min_y as f64,
+        bbox.max_y as f64,
+        bbox.min_z as f64,
+        bbox.max_z as f64,
+        px_mm,
+        layer_height,
     );
     let raster_ms = t_raster.elapsed().as_secs_f64() * 1000.0;
     let total_px: u64 = masks.iter().map(|m| m.pixel_count()).sum();
 
     for (i, mask) in masks.iter().enumerate() {
-        write_rle_mask_json(&output.join("layers").join(format!("{:03}.mask.rle.json", i)), mask)?;
+        write_rle_mask_json(
+            &output
+                .join("layers")
+                .join(format!("{:03}.mask.rle.json", i)),
+            mask,
+        )?;
     }
 
-    let conn = if connectivity == 8 { Connectivity::Eight } else { Connectivity::Four };
+    let conn = if connectivity == 8 {
+        Connectivity::Eight
+    } else {
+        Connectivity::Four
+    };
 
     let t_scan = Instant::now();
     let mut layer_results = Vec::new();
     for (i, mask) in masks.iter().enumerate() {
         let prev = if i > 0 { Some(&masks[i - 1]) } else { None };
         let r = scan_layer(mask, prev, px_mm, buffer, conn);
-        write_rle_labels_json(&output.join("layers").join(format!("{:03}.candidates.rle.json", i)), &r.labels)?;
-        write_json(&output.join("layers").join(format!("{:03}.components.json", i)), &r.components)?;
+        write_rle_labels_json(
+            &output
+                .join("layers")
+                .join(format!("{:03}.candidates.rle.json", i)),
+            &r.labels,
+        )?;
+        write_json(
+            &output
+                .join("layers")
+                .join(format!("{:03}.components.json", i)),
+            &r.components,
+        )?;
         layer_results.push(r);
     }
 
@@ -820,12 +988,33 @@ fn cmd_island_full(
     let mut island_labels_all: Vec<RleLabels> = Vec::new();
 
     for (l, lr) in layer_results.iter().enumerate() {
-        let prev_labels = if l > 0 { Some(&island_labels_all[l - 1]) } else { None };
+        let prev_labels = if l > 0 {
+            Some(&island_labels_all[l - 1])
+        } else {
+            None
+        };
         let is_top = l == layer_results.len().saturating_sub(1);
-        let island_labels = tracker.process_layer(l as u32, &lr.labels, &lr.components, prev_labels, &lr.solid_mask, is_top);
-        write_rle_labels_json(&output.join("layers").join(format!("{:03}.island-labels.rle.json", l)), &island_labels)?;
+        let island_labels = tracker.process_layer(
+            l as u32,
+            &lr.labels,
+            &lr.components,
+            prev_labels,
+            &lr.solid_mask,
+            is_top,
+        );
+        write_rle_labels_json(
+            &output
+                .join("layers")
+                .join(format!("{:03}.island-labels.rle.json", l)),
+            &island_labels,
+        )?;
         let snap = tracker.get_islands();
-        write_json(&output.join("tracker-state").join(format!("{:03}.islands.json", l)), &snap)?;
+        write_json(
+            &output
+                .join("tracker-state")
+                .join(format!("{:03}.islands.json", l)),
+            &snap,
+        )?;
         island_labels_all.push(island_labels);
     }
     tracker.finalize_islands(nl.saturating_sub(1) as u32);
@@ -833,13 +1022,22 @@ fn cmd_island_full(
     let scan_ms = t_scan.elapsed().as_secs_f64() * 1000.0;
 
     for island in &mut islands {
-        let vol: f64 = island.per_layer_area_mm2.values().map(|&a| a * layer_height).sum();
+        let vol: f64 = island
+            .per_layer_area_mm2
+            .values()
+            .map(|&a| a * layer_height)
+            .sum();
         island.volume_mm3 = Some(vol);
-        let max_a = island.per_layer_area_mm2.values().copied().fold(0.0_f64, f64::max);
+        let max_a = island
+            .per_layer_area_mm2
+            .values()
+            .copied()
+            .fold(0.0_f64, f64::max);
         island.max_area_mm2 = Some(max_a);
         island.compute_centroid();
     }
-    let filtered: Vec<&Island> = islands.iter()
+    let filtered: Vec<&Island> = islands
+        .iter()
         .filter(|i| !i.is_merged_placeholder && i.max_area_mm2.unwrap_or(0.0) >= min_area)
         .collect();
 
@@ -875,27 +1073,60 @@ fn cmd_island_full(
     if json_output {
         println!("{}", serde_json::to_string_pretty(&result).unwrap());
     } else {
-        eprintln!("full: {} tris, {}x{}, {} layers, {} solid px", triangles.len(), gw, gh, nl, total_px);
-        eprintln!("  raster={:.0}ms scan={:.0}ms total={:.0}ms", raster_ms, scan_ms, raster_ms + scan_ms);
-        eprintln!("  islands: {} total, {} filtered", islands.len(), filtered.len());
+        eprintln!(
+            "full: {} tris, {}x{}, {} layers, {} solid px",
+            triangles.len(),
+            gw,
+            gh,
+            nl,
+            total_px
+        );
+        eprintln!(
+            "  raster={:.0}ms scan={:.0}ms total={:.0}ms",
+            raster_ms,
+            scan_ms,
+            raster_ms + scan_ms
+        );
+        eprintln!(
+            "  islands: {} total, {} filtered",
+            islands.len(),
+            filtered.len()
+        );
     }
     Ok(())
 }
 
 fn cmd_island_bench(
-    input: &PathBuf, px_mm: f64, layer_height: f64, buffer: f64,
-    connectivity: u8, overlap: i32, neighborhood: i32, min_area: f64,
-    iterations: u32, json_output: bool,
+    input: &PathBuf,
+    px_mm: f64,
+    layer_height: f64,
+    buffer: f64,
+    connectivity: u8,
+    overlap: i32,
+    neighborhood: i32,
+    min_area: f64,
+    iterations: u32,
+    json_output: bool,
 ) -> Result<(), String> {
     let flat = load_binary_stl(input)?;
     let triangles = parse_triangles(&flat);
     let bbox = compute_bbox(&triangles);
-    let conn = if connectivity == 8 { Connectivity::Eight } else { Connectivity::Four };
+    let conn = if connectivity == 8 {
+        Connectivity::Eight
+    } else {
+        Connectivity::Four
+    };
 
     if !json_output {
-        eprintln!("Benchmarking: {} ({} triangles)", input.display(), triangles.len());
-        eprintln!("  px_mm={} layer_h={} buffer={} conn={} overlap={} neighborhood={}",
-            px_mm, layer_height, buffer, connectivity, overlap, neighborhood);
+        eprintln!(
+            "Benchmarking: {} ({} triangles)",
+            input.display(),
+            triangles.len()
+        );
+        eprintln!(
+            "  px_mm={} layer_h={} buffer={} conn={} overlap={} neighborhood={}",
+            px_mm, layer_height, buffer, connectivity, overlap, neighborhood
+        );
         eprintln!("  {} iterations, reporting best\n", iterations);
     }
 
@@ -920,10 +1151,14 @@ fn cmd_island_bench(
         let t1 = Instant::now();
         let (masks, gw, gh, nl, _ox, _oz) = rasterize_for_island_scan(
             &tris,
-            bbox.min_x as f64, bbox.max_x as f64,
-            bbox.min_y as f64, bbox.max_y as f64,
-            bbox.min_z as f64, bbox.max_z as f64,
-            px_mm, layer_height,
+            bbox.min_x as f64,
+            bbox.max_x as f64,
+            bbox.min_y as f64,
+            bbox.max_y as f64,
+            bbox.min_z as f64,
+            bbox.max_z as f64,
+            px_mm,
+            layer_height,
         );
         let raster_ms = t1.elapsed().as_secs_f64() * 1000.0;
 
@@ -939,9 +1174,20 @@ fn cmd_island_bench(
         let mut tracker = IslandTracker::new(px_mm, overlap, neighborhood);
         let mut island_labels: Vec<RleLabels> = Vec::with_capacity(nl);
         for (l, lr) in layer_results.iter().enumerate() {
-            let prev = if l > 0 { Some(&island_labels[l - 1]) } else { None };
+            let prev = if l > 0 {
+                Some(&island_labels[l - 1])
+            } else {
+                None
+            };
             let is_top = l == nl.saturating_sub(1);
-            let il = tracker.process_layer(l as u32, &lr.labels, &lr.components, prev, &lr.solid_mask, is_top);
+            let il = tracker.process_layer(
+                l as u32,
+                &lr.labels,
+                &lr.components,
+                prev,
+                &lr.solid_mask,
+                is_top,
+            );
             island_labels.push(il);
         }
         tracker.finalize_islands(nl.saturating_sub(1) as u32);
@@ -950,13 +1196,22 @@ fn cmd_island_bench(
 
         let t4 = Instant::now();
         for island in &mut islands {
-            let vol: f64 = island.per_layer_area_mm2.values().map(|&a| a * layer_height).sum();
+            let vol: f64 = island
+                .per_layer_area_mm2
+                .values()
+                .map(|&a| a * layer_height)
+                .sum();
             island.volume_mm3 = Some(vol);
-            let max_a = island.per_layer_area_mm2.values().copied().fold(0.0_f64, f64::max);
+            let max_a = island
+                .per_layer_area_mm2
+                .values()
+                .copied()
+                .fold(0.0_f64, f64::max);
             island.max_area_mm2 = Some(max_a);
             island.compute_centroid();
         }
-        let filtered_count = islands.iter()
+        let filtered_count = islands
+            .iter()
             .filter(|i| !i.is_merged_placeholder && i.max_area_mm2.unwrap_or(0.0) >= min_area)
             .count();
         let analyze_ms = t4.elapsed().as_secs_f64() * 1000.0;
@@ -1023,11 +1278,19 @@ fn cmd_island_bench(
         eprintln!("  -------------------------");
         eprintln!("  total:       {:>8.1} ms", best_total_ms);
         eprintln!();
-        eprintln!("  {}x{} grid, {} layers, {} solid px", final_grid.0, final_grid.1, final_layers, final_solid_px);
-        eprintln!("  {} islands ({} filtered)", final_islands_total, final_islands_filtered);
-        eprintln!("  {:.0} layers/s, {:.1} Mpx/s",
+        eprintln!(
+            "  {}x{} grid, {} layers, {} solid px",
+            final_grid.0, final_grid.1, final_layers, final_solid_px
+        );
+        eprintln!(
+            "  {} islands ({} filtered)",
+            final_islands_total, final_islands_filtered
+        );
+        eprintln!(
+            "  {:.0} layers/s, {:.1} Mpx/s",
             final_layers as f64 / (best_total_ms / 1000.0),
-            final_solid_px as f64 / (best_total_ms / 1000.0) / 1e6);
+            final_solid_px as f64 / (best_total_ms / 1000.0) / 1e6
+        );
     }
     Ok(())
 }
@@ -1036,24 +1299,42 @@ fn cmd_island_bench(
 // Island RLE debug commands — wraps islands::rle
 // ===========================================================================
 
-fn cmd_rle_label(input: &PathBuf, output: &PathBuf, connectivity: u8, json_output: bool) -> Result<(), String> {
+fn cmd_rle_label(
+    input: &PathBuf,
+    output: &PathBuf,
+    connectivity: u8,
+    json_output: bool,
+) -> Result<(), String> {
     ensure_dir(output)?;
     let mask = read_rle_mask_json(input)?;
-    let conn = if connectivity == 8 { Connectivity::Eight } else { Connectivity::Four };
+    let conn = if connectivity == 8 {
+        Connectivity::Eight
+    } else {
+        Connectivity::Four
+    };
     let (labels, components) = rle::rle_label_components(&mask, conn);
 
     write_rle_labels_json(&output.join("labels.rle.json"), &labels)?;
     write_json(&output.join("components.json"), &components)?;
 
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "components": components.len(),
-            "connectivity": connectivity,
-            "grid": { "width": mask.width, "height": mask.height },
-        })).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "components": components.len(),
+                "connectivity": connectivity,
+                "grid": { "width": mask.width, "height": mask.height },
+            }))
+            .unwrap()
+        );
     } else {
-        eprintln!("rle-label: {} components ({}x{}, {}-connected)",
-            components.len(), mask.width, mask.height, connectivity);
+        eprintln!(
+            "rle-label: {} components ({}x{}, {}-connected)",
+            components.len(),
+            mask.width,
+            mask.height,
+            connectivity
+        );
     }
     Ok(())
 }
@@ -1063,8 +1344,12 @@ fn cmd_rle_subtract(mask_a: &PathBuf, mask_b: &PathBuf, output: &PathBuf) -> Res
     let b = read_rle_mask_json(mask_b)?;
     let result = rle::rle_subtract(&a, &b);
     write_rle_mask_json(output, &result)?;
-    eprintln!("rle-subtract: {} px - {} px = {} px",
-        a.pixel_count(), b.pixel_count(), result.pixel_count());
+    eprintln!(
+        "rle-subtract: {} px - {} px = {} px",
+        a.pixel_count(),
+        b.pixel_count(),
+        result.pixel_count()
+    );
     Ok(())
 }
 
@@ -1087,7 +1372,10 @@ struct ProcessProbe {
 
 impl ProcessProbe {
     fn new() -> Self {
-        Self { sys: sysinfo::System::new(), pid: sysinfo::get_current_pid().ok() }
+        Self {
+            sys: sysinfo::System::new(),
+            pid: sysinfo::get_current_pid().ok(),
+        }
     }
 
     /// Current resident set size in bytes, and whole-process CPU seconds
@@ -1154,7 +1442,9 @@ fn peak_rss_bytes() -> Option<u64> {
 /// The peak working set, Windows' counterpart of `ru_maxrss`.
 #[cfg(windows)]
 fn peak_rss_bytes() -> Option<u64> {
-    use windows_sys::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows_sys::Win32::System::ProcessStatus::{
+        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
     let mut counters = PROCESS_MEMORY_COUNTERS {
         cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
@@ -1264,7 +1554,8 @@ fn cmd_slice_run(
     // Same flow as Tauri's slice_solid_native_to_temp_path:
     // load STL or positions.bin → build SliceJobV3 → dispatch to engine
     // Load STL, positions.bin, or .voxl container
-    let is_positions_bin = input.extension()
+    let is_positions_bin = input
+        .extension()
         .and_then(|e| e.to_str())
         .map(|e| e == "bin")
         .unwrap_or(false);
@@ -1282,7 +1573,11 @@ fn cmd_slice_run(
                 voxl.total_triangle_count, voxl.model_triangle_count, voxl.mesh_encoding
             );
         }
-        (voxl.triangles_xyz, voxl.model_triangle_count as u32, voxl.mesh_encoding)
+        (
+            voxl.triangles_xyz,
+            voxl.model_triangle_count as u32,
+            voxl.mesh_encoding,
+        )
     } else {
         let f = load_binary_stl(input)?;
         let count = (f.len() / 9) as u32;
@@ -1308,7 +1603,8 @@ fn cmd_slice_run(
         }
 
         // Determine output format from extension (same as Tauri: ext → find_encoder)
-        let ext = output.extension()
+        let ext = output
+            .extension()
             .and_then(|e| e.to_str())
             .map(|e| format!(".{}", e))
             .unwrap_or_else(|| ".nanodlp".to_string());
@@ -1378,7 +1674,10 @@ fn cmd_slice_run(
             use std::io::Write;
             let mut log = log_path.and_then(|p| match std::fs::File::create(&p) {
                 Ok(f) => Some(f),
-                Err(e) => { eprintln!("resource-log: cannot create {}: {e}", p.display()); None }
+                Err(e) => {
+                    eprintln!("resource-log: cannot create {}: {e}", p.display());
+                    None
+                }
             });
             let mut probe = ProcessProbe::new();
             let mut last = Instant::now();
@@ -1476,8 +1775,13 @@ fn cmd_slice_run(
     if json_output {
         println!("{}", serde_json::to_string_pretty(&result).unwrap());
     } else {
-        eprintln!("slice: {} layers, {:.2}s ({:.0} layers/s) -> {}",
-            job.total_layers, perf.total_s(), perf.layers_per_second(), output.display());
+        eprintln!(
+            "slice: {} layers, {:.2}s ({:.0} layers/s) -> {}",
+            job.total_layers,
+            perf.total_s(),
+            perf.layers_per_second(),
+            output.display()
+        );
     }
     Ok(())
 }
@@ -1488,32 +1792,45 @@ fn extract_layer_png(archive_path: &PathBuf, layer: u32, output: &PathBuf) -> Re
         return Err("Layer number must be >= 1".into());
     }
 
-    let file = std::fs::File::open(archive_path)
-        .map_err(|e| format!("Failed to open archive: {e}"))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| format!("Failed to read ZIP: {e}"))?;
+    let file =
+        std::fs::File::open(archive_path).map_err(|e| format!("Failed to open archive: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Failed to read ZIP: {e}"))?;
 
     // Tauri uses "{layer}.png" (1-based)
     let entry_name = format!("{}.png", layer);
 
     // Collect file listing first (before borrowing archive mutably for entry read)
     let file_listing: Vec<String> = (0..archive.len())
-        .filter_map(|i| archive.by_index(i).ok().and_then(|e| e.name().ok().map(|n| n.into_owned())))
+        .filter_map(|i| {
+            archive
+                .by_index(i)
+                .ok()
+                .and_then(|e| e.name().ok().map(|n| n.into_owned()))
+        })
         .take(20)
         .collect();
 
-    let mut entry = archive
-        .by_name(&entry_name)
-        .map_err(|_| format!("Layer '{}' not found. Available: {}", entry_name, file_listing.join(", ")))?;
+    let mut entry = archive.by_name(&entry_name).map_err(|_| {
+        format!(
+            "Layer '{}' not found. Available: {}",
+            entry_name,
+            file_listing.join(", ")
+        )
+    })?;
 
     let mut buf = Vec::with_capacity(entry.size() as usize);
-    entry.read_to_end(&mut buf)
+    entry
+        .read_to_end(&mut buf)
         .map_err(|e| format!("Failed to read entry: {e}"))?;
 
-    std::fs::write(output, &buf)
-        .map_err(|e| format!("Failed to write PNG: {e}"))?;
+    std::fs::write(output, &buf).map_err(|e| format!("Failed to write PNG: {e}"))?;
 
-    eprintln!("extract: layer {} ({} bytes) -> {}", layer, buf.len(), output.display());
+    eprintln!(
+        "extract: layer {} ({} bytes) -> {}",
+        layer,
+        buf.len(),
+        output.display()
+    );
     Ok(())
 }
 
@@ -1533,25 +1850,30 @@ fn cmd_slice_formats() {
             });
             // Add known version info for specific formats
             match *name {
-                ".ctb" => { info["versions"] = serde_json::json!(["v4", "v5", "v5enc"]); }
+                ".ctb" => {
+                    info["versions"] = serde_json::json!(["v4", "v5", "v5enc"]);
+                }
                 _ => {}
             }
             formats.push(info);
         }
     }
 
-    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-        "formats": formats,
-    })).unwrap());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "formats": formats,
+        }))
+        .unwrap()
+    );
 }
 
 fn cmd_print_inspect(input: &PathBuf, json_output: bool) -> Result<(), String> {
-    let file = std::fs::File::open(input)
-        .map_err(|e| format!("Failed to open: {e}"))?;
+    let file = std::fs::File::open(input).map_err(|e| format!("Failed to open: {e}"))?;
     let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
 
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| format!("Not a valid ZIP archive: {e}"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("Not a valid ZIP archive: {e}"))?;
 
     let total_entries = archive.len();
     let mut layer_count = 0u32;
@@ -1625,8 +1947,10 @@ fn cmd_print_inspect(input: &PathBuf, json_output: bool) -> Result<(), String> {
         eprintln!("inspect: {}", input.display());
         eprintln!("  format: ZIP ({} entries)", total_entries);
         eprintln!("  layers: {}", layer_count);
-        eprintln!("  size: {} bytes (uncompressed: {}, ratio: {:.2})",
-            file_size, total_uncompressed, compression_ratio);
+        eprintln!(
+            "  size: {} bytes (uncompressed: {}, ratio: {:.2})",
+            file_size, total_uncompressed, compression_ratio
+        );
         if manifest.is_some() {
             eprintln!("  manifest: present");
         }
@@ -1637,8 +1961,13 @@ fn cmd_print_inspect(input: &PathBuf, json_output: bool) -> Result<(), String> {
 fn cmd_island_batch(
     inputs: &[PathBuf],
     output: &PathBuf,
-    px_mm: f64, layer_height: f64, buffer: f64, connectivity: u8,
-    overlap: i32, neighborhood: i32, min_area: f64,
+    px_mm: f64,
+    layer_height: f64,
+    buffer: f64,
+    connectivity: u8,
+    overlap: i32,
+    neighborhood: i32,
+    min_area: f64,
     json_output: bool,
 ) -> Result<(), String> {
     ensure_dir(output)?;
@@ -1648,16 +1977,24 @@ fn cmd_island_batch(
     for input in inputs {
         let t0 = Instant::now();
         let sub_output = output.join(
-            input.file_stem()
+            input
+                .file_stem()
                 .and_then(|s| s.to_str())
-                .unwrap_or("unknown")
+                .unwrap_or("unknown"),
         );
 
         match cmd_island_full(
-            input, &sub_output,
-            px_mm, layer_height, buffer, connectivity,
-            overlap, neighborhood, min_area,
-            &None, false, // no params_json, no json (we collect results ourselves)
+            input,
+            &sub_output,
+            px_mm,
+            layer_height,
+            buffer,
+            connectivity,
+            overlap,
+            neighborhood,
+            min_area,
+            &None,
+            false, // no params_json, no json (we collect results ourselves)
         ) {
             Ok(()) => {
                 let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -1800,8 +2137,7 @@ fn cmd_print_save(input: &PathBuf, output: &PathBuf) -> Result<(), String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed creating destination folder: {e}"))?;
     }
-    std::fs::copy(input, output)
-        .map_err(|e| format!("Failed saving print file: {e}"))?;
+    std::fs::copy(input, output).map_err(|e| format!("Failed saving print file: {e}"))?;
     eprintln!("print save: {} -> {}", input.display(), output.display());
     Ok(())
 }
@@ -1811,15 +2147,17 @@ fn cmd_print_read_bytes(input: &PathBuf, output: &PathBuf) -> Result<(), String>
     if !input.exists() {
         return Err("Source print file no longer exists on disk".into());
     }
-    let bytes = std::fs::read(input)
-        .map_err(|e| format!("Failed reading print file: {e}"))?;
-    std::fs::write(output, &bytes)
-        .map_err(|e| format!("Failed writing: {e}"))?;
+    let bytes = std::fs::read(input).map_err(|e| format!("Failed reading print file: {e}"))?;
+    std::fs::write(output, &bytes).map_err(|e| format!("Failed writing: {e}"))?;
     eprintln!("read-bytes: {} bytes -> {}", bytes.len(), output.display());
     Ok(())
 }
 
-fn cmd_print_cleanup(path: &Option<PathBuf>, all: bool, max_age_seconds: Option<u64>) -> Result<(), String> {
+fn cmd_print_cleanup(
+    path: &Option<PathBuf>,
+    all: bool,
+    max_age_seconds: Option<u64>,
+) -> Result<(), String> {
     if let Some(p) = path {
         // Same as Tauri delete_print_temp_file — refuses non-dragonfruit artifacts
         if !p.exists() {
@@ -1836,7 +2174,10 @@ fn cmd_print_cleanup(path: &Option<PathBuf>, all: bool, max_age_seconds: Option<
         eprintln!("cleanup --all: removed {} temp files", removed);
     } else if let Some(age) = max_age_seconds {
         let removed = sweep_stale_temp_artifacts(age.max(60));
-        eprintln!("cleanup --max-age-seconds {}: removed {} stale files", age, removed);
+        eprintln!(
+            "cleanup --max-age-seconds {}: removed {} stale files",
+            age, removed
+        );
     } else {
         eprintln!("cleanup: specify --path, --all, or --max-age-seconds");
     }
@@ -1848,9 +2189,14 @@ fn cmd_print_cleanup(path: &Option<PathBuf>, all: bool, max_age_seconds: Option<
 // ===========================================================================
 
 fn cmd_benchmark(
-    layers: u32, width_px: u32, height_px: u32,
-    build_width_mm: f32, build_depth_mm: f32, layer_height: f32,
-    cube_count: u32, json_output: bool,
+    layers: u32,
+    width_px: u32,
+    height_px: u32,
+    build_width_mm: f32,
+    build_depth_mm: f32,
+    layer_height: f32,
+    cube_count: u32,
+    json_output: bool,
 ) -> Result<(), String> {
     use dragonfruit_slicing_engine::benchmark::{run_benchmark_v3, BenchmarkConfigV3};
 
@@ -1873,33 +2219,45 @@ fn cmd_benchmark(
     };
 
     if !json_output {
-        eprintln!("benchmark: {}x{} px, {} layers, {} cubes", width_px, height_px, layers, cube_count);
+        eprintln!(
+            "benchmark: {}x{} px, {} layers, {} cubes",
+            width_px, height_px, layers, cube_count
+        );
     }
 
     let result = run_benchmark_v3(cfg).map_err(|e| format!("Benchmark failed: {e}"))?;
 
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "artifact_bytes": result.artifact_bytes,
-            "total_s": result.total_s,
-            "layers_per_second": result.layers_per_second,
-            "render_s": result.render_s,
-            "png_s": result.png_s,
-            "archive_s": result.archive_s,
-            "config": {
-                "layers": layers,
-                "width_px": width_px,
-                "height_px": height_px,
-                "build_width_mm": build_width_mm,
-                "build_depth_mm": build_depth_mm,
-                "layer_height_mm": layer_height,
-                "cube_count": cube_count,
-            },
-        })).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_bytes": result.artifact_bytes,
+                "total_s": result.total_s,
+                "layers_per_second": result.layers_per_second,
+                "render_s": result.render_s,
+                "png_s": result.png_s,
+                "archive_s": result.archive_s,
+                "config": {
+                    "layers": layers,
+                    "width_px": width_px,
+                    "height_px": height_px,
+                    "build_width_mm": build_width_mm,
+                    "build_depth_mm": build_depth_mm,
+                    "layer_height_mm": layer_height,
+                    "cube_count": cube_count,
+                },
+            }))
+            .unwrap()
+        );
     } else {
-        eprintln!("  total: {:.2}s ({:.0} layers/s)", result.total_s, result.layers_per_second);
-        eprintln!("  render: {:.2}s, png: {:.2}s, archive: {:.2}s",
-            result.render_s, result.png_s, result.archive_s);
+        eprintln!(
+            "  total: {:.2}s ({:.0} layers/s)",
+            result.total_s, result.layers_per_second
+        );
+        eprintln!(
+            "  render: {:.2}s, png: {:.2}s, archive: {:.2}s",
+            result.render_s, result.png_s, result.archive_s
+        );
         eprintln!("  artifact: {} bytes", result.artifact_bytes);
     }
     Ok(())
@@ -1985,71 +2343,235 @@ fn main() {
             MeshCommands::Export3mf { input, output } => cmd_mesh_export_3mf(&input, &output),
         },
 
-        Commands::Benchmark { layers, width_px, height_px, build_width_mm, build_depth_mm,
-            layer_height, cube_count, json } =>
-            cmd_benchmark(layers, width_px, height_px, build_width_mm, build_depth_mm,
-                layer_height, cube_count, json),
+        Commands::Benchmark {
+            layers,
+            width_px,
+            height_px,
+            build_width_mm,
+            build_depth_mm,
+            layer_height,
+            cube_count,
+            json,
+        } => cmd_benchmark(
+            layers,
+            width_px,
+            height_px,
+            build_width_mm,
+            build_depth_mm,
+            layer_height,
+            cube_count,
+            json,
+        ),
 
         Commands::Island { command } => match command {
-            IslandCommands::Rasterize { input, output, px_mm, layer_height } =>
-                cmd_rasterize(&input, &output, px_mm, layer_height),
-            IslandCommands::Scan { input, output, buffer, connectivity } =>
-                cmd_scan(&input, &output, buffer, connectivity),
-            IslandCommands::Track { input, output, overlap, neighborhood } =>
-                cmd_track(&input, &output, overlap, neighborhood),
-            IslandCommands::Analyze { input, output, min_area } =>
-                cmd_analyze(&input, &output, min_area),
-            IslandCommands::Full { input, output, px_mm, layer_height, buffer, connectivity,
-                overlap, neighborhood, min_area, params_json, json } =>
-                cmd_island_full(&input, &output, px_mm, layer_height, buffer, connectivity,
-                    overlap, neighborhood, min_area, &params_json, json),
-            IslandCommands::Bench { input, px_mm, layer_height, buffer, connectivity,
-                overlap, neighborhood, min_area, iterations, json } =>
-                cmd_island_bench(&input, px_mm, layer_height, buffer, connectivity,
-                    overlap, neighborhood, min_area, iterations, json),
-            IslandCommands::Batch { inputs, output, px_mm, layer_height, buffer, connectivity,
-                overlap, neighborhood, min_area, json } =>
-                cmd_island_batch(&inputs, &output, px_mm, layer_height, buffer, connectivity,
-                    overlap, neighborhood, min_area, json),
-            IslandCommands::RleLabel { input, output, connectivity, json } =>
-                cmd_rle_label(&input, &output, connectivity, json),
-            IslandCommands::RleSubtract { mask_a, mask_b, output } =>
-                cmd_rle_subtract(&mask_a, &mask_b, &output),
+            IslandCommands::Rasterize {
+                input,
+                output,
+                px_mm,
+                layer_height,
+            } => cmd_rasterize(&input, &output, px_mm, layer_height),
+            IslandCommands::Scan {
+                input,
+                output,
+                buffer,
+                connectivity,
+            } => cmd_scan(&input, &output, buffer, connectivity),
+            IslandCommands::Track {
+                input,
+                output,
+                overlap,
+                neighborhood,
+            } => cmd_track(&input, &output, overlap, neighborhood),
+            IslandCommands::Analyze {
+                input,
+                output,
+                min_area,
+            } => cmd_analyze(&input, &output, min_area),
+            IslandCommands::Full {
+                input,
+                output,
+                px_mm,
+                layer_height,
+                buffer,
+                connectivity,
+                overlap,
+                neighborhood,
+                min_area,
+                params_json,
+                json,
+            } => cmd_island_full(
+                &input,
+                &output,
+                px_mm,
+                layer_height,
+                buffer,
+                connectivity,
+                overlap,
+                neighborhood,
+                min_area,
+                &params_json,
+                json,
+            ),
+            IslandCommands::Bench {
+                input,
+                px_mm,
+                layer_height,
+                buffer,
+                connectivity,
+                overlap,
+                neighborhood,
+                min_area,
+                iterations,
+                json,
+            } => cmd_island_bench(
+                &input,
+                px_mm,
+                layer_height,
+                buffer,
+                connectivity,
+                overlap,
+                neighborhood,
+                min_area,
+                iterations,
+                json,
+            ),
+            IslandCommands::Batch {
+                inputs,
+                output,
+                px_mm,
+                layer_height,
+                buffer,
+                connectivity,
+                overlap,
+                neighborhood,
+                min_area,
+                json,
+            } => cmd_island_batch(
+                &inputs,
+                &output,
+                px_mm,
+                layer_height,
+                buffer,
+                connectivity,
+                overlap,
+                neighborhood,
+                min_area,
+                json,
+            ),
+            IslandCommands::RleLabel {
+                input,
+                output,
+                connectivity,
+                json,
+            } => cmd_rle_label(&input, &output, connectivity, json),
+            IslandCommands::RleSubtract {
+                mask_a,
+                mask_b,
+                output,
+            } => cmd_rle_subtract(&mask_a, &mask_b, &output),
         },
 
         Commands::Slice { command } => match command {
-            SliceCommands::Run { input, output, layer_height, build_width_mm, build_depth_mm,
-                source_width_px, source_height_px, png_compression, anti_aliasing,
-                anti_aliasing_mode, blur_brush_radius_px, blur_brush_kernel, blur_brush_sigma_x,
-                blur_brush_sigma_y, z_blur_radius_layers, z_blur_kernel, z_blur_sigma,
-                z_blend_look_back, aa_on_supports, x_packing_mode, mirror_x, mirror_y,
-                format_version, min_aa_alpha, dither, dither_bit_depth, dither_device_gamma,
-                sample_interval_ms, metadata_json, job, json } =>
-                cmd_slice_run(&input, &output, layer_height, build_width_mm, build_depth_mm,
-                    source_width_px, source_height_px, &png_compression, &anti_aliasing,
-                    &anti_aliasing_mode, blur_brush_radius_px, &blur_brush_kernel,
-                    blur_brush_sigma_x, blur_brush_sigma_y, z_blur_radius_layers,
-                    &z_blur_kernel, z_blur_sigma, z_blend_look_back, aa_on_supports,
-                    &x_packing_mode, mirror_x, mirror_y, &format_version,
-                    min_aa_alpha, dither, dither_bit_depth, dither_device_gamma,
-                    sample_interval_ms, &metadata_json, &job, json),
-            SliceCommands::Formats => { cmd_slice_formats(); Ok(()) },
-            SliceCommands::PreviewLayer { input, layer, output } =>
-                extract_layer_png(&input, layer, &output),
-            SliceCommands::Info => { cmd_slice_info(); Ok(()) },
+            SliceCommands::Run {
+                input,
+                output,
+                layer_height,
+                build_width_mm,
+                build_depth_mm,
+                source_width_px,
+                source_height_px,
+                png_compression,
+                anti_aliasing,
+                anti_aliasing_mode,
+                blur_brush_radius_px,
+                blur_brush_kernel,
+                blur_brush_sigma_x,
+                blur_brush_sigma_y,
+                z_blur_radius_layers,
+                z_blur_kernel,
+                z_blur_sigma,
+                z_blend_look_back,
+                aa_on_supports,
+                x_packing_mode,
+                mirror_x,
+                mirror_y,
+                format_version,
+                min_aa_alpha,
+                dither,
+                dither_bit_depth,
+                dither_device_gamma,
+                sample_interval_ms,
+                metadata_json,
+                job,
+                json,
+            } => cmd_slice_run(
+                &input,
+                &output,
+                layer_height,
+                build_width_mm,
+                build_depth_mm,
+                source_width_px,
+                source_height_px,
+                &png_compression,
+                &anti_aliasing,
+                &anti_aliasing_mode,
+                blur_brush_radius_px,
+                &blur_brush_kernel,
+                blur_brush_sigma_x,
+                blur_brush_sigma_y,
+                z_blur_radius_layers,
+                &z_blur_kernel,
+                z_blur_sigma,
+                z_blend_look_back,
+                aa_on_supports,
+                &x_packing_mode,
+                mirror_x,
+                mirror_y,
+                &format_version,
+                min_aa_alpha,
+                dither,
+                dither_bit_depth,
+                dither_device_gamma,
+                sample_interval_ms,
+                &metadata_json,
+                &job,
+                json,
+            ),
+            SliceCommands::Formats => {
+                cmd_slice_formats();
+                Ok(())
+            }
+            SliceCommands::PreviewLayer {
+                input,
+                layer,
+                output,
+            } => extract_layer_png(&input, layer, &output),
+            SliceCommands::Info => {
+                cmd_slice_info();
+                Ok(())
+            }
         },
 
         Commands::Print { command } => match command {
             PrintCommands::Save { input, output } => cmd_print_save(&input, &output),
             PrintCommands::ReadBytes { input, output } => cmd_print_read_bytes(&input, &output),
-            PrintCommands::ReadLayer { input, layer, output } =>
-                extract_layer_png(&input, layer, &output),
+            PrintCommands::ReadLayer {
+                input,
+                layer,
+                output,
+            } => extract_layer_png(&input, layer, &output),
             PrintCommands::Inspect { input, json } => cmd_print_inspect(&input, json),
-            PrintCommands::Cleanup { path, all, max_age_seconds } =>
-                cmd_print_cleanup(&path, all, max_age_seconds),
+            PrintCommands::Cleanup {
+                path,
+                all,
+                max_age_seconds,
+            } => cmd_print_cleanup(&path, all, max_age_seconds),
         },
 
-        Commands::Info => { cmd_info(); Ok(()) },
+        Commands::Info => {
+            cmd_info();
+            Ok(())
+        }
     };
 
     let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;

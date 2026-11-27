@@ -20,30 +20,29 @@
 
 pub mod geodesic;
 #[cfg(feature = "manifold")]
-pub mod tenon;
-#[cfg(feature = "manifold")]
 pub mod membrane;
+pub mod organic_cut;
+/// Close each piece of a surface cut with the membrane as its lid.
+#[cfg(feature = "manifold")]
+pub mod surface_cap;
 /// Ask the surface whether a cut could ever work, to explain one that did not.
 #[cfg(feature = "manifold")]
 pub mod surface_cut;
 /// Cut the surface along the seam so the seam becomes mesh edges.
 #[cfg(feature = "manifold")]
 pub mod surface_split;
-/// Close each piece of a surface cut with the membrane as its lid.
 #[cfg(feature = "manifold")]
-pub mod surface_cap;
-pub mod organic_cut;
+pub mod tenon;
 
 pub use crate::geodesic::{surface_loop_from_mesh, surface_loop_positions, GeodesicSolver};
-#[cfg(feature = "manifold")]
-pub use crate::tenon::{
-    apply_tenon, apply_tenon_at_frame, build_tenon_preview_at_frame, build_tenon_preview_soup,
-    frame_from_plane, TenonFrame, TenonFrameInfo, TenonKind, TenonAnchor, TenonOutcome, TenonPreview,
-    TenonShape,
-    TenonTilt,
-    DEFAULT_TENON_DEPTH_MM, DEFAULT_TENON_TOLERANCE_MM, DEFAULT_TENON_WIDTH_MM, TENON_MAX_TILT_RAD,
-};
 pub use crate::organic_cut::{
     organic_cut, OrganicCutLoopPoint, OrganicCutOptions, OrganicCutOutcome, OrganicCutReport,
     OrganicCutSpec,
+};
+#[cfg(feature = "manifold")]
+pub use crate::tenon::{
+    apply_tenon, apply_tenon_at_frame, build_tenon_preview_at_frame, build_tenon_preview_soup,
+    frame_from_plane, TenonAnchor, TenonFrame, TenonFrameInfo, TenonKind, TenonOutcome,
+    TenonPreview, TenonShape, TenonTilt, DEFAULT_TENON_DEPTH_MM, DEFAULT_TENON_TOLERANCE_MM,
+    DEFAULT_TENON_WIDTH_MM, TENON_MAX_TILT_RAD,
 };

@@ -200,14 +200,28 @@ pub fn classify_overhangs(
     // flat array sorted by edge key. Union-find is order-independent over the
     // edge pairs, so grouping stays deterministic.
     let mut edges: Vec<EdgeRef> = Vec::with_capacity(tri_count * 3);
-    edges.par_extend(mesh.triangles.par_iter().enumerate().flat_map_iter(|(fi, tri)| {
-        let owner = fi as u32;
-        [
-            EdgeRef { key: edge_key(tri[0], tri[1]), tri: owner },
-            EdgeRef { key: edge_key(tri[1], tri[2]), tri: owner },
-            EdgeRef { key: edge_key(tri[2], tri[0]), tri: owner },
-        ]
-    }));
+    edges.par_extend(
+        mesh.triangles
+            .par_iter()
+            .enumerate()
+            .flat_map_iter(|(fi, tri)| {
+                let owner = fi as u32;
+                [
+                    EdgeRef {
+                        key: edge_key(tri[0], tri[1]),
+                        tri: owner,
+                    },
+                    EdgeRef {
+                        key: edge_key(tri[1], tri[2]),
+                        tri: owner,
+                    },
+                    EdgeRef {
+                        key: edge_key(tri[2], tri[0]),
+                        tri: owner,
+                    },
+                ]
+            }),
+    );
     edges.par_sort_unstable_by_key(|edge| edge.key);
 
     // Union-find over overhang triangles sharing an edge.
@@ -1570,7 +1584,6 @@ pub async fn scan_overhangs_staged(
     .map_err(|e| format!("Staged overhang scan task panicked: {e}"))?
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1813,7 +1826,8 @@ mod tests {
         // A 30×30 mm face at 60° from horizontal: 900 mm² of down-facing
         // surface the angle rule calls self-supporting. It is the topple lever
         // the steep-flat pass exists for, so it must come back as a region.
-        let regions = overhang_and_stability_from_soup(&big_quad_at(30.0, 60.0), 45.0, 0.25, false).0;
+        let regions =
+            overhang_and_stability_from_soup(&big_quad_at(30.0, 60.0), 45.0, 0.25, false).0;
         assert_region(&regions, 60.0, 900.0);
     }
 
@@ -1822,7 +1836,8 @@ mod tests {
         // The density grid places only inside the region's projected footprint
         // and takes each point's Z from its surface raster, so the mask must
         // cover the projection (900 × cos 60° = 450 mm²) and follow the slope.
-        let regions = overhang_and_stability_from_soup(&big_quad_at(30.0, 60.0), 45.0, 0.25, false).0;
+        let regions =
+            overhang_and_stability_from_soup(&big_quad_at(30.0, 60.0), 45.0, 0.25, false).0;
         assert_eq!(regions.len(), 1, "one region: {regions:?}");
         let f = &regions[0].footprint;
         let inside = f.data.iter().filter(|&&v| v == 1).count() as f32;
@@ -1848,7 +1863,8 @@ mod tests {
         // unsupported. Derived from the constant so tuning the gate does not
         // silently turn this into a test of something else.
         let side = (STEEP_FLAT_MIN_AREA_MM2 * 0.5).sqrt();
-        let regions = overhang_and_stability_from_soup(&big_quad_at(side, 60.0), 45.0, 0.25, false).0;
+        let regions =
+            overhang_and_stability_from_soup(&big_quad_at(side, 60.0), 45.0, 0.25, false).0;
         assert!(regions.is_empty(), "{} mm² facet: {regions:?}", side * side);
     }
 
@@ -1858,7 +1874,8 @@ mod tests {
         // meet it and only grazes the surface, so there is no contact to
         // place. Clamped below vertical, which is the other end of the band.
         let angle = (STEEP_FLAT_MAX_ANGLE_DEG + 5.0).min(89.0);
-        let regions = overhang_and_stability_from_soup(&big_quad_at(30.0, angle), 45.0, 0.25, false).0;
+        let regions =
+            overhang_and_stability_from_soup(&big_quad_at(30.0, angle), 45.0, 0.25, false).0;
         assert!(
             regions.is_empty(),
             "no contact on a wall at {angle}°: {regions:?}"
@@ -1882,8 +1899,13 @@ mod tests {
         );
         let width = 15.0;
         let len = STEEP_FLAT_MIN_AREA_MM2 * 0.6 / width;
-        let regions =
-            overhang_and_stability_from_soup(&folded_quads(width, len, angle_a, angle_b), 45.0, 0.25, false).0;
+        let regions = overhang_and_stability_from_soup(
+            &folded_quads(width, len, angle_a, angle_b),
+            45.0,
+            0.25,
+            false,
+        )
+        .0;
         assert!(
             regions.is_empty(),
             "crease held the patches apart: {regions:?}"
@@ -2075,8 +2097,16 @@ mod tests {
         // The tower's own contact is the 20 x 10 foot; the shadow is the same
         // rectangle, so the areas agree here while the label does not.
         assert!((raft.bearing_area_mm2 - cap.bearing_area_mm2).abs() < 1.0);
-        assert!(raft.to_log_line().contains("raft footprint"), "{}", raft.to_log_line());
-        assert!(cap.to_log_line().contains("band 2.0mm"), "{}", cap.to_log_line());
+        assert!(
+            raft.to_log_line().contains("raft footprint"),
+            "{}",
+            raft.to_log_line()
+        );
+        assert!(
+            cap.to_log_line().contains("band 2.0mm"),
+            "{}",
+            cap.to_log_line()
+        );
     }
 
     #[test]
@@ -2118,7 +2148,11 @@ mod tests {
         // The pose carries real drag (100·0.5·2.5 + 100·0.866·4.33 ≈ 500 mm³)
         // but there is no edge to project it onto, so the worst-edge figure is
         // zero and the log must not read as "no drag".
-        assert!((r.drag_moment_mm3 - 500.0).abs() < 2.0, "total {}", r.drag_moment_mm3);
+        assert!(
+            (r.drag_moment_mm3 - 500.0).abs() < 2.0,
+            "total {}",
+            r.drag_moment_mm3
+        );
         assert_eq!(r.worst_edge_drag_mm3, 0.0);
         let line = r.to_log_line();
         assert!(line.contains("no bearing polygon"), "{line}");
@@ -2217,8 +2251,16 @@ mod tests {
         // the worst edge over the drag moment, A·d̄/M = 200·10/300. It is the
         // comparison that survives a leaning pose, where the gravity margin
         // goes negative: the patch centroid is always inside its own hull.
-        assert!((short.contact_depth_mm - 10.0).abs() < 0.01, "{}", short.contact_depth_mm);
-        assert!((tall.contact_depth_mm - 10.0).abs() < 0.01, "{}", tall.contact_depth_mm);
+        assert!(
+            (short.contact_depth_mm - 10.0).abs() < 0.01,
+            "{}",
+            short.contact_depth_mm
+        );
+        assert!(
+            (tall.contact_depth_mm - 10.0).abs() < 0.01,
+            "{}",
+            tall.contact_depth_mm
+        );
         assert!(
             (short.adhesion_ratio - 6.6667).abs() < 0.01,
             "ratio {}",
@@ -2263,7 +2305,11 @@ mod tests {
         assert!(r.drag_moment_mm3 > 0.0, "moment {}", r.drag_moment_mm3);
         // The quad starts facing -Z and is rotated 60° about X, so its mean
         // normal's XY part points +Y (90°), not -Y.
-        assert!((r.drag_dir_deg - 90.0).abs() < 1.0, "dir {}", r.drag_dir_deg);
+        assert!(
+            (r.drag_dir_deg - 90.0).abs() < 1.0,
+            "dir {}",
+            r.drag_dir_deg
+        );
         // The region's moment is the pose's whole moment here: one patch.
         // The region sums in f32, so the tolerance is set by its magnitude.
         assert!(
@@ -2314,14 +2360,30 @@ mod tests {
         }
         let r = report_for(&soup, 45.0);
         assert_eq!(r.degenerate_faces, 2);
-        assert!((r.volume_mm3 - 1000.0).abs() < 1e-3, "volume {}", r.volume_mm3);
+        assert!(
+            (r.volume_mm3 - 1000.0).abs() < 1e-3,
+            "volume {}",
+            r.volume_mm3
+        );
         assert!((r.height_mm - 10.0).abs() < 1e-3, "height {}", r.height_mm);
-        assert!((r.centroid_mm[2] - 5.0).abs() < 1e-3, "cz {}", r.centroid_mm[2]);
+        assert!(
+            (r.centroid_mm[2] - 5.0).abs() < 1e-3,
+            "cz {}",
+            r.centroid_mm[2]
+        );
         // The cube's flat base is the bearing locus, not the stray vertex.
         assert_eq!(r.bearing_edges, 4);
-        assert!((r.bearing_area_mm2 - 100.0).abs() < 0.01, "{}", r.bearing_area_mm2);
+        assert!(
+            (r.bearing_area_mm2 - 100.0).abs() < 0.01,
+            "{}",
+            r.bearing_area_mm2
+        );
         assert!(r.margin_mm.is_infinite(), "margin {}", r.margin_mm);
-        assert!(r.to_log_line().contains("2 degenerate faces ignored"), "{}", r.to_log_line());
+        assert!(
+            r.to_log_line().contains("2 degenerate faces ignored"),
+            "{}",
+            r.to_log_line()
+        );
     }
 
     #[test]
@@ -2376,7 +2438,10 @@ mod tests {
             line.contains("worst edge 300mm³ dir 180° depth 12.10mm (contact 10.00mm)"),
             "{line}"
         );
-        assert!(line.contains("drag 300mm³ over 2 faces (steep share 100%, z* 5.2mm)"), "{line}");
+        assert!(
+            line.contains("drag 300mm³ over 2 faces (steep share 100%, z* 5.2mm)"),
+            "{line}"
+        );
         assert!(line.contains("drivers z 4.0/6.0mm"), "{line}");
         // A part with no drag says so rather than printing a bogus margin.
         let flat = report_for(&unit_cube_soup(), 45.0).to_log_line();

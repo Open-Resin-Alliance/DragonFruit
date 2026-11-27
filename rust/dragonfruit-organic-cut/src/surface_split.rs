@@ -84,7 +84,10 @@ impl SplitSurface {
     /// between two of those pieces stops dead, which is the leak that matters and the
     /// one a global count cannot see.
     pub fn loose_wall_ends(&self) -> Vec<Vec3> {
-        self.loose_wall_ends_by_vertex().into_iter().map(|v| self.positions_of(v)).collect()
+        self.loose_wall_ends_by_vertex()
+            .into_iter()
+            .map(|v| self.positions_of(v))
+            .collect()
     }
 
     fn positions_of(&self, v: u32) -> Vec3 {
@@ -114,8 +117,7 @@ impl SplitSurface {
     /// Nothing is deleted; the faces are relabelled, and the caller decides what to
     /// bin as it did before.
     pub fn dissolve_clearance_debris(&mut self, pairs: &[(usize, usize)]) {
-        let broken: AHashSet<u32> =
-            self.loose_wall_ends_by_vertex().into_iter().collect();
+        let broken: AHashSet<u32> = self.loose_wall_ends_by_vertex().into_iter().collect();
         if broken.is_empty() {
             return;
         }
@@ -124,7 +126,9 @@ impl SplitSurface {
         let mut touches_break: AHashSet<u32> = AHashSet::new();
         let faces_of = self.faces_of_edge();
         for e in &self.seam_edges {
-            let Some(faces) = faces_of.get(e) else { continue };
+            let Some(faces) = faces_of.get(e) else {
+                continue;
+            };
             if faces.len() != 2 {
                 continue;
             }
@@ -155,20 +159,28 @@ impl SplitSurface {
         // shavings are shavings OF — so name it first and leave it alone. Folding
         // strip into the body was how a cut came back with the strip as the freed
         // piece and the model as the body; the strip is BINNED later, not merged.
-        let strips: AHashSet<u32> =
-            pairs.iter().flat_map(|&(a, b)| self.strips_between(a, b)).collect();
+        let strips: AHashSet<u32> = pairs
+            .iter()
+            .flat_map(|&(a, b)| self.strips_between(a, b))
+            .collect();
 
         let mut relabel: AHashMap<u32, u32> = AHashMap::new();
         for (&piece, sides) in &sides_of_piece {
             if strips.contains(&piece) || !touches_break.contains(&piece) {
                 continue;
             }
-            if !pairs.iter().any(|(a, b)| sides.contains(a) && sides.contains(b)) {
+            if !pairs
+                .iter()
+                .any(|(a, b)| sides.contains(a) && sides.contains(b))
+            {
                 continue;
             }
             let mine = faces.get(&piece).copied().unwrap_or(0);
             let around = neighbours(piece);
-            if around.iter().any(|(q, _)| faces.get(q).copied().unwrap_or(0) <= mine) {
+            if around
+                .iter()
+                .any(|(q, _)| faces.get(q).copied().unwrap_or(0) <= mine)
+            {
                 continue;
             }
             // Into whichever neighbour holds most of its border.
@@ -217,7 +229,9 @@ impl SplitSurface {
         let mut along: AHashMap<(u32, usize), usize> = AHashMap::new();
         let faces_of = self.faces_of_edge();
         for (i, e) in self.seam_edges.iter().enumerate() {
-            let Some(faces) = faces_of.get(e) else { continue };
+            let Some(faces) = faces_of.get(e) else {
+                continue;
+            };
             if faces.len() != 2 {
                 continue;
             }
@@ -253,7 +267,9 @@ impl SplitSurface {
         let faces_of = self.faces_of_edge();
         let mut sides: AHashMap<u32, AHashSet<usize>> = AHashMap::new();
         for (i, e) in self.seam_edges.iter().enumerate() {
-            let Some(faces) = faces_of.get(e) else { continue };
+            let Some(faces) = faces_of.get(e) else {
+                continue;
+            };
             if faces.len() != 2 {
                 continue;
             }
@@ -271,7 +287,10 @@ impl SplitSurface {
         let mut faces_of: AHashMap<(u32, u32), Vec<u32>> = AHashMap::new();
         for (fi, t) in self.mesh.triangles.iter().enumerate() {
             for k in 0..3 {
-                faces_of.entry(edge_key(t[k], t[(k + 1) % 3])).or_default().push(fi as u32);
+                faces_of
+                    .entry(edge_key(t[k], t[(k + 1) % 3]))
+                    .or_default()
+                    .push(fi as u32);
             }
         }
         faces_of
@@ -281,7 +300,9 @@ impl SplitSurface {
         let faces_of = self.faces_of_edge();
         let mut degree: AHashMap<((u32, u32), u32), usize> = AHashMap::new();
         for e in &self.seam_edges {
-            let Some(faces) = faces_of.get(e) else { continue };
+            let Some(faces) = faces_of.get(e) else {
+                continue;
+            };
             if faces.len() != 2 {
                 continue;
             }
@@ -293,8 +314,11 @@ impl SplitSurface {
             *degree.entry((pair, e.0)).or_default() += 1;
             *degree.entry((pair, e.1)).or_default() += 1;
         }
-        let mut ends: Vec<u32> =
-            degree.into_iter().filter(|(_, n)| *n < 2).map(|((_, v), _)| v).collect();
+        let mut ends: Vec<u32> = degree
+            .into_iter()
+            .filter(|(_, n)| *n < 2)
+            .map(|((_, v), _)| v)
+            .collect();
         ends.sort_unstable();
         ends.dedup();
         ends
@@ -413,7 +437,9 @@ pub fn split_along_seams(mesh: &IndexedMesh, seams: &[Vec<Vec3>]) -> Result<Spli
         let topo = Topology::build(&current);
         let crossings = walk(&current, &bvh, &topo, &dense)?;
         if crossings.is_empty() {
-            return Err("the seam never crosses a triangle edge — it fits inside one face".to_string());
+            return Err(
+                "the seam never crosses a triangle edge — it fits inside one face".to_string(),
+            );
         }
         let cut = retriangulate(&current, crossings, snap_mm)?;
         current = cut.mesh;
@@ -430,13 +456,20 @@ pub fn split_along_seams(mesh: &IndexedMesh, seams: &[Vec<Vec3>]) -> Result<Spli
                     chain.push(e.0);
                     chain.extend(made.iter().copied());
                     chain.push(e.1);
-                    chain.windows(2).map(|w| (edge_key(w[0], w[1]), owner)).collect()
+                    chain
+                        .windows(2)
+                        .map(|w| (edge_key(w[0], w[1]), owner))
+                        .collect()
                 }
             })
             .collect();
         seam_edges.extend(cut.seam_edges.into_iter().map(|e| (e, si)));
         seam_vertices.extend(cut.seam_vertices);
-        source_face = cut.source_face.iter().map(|&f| source_face[f as usize]).collect();
+        source_face = cut
+            .source_face
+            .iter()
+            .map(|&f| source_face[f as usize])
+            .collect();
     }
 
     let walls: AHashSet<(u32, u32)> = seam_edges.keys().copied().collect();
@@ -478,7 +511,12 @@ struct Crossing {
 /// really sits on the perpendicular face — a cube's corner, a shingle's lip —
 /// comfortably INSIDE the current one, so the walk sticks there and sails past
 /// every edge it should have crossed.
-fn walk(mesh: &IndexedMesh, bvh: &Bvh, topo: &Topology, seam: &[Vec3]) -> Result<Vec<Crossing>, String> {
+fn walk(
+    mesh: &IndexedMesh,
+    bvh: &Bvh,
+    topo: &Topology,
+    seam: &[Vec3],
+) -> Result<Vec<Crossing>, String> {
     /// A step should cross a handful of faces at most; more means the sampling and
     /// the mesh disagree wildly and the caller is better off with the old cut.
     const MAX_HOPS_PER_STEP: usize = 8;
@@ -514,7 +552,12 @@ fn walk(mesh: &IndexedMesh, bvh: &Bvh, topo: &Topology, seam: &[Vec3]) -> Result
                     return Err("two faces the walk stepped between share no edge".to_string());
                 };
                 let t = crossing_t(mesh, edge, a, b);
-                crossings.push(Crossing { edge, t, from: pair[0], to: pair[1] });
+                crossings.push(Crossing {
+                    edge,
+                    t,
+                    from: pair[0],
+                    to: pair[1],
+                });
             }
         }
     }
@@ -563,7 +606,12 @@ fn walk_once(
                 return Err("two faces the walk stepped between share no edge".to_string());
             };
             let t = crossing_t(mesh, edge, a, b);
-            crossings.push(Crossing { edge, t, from: pair[0], to: pair[1] });
+            crossings.push(Crossing {
+                edge,
+                t,
+                from: pair[0],
+                to: pair[1],
+            });
         }
         face = next;
     }
@@ -577,7 +625,10 @@ fn walk_once(
 /// Intersecting two lines in space instead has to cope with them not quite
 /// meeting, and the leftovers are cracks.
 fn crossing_t(mesh: &IndexedMesh, edge: (u32, u32), a: Vec3, b: Vec3) -> f32 {
-    let (p, q) = (mesh.positions[edge.0 as usize], mesh.positions[edge.1 as usize]);
+    let (p, q) = (
+        mesh.positions[edge.0 as usize],
+        mesh.positions[edge.1 as usize],
+    );
     let e = q.sub(p);
     let ee = e.dot(e);
     if ee < 1e-18 {
@@ -713,7 +764,11 @@ fn seam_separation(seams: &[Vec<Vec3>]) -> Option<f32> {
 fn distance_to_segment(p: Vec3, a: Vec3, b: Vec3) -> f32 {
     let ab = b.sub(a);
     let len2 = ab.dot(ab);
-    let t = if len2 < 1e-12 { 0.0 } else { (p.sub(a).dot(ab) / len2).clamp(0.0, 1.0) };
+    let t = if len2 < 1e-12 {
+        0.0
+    } else {
+        (p.sub(a).dot(ab) / len2).clamp(0.0, 1.0)
+    };
     p.sub(a.add(ab.scale(t))).length()
 }
 
@@ -723,7 +778,11 @@ fn median_edge_length(mesh: &IndexedMesh) -> f32 {
         .triangles
         .iter()
         .step_by(stride)
-        .map(|t| mesh.positions[t[1] as usize].sub(mesh.positions[t[0] as usize]).length())
+        .map(|t| {
+            mesh.positions[t[1] as usize]
+                .sub(mesh.positions[t[0] as usize])
+                .length()
+        })
         .filter(|l| *l > 0.0)
         .collect();
     if lengths.is_empty() {
@@ -749,7 +808,10 @@ impl Topology {
         let mut edge_faces: AHashMap<(u32, u32), Vec<u32>> = AHashMap::new();
         for (fi, t) in mesh.triangles.iter().enumerate() {
             for k in 0..3 {
-                edge_faces.entry(edge_key(t[k], t[(k + 1) % 3])).or_default().push(fi as u32);
+                edge_faces
+                    .entry(edge_key(t[k], t[(k + 1) % 3]))
+                    .or_default()
+                    .push(fi as u32);
             }
         }
         // Walked face by face, NOT by iterating the map: a hash map hands its entries
@@ -768,7 +830,10 @@ impl Topology {
                 }
             }
         }
-        Self { edge_faces, neighbours }
+        Self {
+            edge_faces,
+            neighbours,
+        }
     }
 
     /// The edge two faces share, if they are neighbours.
@@ -780,7 +845,9 @@ impl Topology {
                 .map(|(e, _)| *e)
                 .collect()
         };
-        tri_edges(a).into_iter().find(|e| self.edge_faces[e].contains(&b))
+        tri_edges(a)
+            .into_iter()
+            .find(|e| self.edge_faces[e].contains(&b))
     }
 
     /// The face nearest `p` among those within `hops` of `from`.
@@ -848,7 +915,11 @@ impl Topology {
 }
 
 fn edge_key(a: u32, b: u32) -> (u32, u32) {
-    if a < b { (a, b) } else { (b, a) }
+    if a < b {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -896,7 +967,11 @@ fn retriangulate(
     for c in &crossings {
         let (p, q) = (positions[c.edge.0 as usize], positions[c.edge.1 as usize]);
         let len = q.sub(p).length();
-        let snap = if len > 1e-9 { (snap_mm / len).min(0.02) } else { 0.5 };
+        let snap = if len > 1e-9 {
+            (snap_mm / len).min(0.02)
+        } else {
+            0.5
+        };
         if c.t <= snap {
             vertex_of.push(c.edge.0);
             continue;
@@ -952,11 +1027,18 @@ fn retriangulate(
         // times and the flood fill walks through the wall. The wall the seam needs
         // there is that stretch of the edge, and the crossings have already split
         // it.
-        if let Some(e) = shared_face_edge(&mesh.triangles[c.to as usize], &[vertex_of[i], vertex_of[j]], &on_edge) {
+        if let Some(e) = shared_face_edge(
+            &mesh.triangles[c.to as usize],
+            &[vertex_of[i], vertex_of[j]],
+            &on_edge,
+        ) {
             grazed.push((e, vertex_of[i], vertex_of[j]));
             continue;
         }
-        chords.entry(c.to).or_default().push((vertex_of[i], vertex_of[j]));
+        chords
+            .entry(c.to)
+            .or_default()
+            .push((vertex_of[i], vertex_of[j]));
     }
 
     if std::env::var_os("DF_SPLIT_DEBUG").is_some() {
@@ -970,7 +1052,8 @@ fn retriangulate(
     // Faces the seam crosses are rebuilt; every other face is kept as it is, so the
     // model away from the cut is untouched, vertex for vertex.
     let touched: AHashSet<u32> = chords.keys().copied().collect();
-    let mut triangles: Vec<[u32; 3]> = Vec::with_capacity(mesh.triangles.len() + crossings.len() * 2);
+    let mut triangles: Vec<[u32; 3]> =
+        Vec::with_capacity(mesh.triangles.len() + crossings.len() * 2);
     let mut source_face: Vec<u32> = Vec::with_capacity(triangles.capacity());
     let mut seam_edges: AHashSet<(u32, u32)> = AHashSet::new();
     // Where the seam grazed an edge, the wall is the stretch of that edge between
@@ -979,7 +1062,13 @@ fn retriangulate(
     for (e, x, y) in grazed {
         let mut chain = Vec::with_capacity(4);
         chain.push(e.0);
-        chain.extend(made_on_edge.get(&e).into_iter().flatten().map(|(_, vi)| *vi));
+        chain.extend(
+            made_on_edge
+                .get(&e)
+                .into_iter()
+                .flatten()
+                .map(|(_, vi)| *vi),
+        );
         chain.push(e.1);
         let (Some(ix), Some(iy)) = (
             chain.iter().position(|v| *v == x),
@@ -1022,7 +1111,10 @@ fn retriangulate(
         .map(|(e, made)| (e, made.into_iter().map(|(_, vi)| vi).collect()))
         .collect();
     Ok(CutFaces {
-        mesh: IndexedMesh { positions, triangles },
+        mesh: IndexedMesh {
+            positions,
+            triangles,
+        },
         seam_edges,
         seam_vertices: vertex_of,
         source_face,
@@ -1077,11 +1169,19 @@ fn clip_convex_ears(
 ) {
     let mut poly: Vec<u32> = poly.to_vec();
     let mut emit = |x: u32, y: u32, z: u32| {
-        let (p, q, r) = (positions[x as usize], positions[y as usize], positions[z as usize]);
+        let (p, q, r) = (
+            positions[x as usize],
+            positions[y as usize],
+            positions[z as usize],
+        );
         let cross = q.sub(p).cross(r.sub(p));
         if cross.length() > 1e-20 {
             // Wind it the way the face pointed.
-            out.push(if cross.dot(normal) >= 0.0 { [x, y, z] } else { [x, z, y] });
+            out.push(if cross.dot(normal) >= 0.0 {
+                [x, y, z]
+            } else {
+                [x, z, y]
+            });
         }
     };
     while poly.len() > 3 {
@@ -1116,12 +1216,15 @@ fn retriangulate_face(
     chords: &[(u32, u32)],
     on_edge: &AHashMap<(u32, u32), Vec<u32>>,
 ) -> Result<Vec<[u32; 3]>, String> {
-    let (a, b, c) = (positions[tri[0] as usize], positions[tri[1] as usize], positions[tri[2] as usize]);
+    let (a, b, c) = (
+        positions[tri[0] as usize],
+        positions[tri[1] as usize],
+        positions[tri[2] as usize],
+    );
     let normal = b.sub(a).cross(c.sub(a));
     if normal.length() < 1e-18 {
         return Ok(vec![*tri]); // degenerate face: leave it be
     }
-
 
     // The face's boundary, walked corner to corner, with every crossing that sits
     // on each edge inserted in order along it. The neighbour across an edge walks
@@ -1158,7 +1261,10 @@ fn retriangulate_face(
         // is nothing to cut, and cutting anyway lays a second copy of the face's own
         // triangles on top of the first.
         if polygons.iter().any(|p| {
-            let (ix, iy) = (p.iter().position(|v| *v == x), p.iter().position(|v| *v == y));
+            let (ix, iy) = (
+                p.iter().position(|v| *v == x),
+                p.iter().position(|v| *v == y),
+            );
             match (ix, iy) {
                 (Some(i), Some(j)) => (i + 1) % p.len() == j || (j + 1) % p.len() == i,
                 _ => false,
@@ -1166,7 +1272,10 @@ fn retriangulate_face(
         }) {
             continue;
         }
-        let Some(pi) = polygons.iter().position(|p| p.contains(&x) && p.contains(&y)) else {
+        let Some(pi) = polygons
+            .iter()
+            .position(|p| p.contains(&x) && p.contains(&y))
+        else {
             continue; // the chord's ends are not on one piece: nothing to cut
         };
         let poly = polygons.swap_remove(pi);
@@ -1176,7 +1285,11 @@ fn retriangulate_face(
         );
         let (lo, hi) = if ix < iy { (ix, iy) } else { (iy, ix) };
         let first: Vec<u32> = poly[lo..=hi].to_vec();
-        let second: Vec<u32> = poly[hi..].iter().chain(poly[..=lo].iter()).copied().collect();
+        let second: Vec<u32> = poly[hi..]
+            .iter()
+            .chain(poly[..=lo].iter())
+            .copied()
+            .collect();
         // A "piece" of two points is the chord lying along the boundary: no area.
         for piece in [first, second] {
             if piece.len() >= 3 {
@@ -1191,7 +1304,11 @@ fn retriangulate_face(
     }
     if std::env::var_os("DF_SPLIT_DEBUG").is_some() {
         let area = |x: u32, y: u32, z: u32| {
-            let (p, q, r) = (positions[x as usize], positions[y as usize], positions[z as usize]);
+            let (p, q, r) = (
+                positions[x as usize],
+                positions[y as usize],
+                positions[z as usize],
+            );
             q.sub(p).cross(r.sub(p)).length() * 0.5
         };
         let whole = area(tri[0], tri[1], tri[2]);
@@ -1199,7 +1316,8 @@ fn retriangulate_face(
         if (sum - whole).abs() > whole * 0.01 {
             eprintln!(
                 "[trozos] cara {tri:?} área {whole:.5} -> {sum:.5} con {} cuerdas {:?}",
-                chords.len(), chords
+                chords.len(),
+                chords
             );
         }
     }
@@ -1212,7 +1330,10 @@ fn pieces(mesh: &IndexedMesh, seam_edges: &AHashSet<(u32, u32)>) -> Vec<u32> {
     let mut edge_faces: AHashMap<(u32, u32), Vec<u32>> = AHashMap::new();
     for (fi, t) in mesh.triangles.iter().enumerate() {
         for k in 0..3 {
-            edge_faces.entry(edge_key(t[k], t[(k + 1) % 3])).or_default().push(fi as u32);
+            edge_faces
+                .entry(edge_key(t[k], t[(k + 1) % 3]))
+                .or_default()
+                .push(fi as u32);
         }
     }
     let mut neighbours: Vec<Vec<u32>> = vec![Vec::new(); mesh.triangles.len()];
@@ -1283,7 +1404,14 @@ mod tests {
         }
         let soup: Vec<f32> = triangles
             .iter()
-            .flat_map(|t| t.iter().flat_map(|&i| { let p = positions[i as usize]; [p.x, p.y, p.z] }).collect::<Vec<f32>>())
+            .flat_map(|t| {
+                t.iter()
+                    .flat_map(|&i| {
+                        let p = positions[i as usize];
+                        [p.x, p.y, p.z]
+                    })
+                    .collect::<Vec<f32>>()
+            })
             .collect();
         IndexedMesh::from_triangle_soup(&soup, 1e-5)
     }
@@ -1298,7 +1426,11 @@ mod tests {
         let topo = Topology::build(&mesh);
         for (fi, t) in mesh.triangles.iter().enumerate() {
             let expected: Vec<u32> = (0..3)
-                .flat_map(|k| topo.edge_faces[&edge_key(t[k], t[(k + 1) % 3])].iter().copied())
+                .flat_map(|k| {
+                    topo.edge_faces[&edge_key(t[k], t[(k + 1) % 3])]
+                        .iter()
+                        .copied()
+                })
                 .filter(|g| *g != fi as u32)
                 .collect();
             assert_eq!(topo.neighbours[fi], expected, "face {fi}");
@@ -1334,7 +1466,10 @@ mod tests {
                 triangles.push([idx(i, j), idx(i + 1, j + 1), idx(i, j + 1)]);
             }
         }
-        IndexedMesh { positions, triangles }
+        IndexedMesh {
+            positions,
+            triangles,
+        }
     }
 
     fn tube_ring(major: f32, minor: f32, angle: f32, steps: usize) -> Vec<Vec3> {
@@ -1355,9 +1490,17 @@ mod tests {
         let model = torus(10.0, 3.0, 64, 32);
         let one = tube_ring(10.0, 3.0, 0.3, 96);
         let split = split_along_seam(&model, &one).expect("the seam should cut the surface");
-        assert_eq!(open_edges(&split.mesh), 0, "cutting the surface must not open it");
+        assert_eq!(
+            open_edges(&split.mesh),
+            0,
+            "cutting the surface must not open it"
+        );
         let pieces: AHashSet<u32> = split.piece_of_face.iter().copied().collect();
-        assert_eq!(pieces.len(), 1, "a ring round a handle leaves one piece: {pieces:?}");
+        assert_eq!(
+            pieces.len(),
+            1,
+            "a ring round a handle leaves one piece: {pieces:?}"
+        );
     }
 
     #[test]
@@ -1368,9 +1511,17 @@ mod tests {
         // its own problem (see the module docs), and no hand-drawn one does.
         let second = tube_ring(10.0, 3.0, std::f32::consts::PI + 0.05, 96);
         let split = split_along_seams(&model, &[first, second]).expect("both seams");
-        assert_eq!(open_edges(&split.mesh), 0, "still watertight after two cuts");
+        assert_eq!(
+            open_edges(&split.mesh),
+            0,
+            "still watertight after two cuts"
+        );
         let pieces: AHashSet<u32> = split.piece_of_face.iter().copied().collect();
-        assert_eq!(pieces.len(), 2, "two rings free the length of tube between them: {pieces:?}");
+        assert_eq!(
+            pieces.len(),
+            2,
+            "two rings free the length of tube between them: {pieces:?}"
+        );
     }
 
     // A seam that wanders instead of running straight crosses some faces more than
@@ -1390,7 +1541,11 @@ mod tests {
             })
             .collect();
         let split = split_along_seam(&model, &seam).expect("a wandering seam still cuts");
-        assert_eq!(open_edges(&split.mesh), 0, "cutting the surface must not open it");
+        assert_eq!(
+            open_edges(&split.mesh),
+            0,
+            "cutting the surface must not open it"
+        );
     }
 
     // The seam grazing the mesh's own vertices is the case that leaked on the real
@@ -1420,9 +1575,17 @@ mod tests {
         let split = split_along_seam(&model, &ring).expect("the seam should cut the surface");
         // `open_edges` counts every edge NOT used by exactly two faces, so this is
         // the four-times case as much as the hole.
-        assert_eq!(open_edges(&split.mesh), 0, "every edge belongs to exactly two faces");
+        assert_eq!(
+            open_edges(&split.mesh),
+            0,
+            "every edge belongs to exactly two faces"
+        );
         let labels: AHashSet<u32> = split.piece_of_face.iter().copied().collect();
-        assert_eq!(labels.len(), 2, "the surface still falls in exactly two: {labels:?}");
+        assert_eq!(
+            labels.len(),
+            2,
+            "the surface still falls in exactly two: {labels:?}"
+        );
     }
 
     #[test]
@@ -1445,12 +1608,23 @@ mod tests {
             .collect();
 
         let split = split_along_seam(&model, &ring).expect("the seam should cut the surface");
-        assert_eq!(open_edges(&split.mesh), 0, "cutting the surface must not open it");
+        assert_eq!(
+            open_edges(&split.mesh),
+            0,
+            "cutting the surface must not open it"
+        );
 
         let labels: AHashSet<u32> = split.piece_of_face.iter().copied().collect();
-        assert_eq!(labels.len(), 2, "the surface falls in exactly two: {labels:?}");
+        assert_eq!(
+            labels.len(),
+            2,
+            "the surface falls in exactly two: {labels:?}"
+        );
         let above = split.piece_of_face.iter().filter(|p| **p == 0).count();
-        assert!(above > 0 && above < split.mesh.triangles.len(), "both sides carry faces");
+        assert!(
+            above > 0 && above < split.mesh.triangles.len(),
+            "both sides carry faces"
+        );
     }
 
     /// Two seams a tenth of a millimeter apart on a mesh of hundred-millimeter
@@ -1478,14 +1652,22 @@ mod tests {
         };
         let seams = vec![ring_at(52.0), ring_at(52.1)];
         let split = split_along_seams(&model, &seams).expect("two close seams should cut");
-        assert_eq!(open_edges(&split.mesh), 0, "cutting the surface must not open it");
+        assert_eq!(
+            open_edges(&split.mesh),
+            0,
+            "cutting the surface must not open it"
+        );
         assert!(
             split.loose_wall_ends().is_empty(),
             "the wall must not stop dead: {:?}",
             split.loose_wall_ends()
         );
         let labels: AHashSet<u32> = split.piece_of_face.iter().copied().collect();
-        assert_eq!(labels.len(), 3, "top, bottom and the strip between: {labels:?}");
+        assert_eq!(
+            labels.len(),
+            3,
+            "top, bottom and the strip between: {labels:?}"
+        );
 
         // And the strip is named for what it is. It is the band the clearance is made
         // of — the piece that runs along both seams — and binning the wrong one hands
@@ -1494,7 +1676,11 @@ mod tests {
         // faces than the lid it separates — but by where it is: every face of the
         // strip lies inside the tenth of a millimeter between the two seams.
         let strips = split.strips_between(0, 1);
-        assert_eq!(strips.len(), 1, "one unbroken band round the cube: {strips:?}");
+        assert_eq!(
+            strips.len(),
+            1,
+            "one unbroken band round the cube: {strips:?}"
+        );
         for (fi, t) in split.mesh.triangles.iter().enumerate() {
             if split.piece_of_face[fi] != strips[0] {
                 continue;
@@ -1516,7 +1702,10 @@ mod tests {
         // it is that a strip is THIN: this piece is the whole cube, and almost none
         // of it lies on the seams.
         let mut nothing_separated = split;
-        nothing_separated.piece_of_face.iter_mut().for_each(|p| *p = 0);
+        nothing_separated
+            .piece_of_face
+            .iter_mut()
+            .for_each(|p| *p = 0);
         assert!(
             nothing_separated.strips_between(0, 1).is_empty(),
             "a piece that is the whole model is not the strip of a 0.1 mm clearance",

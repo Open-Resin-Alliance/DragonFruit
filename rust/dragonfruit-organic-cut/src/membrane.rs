@@ -217,7 +217,11 @@ fn span_rim_in_3d(ring: &[Vec3]) -> Option<Membrane> {
 ///
 /// `ring` must already be a clean ring (no repeated point, no zero-length edge);
 /// it comes from mesh topology, so nothing here is allowed to tidy it up.
-pub fn build_membrane_on_ring(ring: &[Vec3], grid_divisions: f64, smoothing: f32) -> Option<Membrane> {
+pub fn build_membrane_on_ring(
+    ring: &[Vec3],
+    grid_divisions: f64,
+    smoothing: f32,
+) -> Option<Membrane> {
     if ring.len() < 3 {
         return None;
     }
@@ -340,7 +344,11 @@ fn seed_fan(loop_pts: &[Vec3]) -> Option<Membrane> {
     }
     // Boundary ring = the loop vertices in order (0..n).
     let boundary = (0..n as u32).collect();
-    Some(Membrane { vertices, triangles, boundary })
+    Some(Membrane {
+        vertices,
+        triangles,
+        boundary,
+    })
 }
 
 /// An orthonormal frame for the loop's best-fit plane: `origin` + in-plane axes
@@ -387,11 +395,23 @@ impl PlaneFrame {
             return None; // collinear / degenerate
         }
         let normal = if det_max == det_x {
-            Vec3::new(det_x as f32, (xz * yz - xy * zz) as f32, (xy * yz - xz * yy) as f32)
+            Vec3::new(
+                det_x as f32,
+                (xz * yz - xy * zz) as f32,
+                (xy * yz - xz * yy) as f32,
+            )
         } else if det_max == det_y {
-            Vec3::new((xz * yz - xy * zz) as f32, det_y as f32, (xy * xz - yz * xx) as f32)
+            Vec3::new(
+                (xz * yz - xy * zz) as f32,
+                det_y as f32,
+                (xy * xz - yz * xx) as f32,
+            )
         } else {
-            Vec3::new((xy * yz - xz * yy) as f32, (xy * xz - yz * xx) as f32, det_z as f32)
+            Vec3::new(
+                (xy * yz - xz * yy) as f32,
+                (xy * xz - yz * xx) as f32,
+                det_z as f32,
+            )
         };
         let nlen = normal.length();
         if nlen < 1e-9 {
@@ -400,7 +420,11 @@ impl PlaneFrame {
         let n = normal.scale(1.0 / nlen);
 
         // Pick an in-plane u axis not parallel to n, then v = n × u.
-        let seed = if n.x.abs() < 0.9 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(0.0, 1.0, 0.0) };
+        let seed = if n.x.abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
         let mut u = seed.sub(n.scale(seed.dot(n)));
         let ulen = u.length();
         if ulen < 1e-9 {
@@ -436,9 +460,7 @@ fn point_in_polygon(p: (f64, f64), poly: &[(f64, f64)]) -> bool {
         let (xj, yj) = poly[j];
         // Does the edge (j→i) straddle the horizontal ray at py, and is the
         // crossing to the right of px?
-        if ((yi > py) != (yj > py))
-            && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)
-        {
+        if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
             inside = !inside;
         }
         j = i;
@@ -496,7 +518,11 @@ fn seed_grid(loop_pts: &[Vec3], grid_divisions: f64, densify_rim: bool) -> Optio
         let a3 = loop_pts[i];
         let b3 = loop_pts[(i + 1) % n];
         let seg_len = ((a2.0 - b2.0).powi(2) + (a2.1 - b2.1).powi(2)).sqrt();
-        let steps = if densify_rim { ((seg_len / spacing).floor() as usize).max(1) } else { 1 };
+        let steps = if densify_rim {
+            ((seg_len / spacing).floor() as usize).max(1)
+        } else {
+            1
+        };
         // Emit the start vertex + interior subdivisions; the next segment emits
         // its own start, so we don't duplicate the shared corner.
         for s in 0..steps {
@@ -514,7 +540,13 @@ fn seed_grid(loop_pts: &[Vec3], grid_divisions: f64, densify_rim: bool) -> Optio
     let mut y = min_y + spacing;
     let mut grid_row = 0;
     while y < max_y {
-        let x_start = min_x + spacing + if grid_row % 2 == 1 { spacing * 0.5 } else { 0.0 };
+        let x_start = min_x
+            + spacing
+            + if grid_row % 2 == 1 {
+                spacing * 0.5
+            } else {
+                0.0
+            };
         let mut x = x_start;
         while x < max_x {
             let p = (x, y);
@@ -572,7 +604,11 @@ fn seed_grid(loop_pts: &[Vec3], grid_divisions: f64, densify_rim: bool) -> Optio
     }
 
     let boundary = (0..bn as u32).collect();
-    Some(Membrane { vertices, triangles, boundary })
+    Some(Membrane {
+        vertices,
+        triangles,
+        boundary,
+    })
 }
 
 /// Unify triangle winding across the membrane by flood-fill. Two triangles
@@ -596,9 +632,7 @@ fn orient_membrane(m: &mut Membrane) {
     // Does triangle `fi` traverse directed edge (a→b)? (i.e. (a,b) appears in
     // winding order). Used to compare neighbour orientations.
     let traverses = |tri: [u32; 3], a: u32, b: u32| -> bool {
-        (tri[0] == a && tri[1] == b)
-            || (tri[1] == a && tri[2] == b)
-            || (tri[2] == a && tri[0] == b)
+        (tri[0] == a && tri[1] == b) || (tri[1] == a && tri[2] == b) || (tri[2] == a && tri[0] == b)
     };
 
     let mut visited = vec![false; n];
@@ -653,7 +687,11 @@ fn dist_point_segment_2d(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     let (abx, aby) = (b.0 - a.0, b.1 - a.1);
     let (apx, apy) = (p.0 - a.0, p.1 - a.1);
     let len2 = abx * abx + aby * aby;
-    let t = if len2 > 0.0 { ((apx * abx + apy * aby) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    let t = if len2 > 0.0 {
+        ((apx * abx + apy * aby) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let (cx, cy) = (a.0 + t * abx, a.1 + t * aby);
     ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt()
 }
@@ -856,7 +894,11 @@ fn membrane_average_normal(m: &Membrane) -> Vec3 {
         avg = avg.add(b.sub(a).cross(c.sub(a)));
     }
     let l = avg.length();
-    if l > 1e-9 { avg.scale(1.0 / l) } else { Vec3::new(0.0, 0.0, 1.0) }
+    if l > 1e-9 {
+        avg.scale(1.0 / l)
+    } else {
+        Vec3::new(0.0, 0.0, 1.0)
+    }
 }
 
 /// Thicken a membrane into a closed, watertight ~`thickness_mm` slab — the cutter.
@@ -901,7 +943,11 @@ pub fn thicken_to_slab(
         avg_n = avg_n.add(b.sub(a).cross(c.sub(a))); // area-weighted face normal
     }
     let alen = avg_n.length();
-    let offset_dir = if alen > 1e-9 { avg_n.scale(1.0 / alen) } else { Vec3::new(0.0, 0.0, 1.0) };
+    let offset_dir = if alen > 1e-9 {
+        avg_n.scale(1.0 / alen)
+    } else {
+        Vec3::new(0.0, 0.0, 1.0)
+    };
 
     // Lift each boundary vertex a hair OFF the surface along the model's outward
     // SURFACE normal there. This makes the slab boundary sit just outside the
@@ -969,7 +1015,10 @@ pub fn thicken_to_slab(
         }
     }
 
-    IndexedMesh { positions, triangles }
+    IndexedMesh {
+        positions,
+        triangles,
+    }
 }
 
 /// An axis-aligned thin slab (box) used as the simplest possible cutter while we
@@ -1009,14 +1058,24 @@ pub fn axis_aligned_slab(lo: Vec3, hi: Vec3) -> IndexedMesh {
         [1, 6, 5], // x = hi
     ];
     let positions = c.to_vec();
-    let triangles = faces.iter().map(|f| [f[0] as u32, f[1] as u32, f[2] as u32]).collect();
-    IndexedMesh { positions, triangles }
+    let triangles = faces
+        .iter()
+        .map(|f| [f[0] as u32, f[1] as u32, f[2] as u32])
+        .collect();
+    IndexedMesh {
+        positions,
+        triangles,
+    }
 }
 
 /// Build a `manifold` solid from an `IndexedMesh` (xyz only). Mirrors the exact
 /// conversion `organic_cut_plane` uses, so behavior is identical to the live cut.
 pub fn to_manifold(mesh: &IndexedMesh) -> Result<manifold_csg::Manifold, String> {
-    let positions: Vec<f32> = mesh.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
+    let positions: Vec<f32> = mesh
+        .positions
+        .iter()
+        .flat_map(|v| [v.x, v.y, v.z])
+        .collect();
     let indices: Vec<u32> = mesh.triangles.iter().flat_map(|t| *t).collect();
     let m = manifold_csg::Manifold::from_mesh_f32(&positions, 3, &indices).map_err(|e| {
         // Enrich the error so we can SEE the defect on the real model: how many
@@ -1058,9 +1117,12 @@ fn count_self_intersections(mesh: &IndexedMesh) -> usize {
         for j in (i + 1)..n {
             let (lo_j, hi_j) = aabb[j];
             // AABB overlap test.
-            if hi_i.x < lo_j.x || lo_i.x > hi_j.x
-                || hi_i.y < lo_j.y || lo_i.y > hi_j.y
-                || hi_i.z < lo_j.z || lo_i.z > hi_j.z
+            if hi_i.x < lo_j.x
+                || lo_i.x > hi_j.x
+                || hi_i.y < lo_j.y
+                || lo_i.y > hi_j.y
+                || hi_i.z < lo_j.z
+                || lo_i.z > hi_j.z
             {
                 continue;
             }
@@ -1090,11 +1152,7 @@ fn tris_intersect(t1: [Vec3; 3], t2: [Vec3; 3]) -> bool {
     // Plane of t2.
     let n2 = t2[1].sub(t2[0]).cross(t2[2].sub(t2[0]));
     let d2 = -n2.dot(t2[0]);
-    let dist1: [f32; 3] = [
-        n2.dot(t1[0]) + d2,
-        n2.dot(t1[1]) + d2,
-        n2.dot(t1[2]) + d2,
-    ];
+    let dist1: [f32; 3] = [n2.dot(t1[0]) + d2, n2.dot(t1[1]) + d2, n2.dot(t1[2]) + d2];
     const EPS: f32 = 1e-6;
     if dist1[0].abs() < EPS && dist1[1].abs() < EPS && dist1[2].abs() < EPS {
         return false; // coplanar — ignore (shared seams etc.)
@@ -1107,11 +1165,7 @@ fn tris_intersect(t1: [Vec3; 3], t2: [Vec3; 3]) -> bool {
     // Plane of t1.
     let n1 = t1[1].sub(t1[0]).cross(t1[2].sub(t1[0]));
     let d1 = -n1.dot(t1[0]);
-    let dist2: [f32; 3] = [
-        n1.dot(t2[0]) + d1,
-        n1.dot(t2[1]) + d1,
-        n1.dot(t2[2]) + d1,
-    ];
+    let dist2: [f32; 3] = [n1.dot(t2[0]) + d1, n1.dot(t2[1]) + d1, n1.dot(t2[2]) + d1];
     if (dist2[0] > EPS && dist2[1] > EPS && dist2[2] > EPS)
         || (dist2[0] < -EPS && dist2[1] < -EPS && dist2[2] < -EPS)
     {
@@ -1122,7 +1176,13 @@ fn tris_intersect(t1: [Vec3; 3], t2: [Vec3; 3]) -> bool {
     let dir = n1.cross(n2);
     let axis = {
         let (ax, ay, az) = (dir.x.abs(), dir.y.abs(), dir.z.abs());
-        if ax >= ay && ax >= az { 0 } else if ay >= az { 1 } else { 2 }
+        if ax >= ay && ax >= az {
+            0
+        } else if ay >= az {
+            1
+        } else {
+            2
+        }
     };
     let proj = |p: Vec3| match axis {
         0 => p.x,
@@ -1242,7 +1302,11 @@ fn signed_side_distance(m: &Membrane, p: Vec3) -> f32 {
             let n = b.sub(a).cross(c.sub(a));
             let nlen = n.length();
             let dir = p.sub(cp);
-            best_signed = if nlen > 1e-12 { dir.dot(n.scale(1.0 / nlen)) } else { dir.length() };
+            best_signed = if nlen > 1e-12 {
+                dir.dot(n.scale(1.0 / nlen))
+            } else {
+                dir.length()
+            };
         }
     }
     best_signed
@@ -1323,7 +1387,13 @@ pub struct PlaneSection {
 /// (a C, or two separate legs) can land in air. Callers that need a point inside
 /// the material must check — here, the tenon's clearance probe does it for free: it
 /// finds no material and the fit ladder reports the part too thin for a tenon.
-pub fn plane_section(mesh: &IndexedMesh, normal: Vec3, offset: f32, u: Vec3, v: Vec3) -> Option<PlaneSection> {
+pub fn plane_section(
+    mesh: &IndexedMesh,
+    normal: Vec3,
+    offset: f32,
+    u: Vec3,
+    v: Vec3,
+) -> Option<PlaneSection> {
     let nlen = normal.length();
     if nlen < 1e-9 {
         return None;
@@ -1505,27 +1575,28 @@ fn split_into_two_sides(
         // each other is the whole of what the user needs to know, and it is the one
         // thing the geometry can tell us — so ask it rather than guessing that the
         // seam must not have closed.
-        let largest = side_a.first().or_else(|| side_b.first()).or_else(|| orphans.first());
-        return Err(match largest.and_then(|body| find_surviving_join(body, membrane, band)) {
-            Some((_, plus, minus)) if plus + minus <= JOIN_IS_LOCAL_HOPS => {
-                "The cut face came out clean, but a thread of material still bridges the \
+        let largest = side_a
+            .first()
+            .or_else(|| side_b.first())
+            .or_else(|| orphans.first());
+        return Err(
+            match largest.and_then(|body| find_surviving_join(body, membrane, band)) {
+                Some((_, plus, minus)) if plus + minus <= JOIN_IS_LOCAL_HOPS => {
+                    "The cut face came out clean, but a thread of material still bridges the \
                  seam right beside it: the loop runs under an overhanging detail there, so \
                  the two sides never come apart. Nudge those waypoints past the detail."
-                    .to_string()
-            }
-            Some(_) => {
-                "The cut face came out clean, but the part is still attached somewhere \
+                        .to_string()
+                }
+                Some(_) => "The cut face came out clean, but the part is still attached somewhere \
                  else — one seam cannot free a piece that is joined in more than one \
                  place. Add a loop around the other join and cut them together."
-                    .to_string()
-            }
-            None => {
-                "The seam does not go all the way around the part. It runs across the \
+                    .to_string(),
+                None => "The seam does not go all the way around the part. It runs across the \
                  surface without closing through the body, so nothing came free. Move the \
                  waypoints so the loop wraps right round what you want to separate."
-                    .to_string()
-            }
-        });
+                    .to_string(),
+            },
+        );
     }
     if side_a.is_empty() || side_b.is_empty() {
         return Err(format!(
@@ -1592,9 +1663,11 @@ fn concat_meshes(meshes: Vec<IndexedMesh>) -> IndexedMesh {
             triangles.push([t[0] + base, t[1] + base, t[2] + base]);
         }
     }
-    IndexedMesh { positions, triangles }
+    IndexedMesh {
+        positions,
+        triangles,
+    }
 }
-
 
 /// Band half-width for [`refine_model_near_slab`], as a fraction of the model
 /// bbox diagonal — how far from the cutter slab a model triangle must be to get
@@ -1724,7 +1797,10 @@ pub fn refine_model_near_slab(
         triangles = next;
     }
 
-    IndexedMesh { positions, triangles }
+    IndexedMesh {
+        positions,
+        triangles,
+    }
 }
 
 /// The result of a successful contour split: two parts that mate along the
@@ -1820,7 +1896,11 @@ fn boundary_outward_dirs(m: &Membrane) -> Vec<Vec3> {
         // Remove the tangent component → purely outward, in the local surface.
         out = out.sub(t.scale(out.dot(t)));
         let ol = out.length();
-        dirs.push(if ol > 1e-9 { out.scale(1.0 / ol) } else { Vec3::ZERO });
+        dirs.push(if ol > 1e-9 {
+            out.scale(1.0 / ol)
+        } else {
+            Vec3::ZERO
+        });
     }
 
     // 2. Smooth the directions around the ring (kills low-poly zigzag).
@@ -1995,8 +2075,18 @@ fn build_contour_cutter(
     // the rim stays at the same height, on the seam. Where a smoothed seam sank
     // BELOW the skin, that fixed margin is not enough to reach the wall, so a
     // second pass keeps pushing exactly those vertices out until they clear it.
-    let mut membrane = build_membrane_full(loop_pts, CONTOUR_SUBDIVISIONS, membrane_smoothing, grid_divisions)
-        .ok_or_else(|| format!("could not build a membrane from the loop ({} points)", loop_pts.len()))?;
+    let mut membrane = build_membrane_full(
+        loop_pts,
+        CONTOUR_SUBDIVISIONS,
+        membrane_smoothing,
+        grid_divisions,
+    )
+    .ok_or_else(|| {
+        format!(
+            "could not build a membrane from the loop ({} points)",
+            loop_pts.len()
+        )
+    })?;
     widen_membrane_boundary(&mut membrane, DEFAULT_WAFER_WIDEN_MM);
     push_boundary_out_of_the_skin(&mut membrane, mesh, DEFAULT_WAFER_WIDEN_MM);
     let slab = thicken_to_slab(&membrane, thickness_mm, 0.0, &[]);
@@ -2016,7 +2106,8 @@ pub fn build_cutter_preview_soup(
     density: f32,
 ) -> Option<Vec<f32>> {
     let density = density.clamp(1.0, 4.0) as f64;
-    let (_, slab) = build_contour_cutter(mesh, loop_pts, thickness_mm, membrane_smoothing, density).ok()?;
+    let (_, slab) =
+        build_contour_cutter(mesh, loop_pts, thickness_mm, membrane_smoothing, density).ok()?;
     // Flatten the slab triangles into a soup.
     let mut soup = Vec::with_capacity(slab.triangles.len() * 9);
     for t in &slab.triangles {
@@ -2204,7 +2295,11 @@ fn debug_contour_split(
 /// handful means the join is right beside the seam — a lip or an overhanging
 /// shingle the wafer never got past — while hundreds mean the piece is genuinely
 /// held somewhere else, and no single loop was ever going to free it.
-fn find_surviving_join(body: &IndexedMesh, membrane: &Membrane, band: f32) -> Option<(Vec3, u32, u32)> {
+fn find_surviving_join(
+    body: &IndexedMesh,
+    membrane: &Membrane,
+    band: f32,
+) -> Option<(Vec3, u32, u32)> {
     let mem_mesh = IndexedMesh {
         positions: membrane.vertices.clone(),
         triangles: membrane.triangles.clone(),
@@ -2274,11 +2369,7 @@ fn report_surviving_neck(body: &IndexedMesh, membrane: &Membrane, band: f32, lab
 /// Distance from `p` to the nearest surface point of `mesh`, via the BVH. Searches
 /// a box around `p`, widening until it finds triangles. Diagnostics only.
 #[cfg(feature = "manifold")]
-fn distance_to_surface(
-    bvh: &dragonfruit_mesh_core::bvh::Bvh,
-    mesh: &IndexedMesh,
-    p: Vec3,
-) -> f32 {
+fn distance_to_surface(bvh: &dragonfruit_mesh_core::bvh::Bvh, mesh: &IndexedMesh, p: Vec3) -> f32 {
     for r in [0.5f32, 2.0, 8.0, 32.0] {
         let query = dragonfruit_mesh_core::mesh::Aabb {
             min: Vec3::new(p.x - r, p.y - r, p.z - r),
@@ -2326,7 +2417,8 @@ pub fn contour_split(
 
     // Build the cutter slab EXACTLY as the preview does (single source of truth):
     // offset the loop off the faces → membrane → thicken into the slab.
-    let (membrane, slab) = build_contour_cutter(mesh, loop_pts, thickness_mm, membrane_smoothing, density)?;
+    let (membrane, slab) =
+        build_contour_cutter(mesh, loop_pts, thickness_mm, membrane_smoothing, density)?;
     let membrane_tris = membrane.triangles.len();
 
     let cutter = to_manifold(&slab).map_err(|e| {
@@ -2362,7 +2454,13 @@ pub fn contour_split(
     let (part_a, part_b) = split_into_two_sides(&membrane, islands, thickness_mm)
         .map_err(|why| explain_failure(mesh, &[loop_pts.to_vec()], why))?;
 
-    Ok(ContourSplit { part_a, part_b, component_count, membrane_tris, membrane })
+    Ok(ContourSplit {
+        part_a,
+        part_b,
+        component_count,
+        membrane_tris,
+        membrane,
+    })
 }
 
 /// The result of a MULTI-loop contour split (≥2 loops union'd into one cutter).
@@ -2422,7 +2520,10 @@ pub fn contour_split_multi(
     // and differencing that severs nothing. `A − B − C` is equivalent to
     // `A − (B ∪ C)` but avoids that fragile union entirely.
     let mut slab_manifolds: Vec<manifold_csg::Manifold> = Vec::new();
-    let mut combined_slab = IndexedMesh { positions: Vec::new(), triangles: Vec::new() };
+    let mut combined_slab = IndexedMesh {
+        positions: Vec::new(),
+        triangles: Vec::new(),
+    };
     let mut membranes: Vec<Membrane> = Vec::new();
     let mut membrane_tris = 0usize;
     for (i, lp) in loops.iter().enumerate() {
@@ -2438,7 +2539,9 @@ pub fn contour_split_multi(
         let base = combined_slab.positions.len() as u32;
         combined_slab.positions.extend_from_slice(&slab.positions);
         for t in &slab.triangles {
-            combined_slab.triangles.push([t[0] + base, t[1] + base, t[2] + base]);
+            combined_slab
+                .triangles
+                .push([t[0] + base, t[1] + base, t[2] + base]);
         }
 
         slab_manifolds.push(m);
@@ -2475,7 +2578,10 @@ pub fn contour_split_multi(
 
     let component_count = islands.len();
     if std::env::var_os("DF_CUT_DEBUG").is_some() {
-        eprintln!("[cut] multi-loop: {} loops, islands AFTER: {component_count}", membranes.len());
+        eprintln!(
+            "[cut] multi-loop: {} loops, islands AFTER: {component_count}",
+            membranes.len()
+        );
         for (i, island) in islands.iter().enumerate() {
             let stride = (island.positions.len() / 2000).max(1);
             let nearest = membranes
@@ -2541,7 +2647,13 @@ pub fn contour_split_multi(
         })
         .map_err(|why| explain_failure(mesh, loops, why))?;
 
-    Ok(ContourSplitMulti { part_a, part_b, component_count, membrane_tris, membranes })
+    Ok(ContourSplitMulti {
+        part_a,
+        part_b,
+        component_count,
+        membrane_tris,
+        membranes,
+    })
 }
 
 /// Group severed islands into two parts: the LARGEST component (the body) as
@@ -2587,9 +2699,8 @@ fn group_largest_vs_rest(
     // off the cut face like a real piece, but it is kerf-sized. The user's roof gave
     // a 16-triangle crumb 0.4 mm across, handed over as a solid of its own.
     let debris_diag = thickness * KERF_DEBRIS_DIAGONALS;
-    let is_freed = |island: &IndexedMesh| {
-        island.bbox().diag() > debris_diag && on_a_cut_face(island)
-    };
+    let is_freed =
+        |island: &IndexedMesh| island.bbox().diag() > debris_diag && on_a_cut_face(island);
 
     if !islands.iter().skip(1).any(is_freed) {
         return Err(islands); // handed back so the caller can say WHY nothing came free
@@ -2614,9 +2725,15 @@ pub(crate) fn manifold_to_indexed(model: &manifold_csg::Manifold) -> Option<Inde
     if np < 3 || ti.is_empty() || vp.is_empty() {
         return None;
     }
-    let positions: Vec<Vec3> = vp.chunks_exact(np).map(|c| Vec3::new(c[0], c[1], c[2])).collect();
+    let positions: Vec<Vec3> = vp
+        .chunks_exact(np)
+        .map(|c| Vec3::new(c[0], c[1], c[2]))
+        .collect();
     let triangles: Vec<[u32; 3]> = ti.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
-    Some(IndexedMesh { positions, triangles })
+    Some(IndexedMesh {
+        positions,
+        triangles,
+    })
 }
 
 #[cfg(test)]
@@ -2627,7 +2744,11 @@ mod tests {
 
     #[inline]
     fn ekey(a: u32, b: u32) -> EdgeKey {
-        if a < b { (a, b) } else { (b, a) }
+        if a < b {
+            (a, b)
+        } else {
+            (b, a)
+        }
     }
 
     use super::*;
@@ -2645,10 +2766,18 @@ mod tests {
         let z = size / 2.0;
         let mut pts = Vec::with_capacity(steps * 4);
         let f = |i: usize| size * i as f32 / steps as f32;
-        for i in 0..steps { pts.push(Vec3::new(f(i), 0.0, z)); }       // y=0
-        for i in 0..steps { pts.push(Vec3::new(size, f(i), z)); }      // x=size
-        for i in 0..steps { pts.push(Vec3::new(size - f(i), size, z)); } // y=size
-        for i in 0..steps { pts.push(Vec3::new(0.0, size - f(i), z)); } // x=0
+        for i in 0..steps {
+            pts.push(Vec3::new(f(i), 0.0, z));
+        } // y=0
+        for i in 0..steps {
+            pts.push(Vec3::new(size, f(i), z));
+        } // x=size
+        for i in 0..steps {
+            pts.push(Vec3::new(size - f(i), size, z));
+        } // y=size
+        for i in 0..steps {
+            pts.push(Vec3::new(0.0, size - f(i), z));
+        } // x=0
         pts
     }
 
@@ -2698,7 +2827,9 @@ mod tests {
         }
         let boundary: std::collections::HashSet<(u32, u32)> = {
             let bn = m.boundary.len();
-            (0..bn).map(|i| ekey(m.boundary[i], m.boundary[(i + 1) % bn])).collect()
+            (0..bn)
+                .map(|i| ekey(m.boundary[i], m.boundary[(i + 1) % bn]))
+                .collect()
         };
         for (&e, &c) in &counts {
             if c > 2 {
@@ -2729,7 +2860,10 @@ mod tests {
         // First N vertices are exactly the loop points (boundary ring 0..4).
         assert_eq!(m.boundary, vec![0, 1, 2, 3]);
         for i in 0..4 {
-            assert!(m.vertices[i].sub(loop_pts[i]).length() < 1e-5, "boundary {i} moved");
+            assert!(
+                m.vertices[i].sub(loop_pts[i]).length() < 1e-5,
+                "boundary {i} moved"
+            );
         }
         // A seed (no subdivisions) is a fan: 4 triangles, 1 interior apex.
         assert_eq!(m.triangles.len(), 4);
@@ -2752,10 +2886,17 @@ mod tests {
         assert_eq!(m2.boundary.len(), 16, "boundary ring should densify to 16");
         // Every boundary vertex stays ON the original loop edges (z=0 here).
         for &b in &m2.boundary {
-            assert!(m2.vertices[b as usize].z.abs() < 1e-5, "boundary left the loop plane");
+            assert!(
+                m2.vertices[b as usize].z.abs() < 1e-5,
+                "boundary left the loop plane"
+            );
         }
         // Many more interior vertices now.
-        assert!(m2.vertices.len() > 20, "expected a dense interior, got {}", m2.vertices.len());
+        assert!(
+            m2.vertices.len() > 20,
+            "expected a dense interior, got {}",
+            m2.vertices.len()
+        );
     }
 
     #[test]
@@ -2777,7 +2918,10 @@ mod tests {
         }
         let m = build_membrane(&loop_pts, 2).expect("dense wiggly membrane should build");
         check_membrane_valid(&m).expect("dense membrane must be a valid disk");
-        assert!(m.triangles.len() > 10, "membrane should have real triangles");
+        assert!(
+            m.triangles.len() > 10,
+            "membrane should have real triangles"
+        );
         for v in &m.vertices {
             assert!(v.finite(), "non-finite vertex in dense membrane");
         }
@@ -2823,9 +2967,15 @@ mod tests {
 
         // Boundary ring is the DENSIFIED loop (more points than the 4 corners),
         // and every boundary vertex lies on the z=0 plane of the square loop.
-        assert!(m.boundary.len() >= loop_pts.len(), "boundary should densify");
+        assert!(
+            m.boundary.len() >= loop_pts.len(),
+            "boundary should densify"
+        );
         for &b in &m.boundary {
-            assert!(m.vertices[b as usize].z.abs() < 1e-4, "boundary left the loop plane");
+            assert!(
+                m.vertices[b as usize].z.abs() < 1e-4,
+                "boundary left the loop plane"
+            );
         }
         // The 4 original corners are all present on the boundary.
         for &corner in &loop_pts {
@@ -2836,10 +2986,16 @@ mod tests {
             assert!(found, "corner {corner:?} missing from densified boundary");
         }
         // Real interior grid (not a single apex).
-        assert!(m.vertices.len() > m.boundary.len() + 8, "grid should add many interior pts");
+        assert!(
+            m.vertices.len() > m.boundary.len() + 8,
+            "grid should add many interior pts"
+        );
         // No slivers: worst angle should be comfortably positive (> ~10°).
         let w = worst_angle(&m);
-        assert!(w > 0.15, "grid worst angle {w} rad too small (slivers present)");
+        assert!(
+            w > 0.15,
+            "grid worst angle {w} rad too small (slivers present)"
+        );
     }
 
     #[test]
@@ -2864,7 +3020,11 @@ mod tests {
             worst_angle(&fan),
         );
         // And the grid's worst angle should be a usable value, not a sliver.
-        assert!(worst_angle(&grid) > 0.1, "grid worst {} too small", worst_angle(&grid));
+        assert!(
+            worst_angle(&grid) > 0.1,
+            "grid worst {} too small",
+            worst_angle(&grid)
+        );
     }
 
     #[test]
@@ -2938,7 +3098,10 @@ mod tests {
         // Every boundary-ring vertex still pinned (unchanged from unrelaxed).
         for &b in &relaxed.boundary {
             assert!(
-                relaxed.vertices[b as usize].sub(unrelaxed.vertices[b as usize]).length() < 1e-5,
+                relaxed.vertices[b as usize]
+                    .sub(unrelaxed.vertices[b as usize])
+                    .length()
+                    < 1e-5,
                 "boundary {b} moved during relax"
             );
         }
@@ -2957,9 +3120,12 @@ mod tests {
         const EPS: f32 = 1e-3;
         for (i, v) in m.vertices.iter().enumerate() {
             assert!(
-                v.x >= lo.x - EPS && v.x <= hi.x + EPS
-                    && v.y >= lo.y - EPS && v.y <= hi.y + EPS
-                    && v.z >= lo.z - EPS && v.z <= hi.z + EPS,
+                v.x >= lo.x - EPS
+                    && v.x <= hi.x + EPS
+                    && v.y >= lo.y - EPS
+                    && v.y <= hi.y + EPS
+                    && v.z >= lo.z - EPS
+                    && v.z <= hi.z + EPS,
                 "vertex {i} {v:?} escaped loop bbox [{lo:?},{hi:?}]"
             );
         }
@@ -3010,9 +3176,18 @@ mod tests {
         // Flat loop first: thicken → must be a closed watertight solid.
         let loop_pts = square_loop(10.0);
         let m = build_membrane(&loop_pts, 3).expect("membrane");
-        let slab = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, DEFAULT_BOUNDARY_CLEARANCE_MM, &uniform_boundary_normals(&m));
+        let slab = thicken_to_slab(
+            &m,
+            DEFAULT_CUTTER_THICKNESS_MM,
+            DEFAULT_BOUNDARY_CLEARANCE_MM,
+            &uniform_boundary_normals(&m),
+        );
 
-        assert_eq!(open_edge_count(&slab), 0, "thickened slab must be closed (no open edges)");
+        assert_eq!(
+            open_edge_count(&slab),
+            0,
+            "thickened slab must be closed (no open edges)"
+        );
         let solid = to_manifold(&slab).expect("manifold should accept the thickened slab");
         assert!(solid.volume() > 0.0, "slab should enclose positive volume");
     }
@@ -3031,7 +3206,11 @@ mod tests {
         for i in 0..n {
             let t = i as f32 / n as f32 * std::f32::consts::TAU;
             // Deep inward dent over part of the loop → genuine concavity.
-            let dent = if (t - 1.0).abs() < 0.9 { -18.0 * (1.0 - ((t - 1.0) / 0.9).abs()) } else { 0.0 };
+            let dent = if (t - 1.0).abs() < 0.9 {
+                -18.0 * (1.0 - ((t - 1.0) / 0.9).abs())
+            } else {
+                0.0
+            };
             let r = 30.0 + dent + 4.0 * (3.0 * t).sin();
             let x = r * t.cos();
             let y = r * t.sin();
@@ -3041,12 +3220,27 @@ mod tests {
         let m = build_membrane(&loop_pts, 2).expect("grid membrane");
         check_membrane_valid(&m).expect("membrane itself must be valid");
         // The membrane must not self-intersect (a fold would make the slab invalid).
-        let m_mesh = IndexedMesh { positions: m.vertices.clone(), triangles: m.triangles.clone() };
-        assert_eq!(count_self_intersections(&m_mesh), 0, "membrane self-intersects");
+        let m_mesh = IndexedMesh {
+            positions: m.vertices.clone(),
+            triangles: m.triangles.clone(),
+        };
+        assert_eq!(
+            count_self_intersections(&m_mesh),
+            0,
+            "membrane self-intersects"
+        );
 
-        let slab = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, DEFAULT_BOUNDARY_CLEARANCE_MM, &uniform_boundary_normals(&m));
+        let slab = thicken_to_slab(
+            &m,
+            DEFAULT_CUTTER_THICKNESS_MM,
+            DEFAULT_BOUNDARY_CLEARANCE_MM,
+            &uniform_boundary_normals(&m),
+        );
         assert_eq!(open_edge_count(&slab), 0, "grid slab not watertight");
-        assert!(to_manifold(&slab).is_ok(), "manifold rejected the grid slab");
+        assert!(
+            to_manifold(&slab).is_ok(),
+            "manifold rejected the grid slab"
+        );
     }
 
     #[test]
@@ -3055,11 +3249,19 @@ mod tests {
         // valid watertight cutter (this is what feeds the real contour split).
         let loop_pts = saddle_loop(10.0, 4.0);
         let m = build_membrane(&loop_pts, 3).expect("saddle membrane");
-        let slab = thicken_to_slab(&m, DEFAULT_CUTTER_THICKNESS_MM, DEFAULT_BOUNDARY_CLEARANCE_MM, &uniform_boundary_normals(&m));
+        let slab = thicken_to_slab(
+            &m,
+            DEFAULT_CUTTER_THICKNESS_MM,
+            DEFAULT_BOUNDARY_CLEARANCE_MM,
+            &uniform_boundary_normals(&m),
+        );
 
         assert_eq!(open_edge_count(&slab), 0, "saddle slab must be closed");
         let solid = to_manifold(&slab).expect("manifold should accept the saddle slab");
-        assert!(solid.volume() > 0.0, "saddle slab should enclose positive volume");
+        assert!(
+            solid.volume() > 0.0,
+            "saddle slab should enclose positive volume"
+        );
         assert!(solid.num_tri() > 0);
     }
 
@@ -3081,11 +3283,17 @@ mod tests {
         // so the delta between them is exactly the clearance lift.)
         let b0 = m.boundary[0] as usize;
         let dz = lifted.positions[b0].z - no_lift.positions[b0].z;
-        assert!((dz - 0.5).abs() < 1e-4, "boundary should lift 0.5 along +Z, got {dz}");
+        assert!(
+            (dz - 0.5).abs() < 1e-4,
+            "boundary should lift 0.5 along +Z, got {dz}"
+        );
 
         // The lifted slab is still a valid watertight cutter.
         assert_eq!(open_edge_count(&lifted), 0, "lifted slab must stay closed");
-        assert!(to_manifold(&lifted).is_ok(), "manifold must accept the lifted slab");
+        assert!(
+            to_manifold(&lifted).is_ok(),
+            "manifold must accept the lifted slab"
+        );
     }
 
     #[test]
@@ -3144,8 +3352,14 @@ mod tests {
         // 4 points on hard edges) → build membrane → thicken → split → 2 parts.
         let model = cube(10.0);
         let loop_pts = dense_equator_loop(10.0, 8);
-        let split = contour_split(&model, &loop_pts, DEFAULT_CUTTER_THICKNESS_MM, DEFAULT_MEMBRANE_SMOOTHING, 1.0)
-            .expect("contour split should sever the cube into 2 parts");
+        let split = contour_split(
+            &model,
+            &loop_pts,
+            DEFAULT_CUTTER_THICKNESS_MM,
+            DEFAULT_MEMBRANE_SMOOTHING,
+            1.0,
+        )
+        .expect("contour split should sever the cube into 2 parts");
         assert_eq!(split.component_count, 2);
         assert!(split.part_a.triangle_count() > 0, "part A empty");
         assert!(split.part_b.triangle_count() > 0, "part B empty");
@@ -3167,10 +3381,18 @@ mod tests {
             let steps = 8usize;
             let f = |i: usize| size * i as f32 / steps as f32;
             let mut pts = Vec::with_capacity(steps * 4);
-            for i in 0..steps { pts.push(Vec3::new(f(i), 0.0, z)); }
-            for i in 0..steps { pts.push(Vec3::new(size, f(i), z)); }
-            for i in 0..steps { pts.push(Vec3::new(size - f(i), size, z)); }
-            for i in 0..steps { pts.push(Vec3::new(0.0, size - f(i), z)); }
+            for i in 0..steps {
+                pts.push(Vec3::new(f(i), 0.0, z));
+            }
+            for i in 0..steps {
+                pts.push(Vec3::new(size, f(i), z));
+            }
+            for i in 0..steps {
+                pts.push(Vec3::new(size - f(i), size, z));
+            }
+            for i in 0..steps {
+                pts.push(Vec3::new(0.0, size - f(i), z));
+            }
             pts
         };
         let loops = vec![band(10.0), band(20.0)];
@@ -3188,7 +3410,10 @@ mod tests {
             split.component_count
         );
         assert!(split.part_a.triangle_count() > 0, "body (part A) empty");
-        assert!(split.part_b.triangle_count() > 0, "freed piece (part B) empty");
+        assert!(
+            split.part_b.triangle_count() > 0,
+            "freed piece (part B) empty"
+        );
         assert!(split.membrane_tris > 0);
     }
 
@@ -3212,7 +3437,12 @@ mod tests {
         let above2 = axis_aligned_slab(Vec3::new(8.0, 8.0, 5.05), Vec3::new(9.0, 9.0, 8.0));
         let below1 = axis_aligned_slab(Vec3::new(0.0, 0.0, 1.0), Vec3::new(2.0, 2.0, 4.95));
         let below2 = axis_aligned_slab(Vec3::new(8.0, 8.0, 1.0), Vec3::new(9.0, 9.0, 4.95));
-        let islands = vec![above1.clone(), below1.clone(), above2.clone(), below2.clone()];
+        let islands = vec![
+            above1.clone(),
+            below1.clone(),
+            above2.clone(),
+            below2.clone(),
+        ];
 
         let (part_a, part_b) =
             split_into_two_sides(&membrane, islands, DEFAULT_CUTTER_THICKNESS_MM)
@@ -3220,7 +3450,11 @@ mod tests {
         // Each side has two slabs → 24 tris; both parts non-empty and equal here.
         assert!(part_a.triangle_count() > 0 && part_b.triangle_count() > 0);
         let total = part_a.triangle_count() + part_b.triangle_count();
-        assert_eq!(total, 4 * 12, "all four island slabs should survive grouping");
+        assert_eq!(
+            total,
+            4 * 12,
+            "all four island slabs should survive grouping"
+        );
     }
 
     #[test]
@@ -3230,12 +3464,9 @@ mod tests {
         let membrane = build_membrane(&square_loop(10.0), 1).expect("membrane"); // z=0
         let above1 = axis_aligned_slab(Vec3::new(0.0, 0.0, 0.05), Vec3::new(2.0, 2.0, 3.0));
         let above2 = axis_aligned_slab(Vec3::new(8.0, 8.0, 0.05), Vec3::new(9.0, 9.0, 3.0));
-        let err = split_into_two_sides(
-            &membrane,
-            vec![above1, above2],
-            DEFAULT_CUTTER_THICKNESS_MM,
-        )
-        .expect_err("both islands on one side cannot be separated");
+        let err =
+            split_into_two_sides(&membrane, vec![above1, above2], DEFAULT_CUTTER_THICKNESS_MM)
+                .expect_err("both islands on one side cannot be separated");
         assert!(err.contains("same side"), "{err}");
     }
 
@@ -3248,7 +3479,10 @@ mod tests {
         let one_side = axis_aligned_slab(Vec3::new(0.0, 0.0, 0.05), Vec3::new(9.0, 9.0, 3.0));
         let other1 = axis_aligned_slab(Vec3::new(0.0, 0.0, -3.0), Vec3::new(2.0, 2.0, -0.05));
         let other2 = axis_aligned_slab(Vec3::new(8.0, 8.0, -3.0), Vec3::new(9.0, 9.0, -0.05));
-        let stray = axis_aligned_slab(Vec3::new(100.0, 100.0, 100.0), Vec3::new(101.0, 101.0, 101.0));
+        let stray = axis_aligned_slab(
+            Vec3::new(100.0, 100.0, 100.0),
+            Vec3::new(101.0, 101.0, 101.0),
+        );
 
         let (part_a, part_b) = split_into_two_sides(
             &membrane,
@@ -3280,12 +3514,22 @@ mod tests {
             .map(|p| {
                 let inward = Vec3::new(axis.x - p.x, axis.y - p.y, 0.0);
                 let l = inward.length();
-                if l > 1e-6 { p.add(inward.scale(0.3 / l)) } else { p }
+                if l > 1e-6 {
+                    p.add(inward.scale(0.3 / l))
+                } else {
+                    p
+                }
             })
             .collect();
 
-        let split = contour_split(&model, &loop_pts, DEFAULT_CUTTER_THICKNESS_MM, DEFAULT_MEMBRANE_SMOOTHING, 1.0)
-            .expect("a seam sunk below the skin must still sever the cube");
+        let split = contour_split(
+            &model,
+            &loop_pts,
+            DEFAULT_CUTTER_THICKNESS_MM,
+            DEFAULT_MEMBRANE_SMOOTHING,
+            1.0,
+        )
+        .expect("a seam sunk below the skin must still sever the cube");
         assert!(split.part_a.triangle_count() > 0, "part A empty");
         assert!(split.part_b.triangle_count() > 0, "part B empty");
     }
@@ -3301,8 +3545,17 @@ mod tests {
             Vec3::new(0.0, 1.0, 1.0),
             Vec3::new(0.0, 0.5, 1.0),
         ];
-        let result = contour_split(&model, &loop_pts, DEFAULT_CUTTER_THICKNESS_MM, DEFAULT_MEMBRANE_SMOOTHING, 1.0);
-        assert!(result.is_err(), "a loop that misses the body should error, not split");
+        let result = contour_split(
+            &model,
+            &loop_pts,
+            DEFAULT_CUTTER_THICKNESS_MM,
+            DEFAULT_MEMBRANE_SMOOTHING,
+            1.0,
+        );
+        assert!(
+            result.is_err(),
+            "a loop that misses the body should error, not split"
+        );
     }
 
     #[test]
@@ -3338,8 +3591,13 @@ mod tests {
                 DEFAULT_MEMBRANE_SMOOTHING,
                 density,
             )
-            .unwrap_or_else(|e| panic!("contour split should sever the cube at density {density}: {e}"));
-            assert_eq!(split.component_count, 2, "density {density} should give 2 parts");
+            .unwrap_or_else(|e| {
+                panic!("contour split should sever the cube at density {density}: {e}")
+            });
+            assert_eq!(
+                split.component_count, 2,
+                "density {density} should give 2 parts"
+            );
             assert!(split.part_a.triangle_count() > 0 && split.part_b.triangle_count() > 0);
         }
     }
@@ -3354,8 +3612,15 @@ mod tests {
         let m0 = build_membrane(&square_loop(s), 2).expect("membrane");
         // Record the boundary bbox before.
         let bbox = |m: &Membrane| {
-            let (mut lo, mut hi) = (Vec3::new(f32::MAX, f32::MAX, f32::MAX), Vec3::new(f32::MIN, f32::MIN, f32::MIN));
-            for &bi in &m.boundary { let p = m.vertices[bi as usize]; lo = lo.min(p); hi = hi.max(p); }
+            let (mut lo, mut hi) = (
+                Vec3::new(f32::MAX, f32::MAX, f32::MAX),
+                Vec3::new(f32::MIN, f32::MIN, f32::MIN),
+            );
+            for &bi in &m.boundary {
+                let p = m.vertices[bi as usize];
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
             (lo, hi)
         };
         let (lo0, hi0) = bbox(&m0);
@@ -3365,15 +3630,31 @@ mod tests {
         let (lo1, hi1) = bbox(&m);
 
         // Footprint grew outward on both axes.
-        assert!(lo1.x < lo0.x - 0.1 && lo1.y < lo0.y - 0.1, "min should move outward: {lo0:?} -> {lo1:?}");
-        assert!(hi1.x > hi0.x + 0.1 && hi1.y > hi0.y + 0.1, "max should move outward: {hi0:?} -> {hi1:?}");
+        assert!(
+            lo1.x < lo0.x - 0.1 && lo1.y < lo0.y - 0.1,
+            "min should move outward: {lo0:?} -> {lo1:?}"
+        );
+        assert!(
+            hi1.x > hi0.x + 0.1 && hi1.y > hi0.y + 0.1,
+            "max should move outward: {hi0:?} -> {hi1:?}"
+        );
         // Height preserved: boundary stays on z=0.
         for &bi in &m.boundary {
-            assert!(m.vertices[bi as usize].z.abs() < 1e-3, "boundary must stay at z=0 (wider, not taller)");
+            assert!(
+                m.vertices[bi as usize].z.abs() < 1e-3,
+                "boundary must stay at z=0 (wider, not taller)"
+            );
         }
         // Still a valid mesh — no self-intersections introduced.
-        let soup = IndexedMesh { positions: m.vertices.clone(), triangles: m.triangles.clone() };
-        assert_eq!(count_self_intersections(&soup), 0, "widened membrane must not self-intersect");
+        let soup = IndexedMesh {
+            positions: m.vertices.clone(),
+            triangles: m.triangles.clone(),
+        };
+        assert_eq!(
+            count_self_intersections(&soup),
+            0,
+            "widened membrane must not self-intersect"
+        );
     }
 
     #[test]
@@ -3382,7 +3663,10 @@ mod tests {
         let before: Vec<Vec3> = m.boundary.iter().map(|&b| m.vertices[b as usize]).collect();
         widen_membrane_boundary(&mut m, 0.0);
         let after: Vec<Vec3> = m.boundary.iter().map(|&b| m.vertices[b as usize]).collect();
-        assert_eq!(before, after, "zero widen must leave the boundary unchanged");
+        assert_eq!(
+            before, after,
+            "zero widen must leave the boundary unchanged"
+        );
     }
 
     // ── refine_model_near_slab (watertight seam-band subdivision) ───────────
@@ -3397,7 +3681,9 @@ mod tests {
         assert_eq!(open_edge_count(&cube), 0, "cube starts closed");
 
         let before = cube.triangle_count();
-        let refined = refine_model_near_slab(&cube, &slab, /*band*/ 2.0, /*target*/ 2.0, /*levels*/ 3);
+        let refined = refine_model_near_slab(
+            &cube, &slab, /*band*/ 2.0, /*target*/ 2.0, /*levels*/ 3,
+        );
         assert!(
             refined.triangle_count() > before,
             "band near the slab should be subdivided ({} → {})",
@@ -3418,7 +3704,11 @@ mod tests {
         // Slab far above the cube → nothing in band → unchanged.
         let slab = axis_aligned_slab(Vec3::new(-1.0, -1.0, 99.9), Vec3::new(11.0, 11.0, 100.1));
         let refined = refine_model_near_slab(&cube, &slab, 2.0, 2.0, 3);
-        assert_eq!(refined.triangle_count(), cube.triangle_count(), "far slab must not subdivide");
+        assert_eq!(
+            refined.triangle_count(),
+            cube.triangle_count(),
+            "far slab must not subdivide"
+        );
         assert_eq!(open_edge_count(&refined), 0);
     }
 
@@ -3436,8 +3726,13 @@ mod tests {
                 DEFAULT_MEMBRANE_SMOOTHING,
                 density,
             )
-            .unwrap_or_else(|e| panic!("refined contour split should sever the cube at density {density}: {e}"));
-            assert_eq!(split.component_count, 2, "density {density} should give 2 parts");
+            .unwrap_or_else(|e| {
+                panic!("refined contour split should sever the cube at density {density}: {e}")
+            });
+            assert_eq!(
+                split.component_count, 2,
+                "density {density} should give 2 parts"
+            );
             assert!(split.part_a.triangle_count() > 0 && split.part_b.triangle_count() > 0);
         }
     }

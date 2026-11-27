@@ -59,13 +59,40 @@ impl IslandTracker {
 
         if candidate_only {
             match prev_island_labels {
-                None => self.process_first_layer(layer_index, current_labels, current_components, width, height),
-                Some(prev) => self.process_subsequent_layer_candidates(layer_index, current_labels, current_components, prev, width, height),
+                None => self.process_first_layer(
+                    layer_index,
+                    current_labels,
+                    current_components,
+                    width,
+                    height,
+                ),
+                Some(prev) => self.process_subsequent_layer_candidates(
+                    layer_index,
+                    current_labels,
+                    current_components,
+                    prev,
+                    width,
+                    height,
+                ),
             }
         } else {
             match prev_island_labels {
-                None => self.process_first_layer(layer_index, current_labels, current_components, width, height),
-                Some(prev) => self.process_subsequent_layer(layer_index, current_labels, current_components, prev, solid_mask, width, height),
+                None => self.process_first_layer(
+                    layer_index,
+                    current_labels,
+                    current_components,
+                    width,
+                    height,
+                ),
+                Some(prev) => self.process_subsequent_layer(
+                    layer_index,
+                    current_labels,
+                    current_components,
+                    prev,
+                    solid_mask,
+                    width,
+                    height,
+                ),
             }
         }
     }
@@ -100,8 +127,7 @@ impl IslandTracker {
         height: i32,
     ) -> RleLabels {
         // Label connected solid components
-        let (solid_labels, solid_comps) =
-            rle_label_components(solid_mask, Connectivity::Four);
+        let (solid_labels, solid_comps) = rle_label_components(solid_mask, Connectivity::Four);
 
         let mut solid_comp_to_island: HashMap<i32, IslandId> = HashMap::new();
 
@@ -150,7 +176,13 @@ impl IslandTracker {
                     .iter()
                     .map(|&id| self.resolve_parent(id))
                     .collect();
-                self.merge_islands(layer_index, &resolved, prev_island_labels, area_mm2, Some(component))
+                self.merge_islands(
+                    layer_index,
+                    &resolved,
+                    prev_island_labels,
+                    area_mm2,
+                    Some(component),
+                )
             };
 
             solid_comp_to_island.insert(component.id, assigned_id);
@@ -221,7 +253,13 @@ impl IslandTracker {
                     .iter()
                     .map(|&id| self.resolve_parent(id))
                     .collect();
-                self.merge_islands(layer_index, &resolved, prev_island_labels, area_mm2, Some(component))
+                self.merge_islands(
+                    layer_index,
+                    &resolved,
+                    prev_island_labels,
+                    area_mm2,
+                    Some(component),
+                )
             };
 
             comp_to_island.insert(component.id, assigned_id);
@@ -341,9 +379,7 @@ impl IslandTracker {
                 .overlap_counts
                 .iter()
                 .max_by(|(id_a, count_a), (id_b, count_b)| {
-                    count_a
-                        .cmp(count_b)
-                        .then_with(|| id_b.0.cmp(&id_a.0))
+                    count_a.cmp(count_b).then_with(|| id_b.0.cmp(&id_a.0))
                 })
                 .map(|(&id, _)| id)
                 .unwrap_or(IslandId(0));
@@ -639,10 +675,10 @@ impl IslandTracker {
 #[cfg(test)]
 mod tests {
     use crate::model::*;
-    use crate::rle::*;
-    use crate::tracker::*;
     use crate::rle::rle_encode;
+    use crate::rle::*;
     use crate::scan::scan_layer;
+    use crate::tracker::*;
 
     fn make_tracker() -> IslandTracker {
         IslandTracker::new(0.05, 1, 1)
@@ -666,7 +702,14 @@ mod tests {
 
         // Layer 1 (same shape)
         let r1 = scan_layer(&mask0, Some(&mask0), 0.05, 0.1, Connectivity::Four);
-        let _il1 = tracker.process_layer(1, &r1.labels, &r1.components, Some(&il0), &r1.solid_mask, false);
+        let _il1 = tracker.process_layer(
+            1,
+            &r1.labels,
+            &r1.components,
+            Some(&il0),
+            &r1.solid_mask,
+            false,
+        );
 
         let islands = tracker.get_islands();
         // Everything supported after layer 0, so no new island candidates on layer 1.
@@ -703,15 +746,23 @@ mod tests {
         {
             let mut tracker = IslandTracker::new(0.05, 1, 0);
             // Layer 0: middle base [0,0,0,1,1,1,1,0,0,0]
-            let base = rle_encode(&vec![0,0,0,1,1,1,1,0,0,0], w, h);
+            let base = rle_encode(&vec![0, 0, 0, 1, 1, 1, 1, 0, 0, 0], w, h);
             // Layer 1: wider overhangs on both sides [0,1,1,1,1,1,1,1,1,0]
-            let wide = rle_encode(&vec![0,1,1,1,1,1,1,1,1,0], w, h);
+            let wide = rle_encode(&vec![0, 1, 1, 1, 1, 1, 1, 1, 1, 0], w, h);
 
             let r0 = scan_layer(&base, None, 0.05, 0.0, Connectivity::Four);
-            let il0 = tracker.process_layer(0, &r0.labels, &r0.components, None, &r0.solid_mask, false);
+            let il0 =
+                tracker.process_layer(0, &r0.labels, &r0.components, None, &r0.solid_mask, false);
 
             let r1 = scan_layer(&wide, Some(&base), 0.05, 0.0, Connectivity::Four);
-            let _il1 = tracker.process_layer(1, &r1.labels, &r1.components, Some(&il0), &r1.solid_mask, false);
+            let _il1 = tracker.process_layer(
+                1,
+                &r1.labels,
+                &r1.components,
+                Some(&il0),
+                &r1.solid_mask,
+                false,
+            );
 
             let islands = tracker.get_islands();
             // The overhangs merge with the solid base component, so only 1 island is created
@@ -722,15 +773,23 @@ mod tests {
         {
             let mut tracker = IslandTracker::new(0.05, 1, 0);
             // Layer 0: middle base [0,0,0,1,1,1,1,0,0,0]
-            let base = rle_encode(&vec![0,0,0,1,1,1,1,0,0,0], w, h);
+            let base = rle_encode(&vec![0, 0, 0, 1, 1, 1, 1, 0, 0, 0], w, h);
             // Layer 1: wider overhangs on both sides [0,1,1,1,1,1,1,1,1,0]
-            let wide = rle_encode(&vec![0,1,1,1,1,1,1,1,1,0], w, h);
+            let wide = rle_encode(&vec![0, 1, 1, 1, 1, 1, 1, 1, 1, 0], w, h);
 
             let r0 = scan_layer(&base, None, 0.05, 0.0, Connectivity::Four);
-            let il0 = tracker.process_layer(0, &r0.labels, &r0.components, None, &r0.solid_mask, true);
+            let il0 =
+                tracker.process_layer(0, &r0.labels, &r0.components, None, &r0.solid_mask, true);
 
             let r1 = scan_layer(&wide, Some(&base), 0.05, 0.0, Connectivity::Four);
-            let _il1 = tracker.process_layer(1, &r1.labels, &r1.components, Some(&il0), &r1.solid_mask, true);
+            let _il1 = tracker.process_layer(
+                1,
+                &r1.labels,
+                &r1.components,
+                Some(&il0),
+                &r1.solid_mask,
+                true,
+            );
 
             let islands = tracker.get_islands();
             // The base is 1 island. The two side overhangs do not overlap with candidates below, starting 2 new islands.
@@ -739,4 +798,3 @@ mod tests {
         }
     }
 }
-

@@ -336,14 +336,10 @@ fn load_and_transform_mesh(
     }
     // Finally apply the scene matrix (position/rotation/scale).
     for pos in &mut mesh.positions {
-        let x =
-            matrix[0] * pos.x + matrix[4] * pos.y + matrix[8] * pos.z + matrix[12];
-        let y =
-            matrix[1] * pos.x + matrix[5] * pos.y + matrix[9] * pos.z + matrix[13];
-        let z =
-            matrix[2] * pos.x + matrix[6] * pos.y + matrix[10] * pos.z + matrix[14];
-        let w =
-            matrix[3] * pos.x + matrix[7] * pos.y + matrix[11] * pos.z + matrix[15];
+        let x = matrix[0] * pos.x + matrix[4] * pos.y + matrix[8] * pos.z + matrix[12];
+        let y = matrix[1] * pos.x + matrix[5] * pos.y + matrix[9] * pos.z + matrix[13];
+        let z = matrix[2] * pos.x + matrix[6] * pos.y + matrix[10] * pos.z + matrix[14];
+        let w = matrix[3] * pos.x + matrix[7] * pos.y + matrix[11] * pos.z + matrix[15];
 
         if w.abs() > 1e-6 {
             pos.x = x / w;
@@ -463,8 +459,14 @@ pub async fn scan_voxel_islands_from_path(
             candidate_only: true,
         };
 
-        let scan_result =
-            run_island_scan_streaming(&job, &triangles, bbox.min.z as f64, bbox.max.z as f64, false, None);
+        let scan_result = run_island_scan_streaming(
+            &job,
+            &triangles,
+            bbox.min.z as f64,
+            bbox.max.z as f64,
+            false,
+            None,
+        );
 
         // 5a. Build Z-bucket index for projection raycasting
         let z_min = bbox.min.z;
@@ -642,7 +644,8 @@ pub async fn scan_voxel_islands_from_path(
                             .per_layer_area_mm2
                             .get(&island.first_layer)
                             .copied()
-                            .unwrap_or(island.total_area_mm2) as f32,
+                            .unwrap_or(island.total_area_mm2)
+                            as f32,
                         layer_span: [island.first_layer, island.last_layer],
                         contact_voxels: Vec::new(),
                     });
@@ -701,9 +704,13 @@ fn scan_islands_from_mesh(
     let vert_count = mesh.vertex_count();
     log::info!(
         "[islands-combined] Mesh loaded: {} triangles, {} vertices",
-        tri_count, vert_count,
+        tri_count,
+        vert_count,
     );
-    let _ = app.emit("island-scan-progress", serde_json::json!({ "done": 5, "total": 100 }));
+    let _ = app.emit(
+        "island-scan-progress",
+        serde_json::json!({ "done": 5, "total": 100 }),
+    );
 
     let bbox = mesh.bbox();
     let soup = mesh.to_triangle_soup();
@@ -711,12 +718,20 @@ fn scan_islands_from_mesh(
 
     let ox = bbox.min.x as f64;
     let oz = -bbox.max.y as f64;
-    let gw = ((bbox.max.x as f64 - bbox.min.x as f64) / px_mm).ceil().max(1.0) as i32;
-    let gh = ((bbox.max.y as f64 - bbox.min.y as f64) / px_mm).ceil().max(1.0) as i32;
+    let gw = ((bbox.max.x as f64 - bbox.min.x as f64) / px_mm)
+        .ceil()
+        .max(1.0) as i32;
+    let gh = ((bbox.max.y as f64 - bbox.min.y as f64) / px_mm)
+        .ceil()
+        .max(1.0) as i32;
     let model_height = bbox.max.z as f64 - bbox.min.z as f64;
     let num_layers = (model_height / layer_height_mm).ceil().max(0.0) as usize;
 
-    let connectivity_enum = if connectivity == 8 { Connectivity::Eight } else { Connectivity::Four };
+    let connectivity_enum = if connectivity == 8 {
+        Connectivity::Eight
+    } else {
+        Connectivity::Four
+    };
 
     let job = IslandScanJob {
         px_mm,
@@ -724,7 +739,13 @@ fn scan_islands_from_mesh(
         connectivity: connectivity_enum,
         min_island_area_mm2: 0.0001,
         layer_height_mm,
-        grid: GridRef { origin_x: ox, origin_z: oz, width: gw, height: gh, px_mm },
+        grid: GridRef {
+            origin_x: ox,
+            origin_z: oz,
+            width: gw,
+            height: gh,
+            px_mm,
+        },
         num_layers: num_layers as u32,
         min_overlap_px: 1,
         overlap_neighborhood_px: 1,
@@ -883,12 +904,22 @@ fn scan_islands_from_mesh(
 
         // Thread B: mesh minima scan (uses rayon internally)
         let minima_handle = s.spawn(|| {
-            log::info!("[islands-combined] Running mesh minima scan (k={})…", k.unwrap_or(2));
+            log::info!(
+                "[islands-combined] Running mesh minima scan (k={})…",
+                k.unwrap_or(2)
+            );
             let minima_start = std::time::Instant::now();
             let minima = scan_minima_internal(&mesh, k);
             let minima_sec = minima_start.elapsed().as_secs_f64();
-            log::info!("[islands-combined] Minima scan done in {:.1}s — {} minima", minima_sec, minima.len());
-            let _ = app_b.emit("island-scan-progress", serde_json::json!({ "done": 80, "total": 100 }));
+            log::info!(
+                "[islands-combined] Minima scan done in {:.1}s — {} minima",
+                minima_sec,
+                minima.len()
+            );
+            let _ = app_b.emit(
+                "island-scan-progress",
+                serde_json::json!({ "done": 80, "total": 100 }),
+            );
             minima
         });
 
@@ -896,7 +927,10 @@ fn scan_islands_from_mesh(
         // topple report beside it — both are independent passes over the same
         // immutable mesh, and stability used to run after classify finished.
         let overhang_handle = s.spawn(|| {
-            log::info!("[islands-combined] Running overhang classification (angle={}°)…", angle_deg);
+            log::info!(
+                "[islands-combined] Running overhang classification (angle={}°)…",
+                angle_deg
+            );
             let oh_start = std::time::Instant::now();
             let regions = overhang::classify_overhangs(overhang_mesh, angle_deg, oh_px_mm);
             log::info!(
@@ -904,7 +938,10 @@ fn scan_islands_from_mesh(
                 oh_start.elapsed().as_secs_f64(),
                 regions.len(),
             );
-            let _ = app_c.emit("island-scan-progress", serde_json::json!({ "done": 90, "total": 100 }));
+            let _ = app_c.emit(
+                "island-scan-progress",
+                serde_json::json!({ "done": 90, "total": 100 }),
+            );
             regions
         });
         let stability_handle = s.spawn(|| {
@@ -926,7 +963,10 @@ fn scan_islands_from_mesh(
         overhang_islands.len(),
     );
 
-    let _ = app.emit("island-scan-progress", serde_json::json!({ "done": 100, "total": 100 }));
+    let _ = app.emit(
+        "island-scan-progress",
+        serde_json::json!({ "done": 100, "total": 100 }),
+    );
 
     Ok(CombinedIslandScanResult {
         voxel_islands,
@@ -1026,7 +1066,6 @@ pub async fn scan_islands_staged(
     .await
     .map_err(|e| format!("Staged island scan panicked: {e}"))?
 }
-
 
 /// Surface-snap a raw contact coordinate to the nearest mesh surface triangle
 /// via bidirectional raycasting within a Z-bucket index. Thread-safe: reads

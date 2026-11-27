@@ -289,8 +289,16 @@ fn plane_from_loop(points: &[OrganicCutLoopPoint]) -> Option<CutPlane> {
     }
 
     if points.len() == 2 {
-        let a = Vec3::new(points[0].position[0], points[0].position[1], points[0].position[2]);
-        let b = Vec3::new(points[1].position[0], points[1].position[1], points[1].position[2]);
+        let a = Vec3::new(
+            points[0].position[0],
+            points[0].position[1],
+            points[0].position[2],
+        );
+        let b = Vec3::new(
+            points[1].position[0],
+            points[1].position[1],
+            points[1].position[2],
+        );
         let dir = b.sub(a);
         let len = dir.length();
         if len < 1e-6 {
@@ -378,11 +386,23 @@ fn best_fit_plane_normal(points: &[OrganicCutLoopPoint], centroid: Vec3) -> Opti
     }
 
     let normal = if det_max == det_x {
-        Vec3::new(det_x as f32, (xz * yz - xy * zz) as f32, (xy * yz - xz * yy) as f32)
+        Vec3::new(
+            det_x as f32,
+            (xz * yz - xy * zz) as f32,
+            (xy * yz - xz * yy) as f32,
+        )
     } else if det_max == det_y {
-        Vec3::new((xz * yz - xy * zz) as f32, det_y as f32, (xy * xz - yz * xx) as f32)
+        Vec3::new(
+            (xz * yz - xy * zz) as f32,
+            det_y as f32,
+            (xy * xz - yz * xx) as f32,
+        )
     } else {
-        Vec3::new((xy * yz - xz * yy) as f32, (xy * xz - yz * xx) as f32, det_z as f32)
+        Vec3::new(
+            (xy * yz - xz * yy) as f32,
+            (xy * xz - yz * xx) as f32,
+            det_z as f32,
+        )
     };
 
     let len = normal.length();
@@ -392,7 +412,11 @@ fn best_fit_plane_normal(points: &[OrganicCutLoopPoint], centroid: Vec3) -> Opti
     Some(normal.scale(1.0 / len))
 }
 
-fn noop_outcome(mesh: IndexedMesh, detail: String, leak_points: Vec<[f32; 3]>) -> OrganicCutOutcome {
+fn noop_outcome(
+    mesh: IndexedMesh,
+    detail: String,
+    leak_points: Vec<[f32; 3]>,
+) -> OrganicCutOutcome {
     let source_triangle_count = mesh.triangle_count();
     let report = OrganicCutReport {
         source_triangle_count,
@@ -537,7 +561,11 @@ fn nearest_seam(cap: &crate::membrane::Membrane, loops: &[Vec<Vec3>]) -> usize {
     loops
         .iter()
         .enumerate()
-        .min_by(|(_, a), (_, b)| cost(a).partial_cmp(&cost(b)).unwrap_or(std::cmp::Ordering::Equal))
+        .min_by(|(_, a), (_, b)| {
+            cost(a)
+                .partial_cmp(&cost(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
         .map_or(0, |(i, _)| i)
 }
 
@@ -622,7 +650,12 @@ fn contour_cut_by_surface(
     // capping sixty pieces is minutes of work to produce sixty models, most of them
     // a single triangle, in place of the one the user asked for.
     let arrived = shell_count(mesh);
-    let pieces_now = split.piece_of_face.iter().copied().collect::<std::collections::BTreeSet<_>>().len();
+    let pieces_now = split
+        .piece_of_face
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
     if pieces_now > arrived + seams.len() {
         return Err(format!(
             "the cut shattered the surface: {} seams over {arrived} shell{} can leave at \
@@ -681,13 +714,20 @@ fn contour_cut_by_surface(
     }
 
     let mut solids: Vec<IndexedMesh> = closed.solids;
-    let capped: std::collections::BTreeSet<u32> =
-        closed.cap_between.iter().flat_map(|&(a, b)| [a, b]).collect();
+    let capped: std::collections::BTreeSet<u32> = closed
+        .cap_between
+        .iter()
+        .flat_map(|&(a, b)| [a, b])
+        .collect();
 
     // Which cap belongs to which seam is measured, not assumed: rims come out of the
     // cut in whatever order the surface was walked, and a cut with a clearance has
     // TWO of them per seam.
-    let cap_seam: Vec<usize> = closed.caps.iter().map(|cap| nearest_seam(cap, loops)).collect();
+    let cap_seam: Vec<usize> = closed
+        .caps
+        .iter()
+        .map(|cap| nearest_seam(cap, loops))
+        .collect();
 
     // The strip of skin between a seam's two offsets is the material the gap is made
     // of, and it goes in the bin. It is read off the wall — strip is what has BOTH of
@@ -708,8 +748,7 @@ fn contour_cut_by_surface(
         // themselves, and the rest of the model stayed in one piece behind the
         // handle. Handing back a sliver instead of the model is the one outcome that
         // must never happen quietly.
-        let pieces: std::collections::BTreeSet<u32> =
-            split.piece_of_face.iter().copied().collect();
+        let pieces: std::collections::BTreeSet<u32> = split.piece_of_face.iter().copied().collect();
         if pieces.iter().filter(|p| !binned.contains(p)).count() < 2 {
             return Err(
                 "the seam goes round a handle — a part joined to the body somewhere \
@@ -748,7 +787,9 @@ fn contour_cut_by_surface(
         // The seam's own caps, and the pieces they face that are not the binned
         // strip. Without a clearance that is one cap and its two pieces; with one it
         // is two caps, each facing the strip on its other side.
-        let mine: Vec<usize> = (0..closed.caps.len()).filter(|&c| cap_seam[c] == s).collect();
+        let mine: Vec<usize> = (0..closed.caps.len())
+            .filter(|&c| cap_seam[c] == s)
+            .collect();
         let mut sides: Vec<u32> = mine
             .iter()
             .flat_map(|&c| [closed.cap_between[c].0, closed.cap_between[c].1])
@@ -759,16 +800,21 @@ fn contour_cut_by_surface(
         // Frame the tenon on a cap that closes a KEPT piece — with a clearance, a
         // seam also has caps on the binned strip, and a frame on one of those would
         // stand the tenon on skin that is about to be thrown away.
-        let cap_index =
-            mine.iter().copied().find(|&c| !binned.contains(&closed.cap_between[c].0));
+        let cap_index = mine
+            .iter()
+            .copied()
+            .find(|&c| !binned.contains(&closed.cap_between[c].0));
         let (Some(cap_index), [p, q]) = (cap_index, sides.as_slice()) else {
             skipped.push(format!("seam {}: no cut face to stand a tenon on", s + 1));
             continue;
         };
         let cap = &closed.caps[cap_index];
         let plus_first = crate::membrane::side_of_mesh(cap, &solids[*p as usize]) >= 0.0;
-        let (ia, ib) =
-            if plus_first { (*p as usize, *q as usize) } else { (*q as usize, *p as usize) };
+        let (ia, ib) = if plus_first {
+            (*p as usize, *q as usize)
+        } else {
+            (*q as usize, *p as usize)
+        };
         let tenoned = crate::tenon::apply_tenon(
             mesh,
             std::mem::take(&mut solids[ia]),
@@ -799,7 +845,10 @@ fn contour_cut_by_surface(
             tenon_kind = crate::tenon::TenonKind::None;
             format!("no tenons placed ({})", skipped.join("; "))
         } else {
-            format!("{placed}/{requested} tenons placed ({})", skipped.join("; "))
+            format!(
+                "{placed}/{requested} tenons placed ({})",
+                skipped.join("; ")
+            )
         };
     }
 
@@ -826,7 +875,12 @@ fn contour_cut_by_surface(
     for orphan in orphans {
         let base = body.positions.len() as u32;
         body.positions.extend(orphan.positions);
-        body.triangles.extend(orphan.triangles.iter().map(|t| [t[0] + base, t[1] + base, t[2] + base]));
+        body.triangles.extend(
+            orphan
+                .triangles
+                .iter()
+                .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
+        );
     }
 
     let part_b_tris: usize = parts.iter().skip(1).map(|p| p.triangle_count()).sum();
@@ -931,15 +985,16 @@ fn organic_cut_contour(
     // The wafer stays behind it because the surface cut leans on a flood fill, and a
     // flood fill leaks through a hole in the skin, which the boolean forgives.
     let mut leaks: Vec<[f32; 3]> = Vec::new();
-    let surface_gave_up = match contour_cut_by_surface(mesh, options, &loops, &loop_tenons, &mut leaks) {
-        Ok(outcome) => return Ok(outcome),
-        Err(why) => {
-            if std::env::var_os("DF_CUT_DEBUG").is_some() {
-                eprintln!("[cut] surface cut gave up, falling back to the wafer: {why}");
+    let surface_gave_up =
+        match contour_cut_by_surface(mesh, options, &loops, &loop_tenons, &mut leaks) {
+            Ok(outcome) => return Ok(outcome),
+            Err(why) => {
+                if std::env::var_os("DF_CUT_DEBUG").is_some() {
+                    eprintln!("[cut] surface cut gave up, falling back to the wafer: {why}");
+                }
+                why
             }
-            why
-        }
-    };
+        };
 
     // The wafer's slab thickness is its own business now, not a setting. It only ever
     // had two jobs — stay under print resolution, and be thick enough for the boolean
@@ -960,7 +1015,10 @@ fn organic_cut_contour(
             options.cut.membrane_smoothing,
             options.cut.density,
         )
-        .map_err(|why| CutRefusal { why: both_gave_up(&surface_gave_up, &why), at: leaks.clone() })?;
+        .map_err(|why| CutRefusal {
+            why: both_gave_up(&surface_gave_up, &why),
+            at: leaks.clone(),
+        })?;
         let component_count = split.component_count;
         let membrane_tris = split.membrane_tris;
         let mut part_a = split.part_a;
@@ -984,7 +1042,11 @@ fn organic_cut_contour(
                 }
                 // Whichever part is on this membrane's +normal side is `part_a`.
                 let a_on_plus = crate::membrane::side_of_mesh(membrane, &part_a) >= 0.0;
-                let (pa, pb) = if a_on_plus { (part_a, part_b) } else { (part_b, part_a) };
+                let (pa, pb) = if a_on_plus {
+                    (part_a, part_b)
+                } else {
+                    (part_b, part_a)
+                };
                 let tenoned = crate::tenon::apply_tenon(
                     mesh,
                     pa,
@@ -1020,7 +1082,10 @@ fn organic_cut_contour(
                 tenon_kind = crate::tenon::TenonKind::None;
                 format!("no tenons placed ({})", skipped.join("; "))
             } else {
-                format!("{placed}/{requested} tenons placed ({})", skipped.join("; "))
+                format!(
+                    "{placed}/{requested} tenons placed ({})",
+                    skipped.join("; ")
+                )
             };
         }
 
@@ -1070,7 +1135,10 @@ fn organic_cut_contour(
         options.cut.membrane_smoothing,
         options.cut.density,
     )
-    .map_err(|why| CutRefusal { why: both_gave_up(&surface_gave_up, &why), at: leaks.clone() })?;
+    .map_err(|why| CutRefusal {
+        why: both_gave_up(&surface_gave_up, &why),
+        at: leaks.clone(),
+    })?;
 
     let membrane_tris = split.membrane_tris;
     let mut part_a = split.part_a;
@@ -1156,11 +1224,16 @@ fn organic_cut_plane(
         })?,
     };
 
-    let src_positions: Vec<f32> = mesh.positions.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
+    let src_positions: Vec<f32> = mesh
+        .positions
+        .iter()
+        .flat_map(|v| [v.x, v.y, v.z])
+        .collect();
     let src_indices: Vec<u32> = mesh.triangles.iter().flat_map(|t| *t).collect();
 
-    let model = Manifold::from_mesh_f32(&src_positions, 3, &src_indices)
-        .map_err(|err| format!("manifold rejected source mesh: {err:?} (tris={source_triangle_count})"))?;
+    let model = Manifold::from_mesh_f32(&src_positions, 3, &src_indices).map_err(|err| {
+        format!("manifold rejected source mesh: {err:?} (tris={source_triangle_count})")
+    })?;
     if model.is_empty() || model.num_tri() == 0 {
         return Err("source mesh produced an empty manifold (non-watertight?)".to_string());
     }
@@ -1230,7 +1303,11 @@ fn organic_cut_plane(
             tenon_detail = if placed == 0 {
                 format!("no tenons placed ({})", skipped.join("; "))
             } else {
-                format!("{placed}/{} tenons placed ({})", frames.len(), skipped.join("; "))
+                format!(
+                    "{placed}/{} tenons placed ({})",
+                    frames.len(),
+                    skipped.join("; ")
+                )
             };
         }
     }
@@ -1249,7 +1326,10 @@ fn organic_cut_plane(
     let part_a_triangle_count = parts.first().map(|p| p.triangle_count()).unwrap_or(0);
     let part_b_triangle_count: usize = parts.iter().skip(1).map(|p| p.triangle_count()).sum();
     let detail = if parts.len() > 2 {
-        format!("plane cut: {} solids (the plane crosses the body in more than one place)", parts.len())
+        format!(
+            "plane cut: {} solids (the plane crosses the body in more than one place)",
+            parts.len()
+        )
     } else {
         String::new()
     };
@@ -1380,7 +1460,13 @@ fn tenon_frames_per_section(
             .iter()
             .any(|(_, c)| c.sub(centroid).length() <= area.sqrt().max(0.1));
         if mated {
-            frames.push(crate::tenon::TenonFrame { anchor: centroid, axis, u, v, cut_area: area });
+            frames.push(crate::tenon::TenonFrame {
+                anchor: centroid,
+                axis,
+                u,
+                v,
+                cut_area: area,
+            });
         }
     }
     match at {
@@ -1412,7 +1498,10 @@ fn manifold_to_indexed(model: &manifold_csg::Manifold) -> Option<IndexedMesh> {
     if np < 3 || ti.is_empty() || vp.is_empty() {
         return None;
     }
-    let positions: Vec<Vec3> = vp.chunks_exact(np).map(|c| Vec3::new(c[0], c[1], c[2])).collect();
+    let positions: Vec<Vec3> = vp
+        .chunks_exact(np)
+        .map(|c| Vec3::new(c[0], c[1], c[2]))
+        .collect();
     let triangles: Vec<[u32; 3]> = ti.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
     Some(IndexedMesh {
         positions,
@@ -1488,9 +1577,18 @@ mod tests {
         // Three non-collinear points roughly in a tilted plane: the PCA fit
         // should produce a unit normal (interim "few rough clicks" path).
         let pts = vec![
-            OrganicCutLoopPoint { position: [0.0, 0.0, 0.0], normal: [0.0; 3] },
-            OrganicCutLoopPoint { position: [10.0, 0.0, 1.0], normal: [0.0; 3] },
-            OrganicCutLoopPoint { position: [0.0, 10.0, 1.0], normal: [0.0; 3] },
+            OrganicCutLoopPoint {
+                position: [0.0, 0.0, 0.0],
+                normal: [0.0; 3],
+            },
+            OrganicCutLoopPoint {
+                position: [10.0, 0.0, 1.0],
+                normal: [0.0; 3],
+            },
+            OrganicCutLoopPoint {
+                position: [0.0, 10.0, 1.0],
+                normal: [0.0; 3],
+            },
         ];
         let plane = plane_from_loop(&pts).expect("plane from 3 scattered points");
         let nlen = (plane.normal.x * plane.normal.x
@@ -1504,9 +1602,18 @@ mod tests {
     fn collinear_points_have_no_plane() {
         // Points on a line have no well-defined plane → None → no-op fallback.
         let pts = vec![
-            OrganicCutLoopPoint { position: [0.0, 0.0, 0.0], normal: [0.0; 3] },
-            OrganicCutLoopPoint { position: [5.0, 0.0, 0.0], normal: [0.0; 3] },
-            OrganicCutLoopPoint { position: [10.0, 0.0, 0.0], normal: [0.0; 3] },
+            OrganicCutLoopPoint {
+                position: [0.0, 0.0, 0.0],
+                normal: [0.0; 3],
+            },
+            OrganicCutLoopPoint {
+                position: [5.0, 0.0, 0.0],
+                normal: [0.0; 3],
+            },
+            OrganicCutLoopPoint {
+                position: [10.0, 0.0, 0.0],
+                normal: [0.0; 3],
+            },
         ];
         assert!(plane_from_loop(&pts).is_none());
     }
@@ -1517,13 +1624,22 @@ mod tests {
         // (plane contains the X line and the Z up-axis), so its normal is
         // perpendicular to both: X × Z = (0,-1,0). The plane is the y=0 sheet.
         let pts = vec![
-            OrganicCutLoopPoint { position: [-5.0, 0.0, 3.0], normal: [0.0; 3] },
-            OrganicCutLoopPoint { position: [5.0, 0.0, 3.0], normal: [0.0; 3] },
+            OrganicCutLoopPoint {
+                position: [-5.0, 0.0, 3.0],
+                normal: [0.0; 3],
+            },
+            OrganicCutLoopPoint {
+                position: [5.0, 0.0, 3.0],
+                normal: [0.0; 3],
+            },
         ];
         let plane = plane_from_loop(&pts).expect("plane from 2 points");
         // Normal is ±Y (vertical sheet running along the X line).
         assert!(plane.normal.x.abs() < 1e-5, "normal.x should be ~0");
-        assert!((plane.normal.y.abs() - 1.0).abs() < 1e-5, "normal.y should be ~±1");
+        assert!(
+            (plane.normal.y.abs() - 1.0).abs() < 1e-5,
+            "normal.y should be ~±1"
+        );
         assert!(plane.normal.z.abs() < 1e-5, "normal.z should be ~0");
         // Plane passes through the midpoint, which is at y=0.
         assert!(plane.offset.abs() < 1e-4, "offset should be ~0 (y=0 plane)");
@@ -1531,7 +1647,10 @@ mod tests {
 
     #[test]
     fn one_point_has_no_plane() {
-        let pts = vec![OrganicCutLoopPoint { position: [0.0; 3], normal: [0.0, 0.0, 1.0] }];
+        let pts = vec![OrganicCutLoopPoint {
+            position: [0.0; 3],
+            normal: [0.0, 0.0, 1.0],
+        }];
         assert!(plane_from_loop(&pts).is_none());
     }
 
@@ -1565,14 +1684,23 @@ mod tests {
                 loop_points: vec![],
                 thickness_mm: 0.0,
                 smoothing: 0.0,
-                plane: Some(CutPlaneSpec { normal: [0.0, 0.0, 1.0], offset: 5.0 }),
+                plane: Some(CutPlaneSpec {
+                    normal: [0.0, 0.0, 1.0],
+                    offset: 5.0,
+                }),
                 ..Default::default()
             },
         };
         let outcome = organic_cut(mesh, &options);
         assert_eq!(outcome.report.engine, "plane");
-        assert!(outcome.parts[0].triangle_count() > 0, "part A empty (explicit)");
-        assert!(outcome.parts[1].triangle_count() > 0, "part B empty (explicit)");
+        assert!(
+            outcome.parts[0].triangle_count() > 0,
+            "part A empty (explicit)"
+        );
+        assert!(
+            outcome.parts[1].triangle_count() > 0,
+            "part B empty (explicit)"
+        );
     }
 
     #[cfg(feature = "manifold")]
@@ -1586,10 +1714,30 @@ mod tests {
         let z = 5.0_f32;
         let f = |i: usize| 10.0_f32 * i as f32 / steps as f32;
         let mut loop_points = Vec::new();
-        for i in 0..steps { loop_points.push(OrganicCutLoopPoint { position: [f(i), 0.0, z], normal: [0.0; 3] }); }
-        for i in 0..steps { loop_points.push(OrganicCutLoopPoint { position: [10.0, f(i), z], normal: [0.0; 3] }); }
-        for i in 0..steps { loop_points.push(OrganicCutLoopPoint { position: [10.0 - f(i), 10.0, z], normal: [0.0; 3] }); }
-        for i in 0..steps { loop_points.push(OrganicCutLoopPoint { position: [0.0, 10.0 - f(i), z], normal: [0.0; 3] }); }
+        for i in 0..steps {
+            loop_points.push(OrganicCutLoopPoint {
+                position: [f(i), 0.0, z],
+                normal: [0.0; 3],
+            });
+        }
+        for i in 0..steps {
+            loop_points.push(OrganicCutLoopPoint {
+                position: [10.0, f(i), z],
+                normal: [0.0; 3],
+            });
+        }
+        for i in 0..steps {
+            loop_points.push(OrganicCutLoopPoint {
+                position: [10.0 - f(i), 10.0, z],
+                normal: [0.0; 3],
+            });
+        }
+        for i in 0..steps {
+            loop_points.push(OrganicCutLoopPoint {
+                position: [0.0, 10.0 - f(i), z],
+                normal: [0.0; 3],
+            });
+        }
         let options = OrganicCutOptions {
             cut: OrganicCutSpec {
                 loop_points,
@@ -1598,7 +1746,10 @@ mod tests {
             },
         };
         let outcome = organic_cut(mesh, &options);
-        assert_eq!(outcome.report.engine, "surface", "should use the surface engine");
+        assert_eq!(
+            outcome.report.engine, "surface",
+            "should use the surface engine"
+        );
         assert!(outcome.parts[0].triangle_count() > 0, "part A empty");
         assert!(outcome.parts[1].triangle_count() > 0, "part B empty");
     }
@@ -1624,8 +1775,15 @@ mod tests {
             section.area,
             size * size,
         );
-        for (got, want) in [(section.centroid.x, 15.0), (section.centroid.y, 15.0), (section.centroid.z, 12.0)] {
-            assert!((got - want).abs() < 1e-3, "centroid on the plane's middle: {got} vs {want}");
+        for (got, want) in [
+            (section.centroid.x, 15.0),
+            (section.centroid.y, 15.0),
+            (section.centroid.z, 12.0),
+        ] {
+            assert!(
+                (got - want).abs() < 1e-3,
+                "centroid on the plane's middle: {got} vs {want}"
+            );
         }
     }
 
@@ -1634,9 +1792,21 @@ mod tests {
     #[cfg(feature = "manifold")]
     fn u_shape() -> IndexedMesh {
         use crate::membrane::{axis_aligned_slab, to_manifold};
-        let base = to_manifold(&axis_aligned_slab(Vec3::new(0.0, 0.0, 0.0), Vec3::new(30.0, 10.0, 5.0))).expect("base");
-        let left = to_manifold(&axis_aligned_slab(Vec3::new(0.0, 0.0, 5.0), Vec3::new(8.0, 10.0, 25.0))).expect("left");
-        let right = to_manifold(&axis_aligned_slab(Vec3::new(22.0, 0.0, 5.0), Vec3::new(30.0, 10.0, 25.0))).expect("right");
+        let base = to_manifold(&axis_aligned_slab(
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(30.0, 10.0, 5.0),
+        ))
+        .expect("base");
+        let left = to_manifold(&axis_aligned_slab(
+            Vec3::new(0.0, 0.0, 5.0),
+            Vec3::new(8.0, 10.0, 25.0),
+        ))
+        .expect("left");
+        let right = to_manifold(&axis_aligned_slab(
+            Vec3::new(22.0, 0.0, 5.0),
+            Vec3::new(30.0, 10.0, 25.0),
+        ))
+        .expect("right");
         manifold_to_indexed(&base.union(&left).union(&right)).expect("U")
     }
 
@@ -1650,7 +1820,10 @@ mod tests {
         let options = OrganicCutOptions {
             cut: OrganicCutSpec {
                 mode: CutMode::Plane,
-                plane: Some(CutPlaneSpec { normal: [0.0, 0.0, 1.0], offset: 15.0 }),
+                plane: Some(CutPlaneSpec {
+                    normal: [0.0, 0.0, 1.0],
+                    offset: 15.0,
+                }),
                 generate_tenon: false,
                 ..Default::default()
             },
@@ -1665,7 +1838,10 @@ mod tests {
         assert_eq!(outcome.parts.len(), 3);
         let mut sizes: Vec<usize> = outcome.parts.iter().map(|p| p.triangle_count()).collect();
         sizes.sort_unstable();
-        assert!(sizes[0] > 0 && sizes[2] > sizes[0], "the base is the biggest of the three: {sizes:?}");
+        assert!(
+            sizes[0] > 0 && sizes[2] > sizes[0],
+            "the base is the biggest of the three: {sizes:?}"
+        );
     }
 
     // With two sections, the tenon used to be anchored on the centroid of BOTH of
@@ -1679,7 +1855,10 @@ mod tests {
         let spec = |generate: bool| OrganicCutOptions {
             cut: OrganicCutSpec {
                 mode: CutMode::Plane,
-                plane: Some(CutPlaneSpec { normal: [0.0, 0.0, 1.0], offset: 15.0 }),
+                plane: Some(CutPlaneSpec {
+                    normal: [0.0, 0.0, 1.0],
+                    offset: 15.0,
+                }),
                 generate_tenon: generate,
                 tenon_width_mm: 3.0,
                 tenon_depth_mm: 3.0,
@@ -1691,14 +1870,22 @@ mod tests {
         let plain = organic_cut(mesh.clone(), &spec(false));
         let tenoned = organic_cut(mesh, &spec(true));
 
-        assert_eq!(tenoned.report.tenon_kind, "frustum", "{}", tenoned.report.tenon_detail);
+        assert_eq!(
+            tenoned.report.tenon_kind, "frustum",
+            "{}",
+            tenoned.report.tenon_detail
+        );
         assert!(
             tenoned.report.tenon_detail.is_empty(),
             "both sections should be tenoned: {}",
             tenoned.report.tenon_detail,
         );
-        assert_eq!(tenoned.report.part_count, plain.report.part_count, "the tenons must not add solids");
-        let total = |o: &OrganicCutOutcome| o.parts.iter().map(|p| p.triangle_count()).sum::<usize>();
+        assert_eq!(
+            tenoned.report.part_count, plain.report.part_count,
+            "the tenons must not add solids"
+        );
+        let total =
+            |o: &OrganicCutOutcome| o.parts.iter().map(|p| p.triangle_count()).sum::<usize>();
         assert!(
             total(&tenoned) > total(&plain),
             "two tenons and two mortises add geometry: {} vs {}",
@@ -1726,16 +1913,23 @@ mod tests {
                 ..Default::default()
             },
         };
-        let plain = organic_cut(mesh.clone(), &OrganicCutOptions {
-            cut: OrganicCutSpec {
-                loop_points: loop_on_plane_z(size * 0.5, size),
-                mode: CutMode::Plane,
-                ..Default::default()
+        let plain = organic_cut(
+            mesh.clone(),
+            &OrganicCutOptions {
+                cut: OrganicCutSpec {
+                    loop_points: loop_on_plane_z(size * 0.5, size),
+                    mode: CutMode::Plane,
+                    ..Default::default()
+                },
             },
-        });
+        );
         let tenoned = organic_cut(mesh, &options);
         assert_eq!(tenoned.report.engine, "plane", "still the plane engine");
-        assert_eq!(tenoned.report.tenon_kind, "frustum", "tenon placed: {}", tenoned.report.tenon_detail);
+        assert_eq!(
+            tenoned.report.tenon_kind, "frustum",
+            "tenon placed: {}",
+            tenoned.report.tenon_detail
+        );
         // The tenon is union'd onto one half and carved out of the other, so both
         // halves gain geometry over the same cut without a tenon.
         assert!(
@@ -1760,10 +1954,30 @@ mod tests {
             let steps = 8usize;
             let f = |i: usize| size * i as f32 / steps as f32;
             let mut pts = Vec::new();
-            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [f(i), 0.0, z], normal: [0.0; 3] }); }
-            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [size, f(i), z], normal: [0.0; 3] }); }
-            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [size - f(i), size, z], normal: [0.0; 3] }); }
-            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [0.0, size - f(i), z], normal: [0.0; 3] }); }
+            for i in 0..steps {
+                pts.push(OrganicCutLoopPoint {
+                    position: [f(i), 0.0, z],
+                    normal: [0.0; 3],
+                });
+            }
+            for i in 0..steps {
+                pts.push(OrganicCutLoopPoint {
+                    position: [size, f(i), z],
+                    normal: [0.0; 3],
+                });
+            }
+            for i in 0..steps {
+                pts.push(OrganicCutLoopPoint {
+                    position: [size - f(i), size, z],
+                    normal: [0.0; 3],
+                });
+            }
+            for i in 0..steps {
+                pts.push(OrganicCutLoopPoint {
+                    position: [0.0, size - f(i), z],
+                    normal: [0.0; 3],
+                });
+            }
             pts
         };
         let options = OrganicCutOptions {
@@ -1779,7 +1993,10 @@ mod tests {
             },
         };
         let outcome = organic_cut(mesh, &options);
-        assert_eq!(outcome.report.engine, "surface", "should use the surface engine");
+        assert_eq!(
+            outcome.report.engine, "surface",
+            "should use the surface engine"
+        );
         assert_ne!(
             outcome.report.tenon_kind, "none",
             "expected a tenon placed per seam, tenon_detail={}",
@@ -1802,10 +2019,30 @@ mod tests {
             let steps = 8usize;
             let f = |i: usize| size * i as f32 / steps as f32;
             let mut pts = Vec::new();
-            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [f(i), 0.0, z], normal: [0.0; 3] }); }
-            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [size, f(i), z], normal: [0.0; 3] }); }
-            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [size - f(i), size, z], normal: [0.0; 3] }); }
-            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [0.0, size - f(i), z], normal: [0.0; 3] }); }
+            for i in 0..steps {
+                pts.push(OrganicCutLoopPoint {
+                    position: [f(i), 0.0, z],
+                    normal: [0.0; 3],
+                });
+            }
+            for i in 0..steps {
+                pts.push(OrganicCutLoopPoint {
+                    position: [size, f(i), z],
+                    normal: [0.0; 3],
+                });
+            }
+            for i in 0..steps {
+                pts.push(OrganicCutLoopPoint {
+                    position: [size - f(i), size, z],
+                    normal: [0.0; 3],
+                });
+            }
+            for i in 0..steps {
+                pts.push(OrganicCutLoopPoint {
+                    position: [0.0, size - f(i), z],
+                    normal: [0.0; 3],
+                });
+            }
             pts
         };
         let options = OrganicCutOptions {
@@ -1859,7 +2096,10 @@ mod tests {
                 triangles.push([idx(i, j), idx(i + 1, j + 1), idx(i, j + 1)]);
             }
         }
-        let mesh = IndexedMesh { positions, triangles };
+        let mesh = IndexedMesh {
+            positions,
+            triangles,
+        };
         let source = mesh.triangle_count();
 
         let ring: Vec<OrganicCutLoopPoint> = (0..96)
@@ -1867,7 +2107,10 @@ mod tests {
                 let v = j as f32 / 96.0 * std::f32::consts::TAU;
                 let r = major + minor * v.cos();
                 let (a, s) = (0.3_f32, minor * v.sin());
-                OrganicCutLoopPoint { position: [r * a.cos(), r * a.sin(), s], normal: [0.0; 3] }
+                OrganicCutLoopPoint {
+                    position: [r * a.cos(), r * a.sin(), s],
+                    normal: [0.0; 3],
+                }
             })
             .collect();
         let outcome = organic_cut(
@@ -1885,7 +2128,11 @@ mod tests {
         // Refusing is the right answer, and the reason has to name the handle. What is
         // NEVER allowed is succeeding with the sliver: a cut that hands back a fraction
         // of the model it was given has thrown the model away.
-        assert_eq!(outcome.report.engine, "noop", "detail={}", outcome.report.detail);
+        assert_eq!(
+            outcome.report.engine, "noop",
+            "detail={}",
+            outcome.report.detail
+        );
         for part in &outcome.parts {
             assert!(
                 part.triangle_count() * 4 > source,
@@ -1907,10 +2154,30 @@ mod tests {
             let steps = 8usize;
             let f = |i: usize| size * i as f32 / steps as f32;
             let mut pts = Vec::new();
-            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [f(i), 0.0, z], normal: [0.0; 3] }); }
-            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [size, f(i), z], normal: [0.0; 3] }); }
-            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [size - f(i), size, z], normal: [0.0; 3] }); }
-            for i in 0..steps { pts.push(OrganicCutLoopPoint { position: [0.0, size - f(i), z], normal: [0.0; 3] }); }
+            for i in 0..steps {
+                pts.push(OrganicCutLoopPoint {
+                    position: [f(i), 0.0, z],
+                    normal: [0.0; 3],
+                });
+            }
+            for i in 0..steps {
+                pts.push(OrganicCutLoopPoint {
+                    position: [size, f(i), z],
+                    normal: [0.0; 3],
+                });
+            }
+            for i in 0..steps {
+                pts.push(OrganicCutLoopPoint {
+                    position: [size - f(i), size, z],
+                    normal: [0.0; 3],
+                });
+            }
+            for i in 0..steps {
+                pts.push(OrganicCutLoopPoint {
+                    position: [0.0, size - f(i), z],
+                    normal: [0.0; 3],
+                });
+            }
             pts
         };
         let mk_tenon = |generate: bool| LoopTenonSpec {
@@ -1944,7 +2211,11 @@ mod tests {
         // Only loop 0 tenoned; loop 1 explicitly NOT tenoned.
         let one = run(vec![mk_tenon(true), mk_tenon(false)]);
         assert_eq!(one.report.engine, "surface");
-        assert_ne!(one.report.tenon_kind, "none", "loop 0 should be tenoned: {}", one.report.tenon_detail);
+        assert_ne!(
+            one.report.tenon_kind, "none",
+            "loop 0 should be tenoned: {}",
+            one.report.tenon_detail
+        );
         // Both loops tenoned.
         let two = run(vec![mk_tenon(true), mk_tenon(true)]);
         assert_ne!(two.report.tenon_kind, "none");
@@ -1973,10 +2244,22 @@ mod tests {
         let mesh = IndexedMesh::from_triangle_soup(&cube_soup(10.0), 1e-6);
         let source_tris = mesh.triangles.len();
         let loop_points = vec![
-            OrganicCutLoopPoint { position: [0.0, 5.0, 5.0], normal: [0.0; 3] },
-            OrganicCutLoopPoint { position: [5.0, 0.0, 5.0], normal: [0.0; 3] },
-            OrganicCutLoopPoint { position: [10.0, 5.0, 5.0], normal: [0.0; 3] },
-            OrganicCutLoopPoint { position: [5.0, 10.0, 5.0], normal: [0.0; 3] },
+            OrganicCutLoopPoint {
+                position: [0.0, 5.0, 5.0],
+                normal: [0.0; 3],
+            },
+            OrganicCutLoopPoint {
+                position: [5.0, 0.0, 5.0],
+                normal: [0.0; 3],
+            },
+            OrganicCutLoopPoint {
+                position: [10.0, 5.0, 5.0],
+                normal: [0.0; 3],
+            },
+            OrganicCutLoopPoint {
+                position: [5.0, 10.0, 5.0],
+                normal: [0.0; 3],
+            },
         ];
         let options = OrganicCutOptions {
             cut: OrganicCutSpec {
@@ -1992,7 +2275,11 @@ mod tests {
         // the fill parts top from bottom — so severing here is a gain, not the
         // guillotine this test was written to catch. What still must hold is that
         // nothing is cut OUTSIDE the seam: the two halves add back up to the cube.
-        assert_eq!(outcome.report.engine, "surface", "detail={}", outcome.report.detail);
+        assert_eq!(
+            outcome.report.engine, "surface",
+            "detail={}",
+            outcome.report.detail
+        );
         assert_eq!(outcome.parts.len(), 2, "the seam parts the cube in two");
         assert_eq!(
             outcome.report.source_triangle_count, source_tris,

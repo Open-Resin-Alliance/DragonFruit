@@ -127,11 +127,7 @@ pub enum PluginMessage {
     #[serde(rename_all = "camelCase")]
     Progress { id: u64, done: u32, total: u32 },
     #[serde(rename_all = "camelCase")]
-    EncodeDone {
-        id: u64,
-        path: String,
-        bytes: u64,
-    },
+    EncodeDone { id: u64, path: String, bytes: u64 },
     #[serde(rename_all = "camelCase")]
     EncodeCancelled { id: u64 },
     #[serde(rename_all = "camelCase")]

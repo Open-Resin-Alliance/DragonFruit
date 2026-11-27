@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,10 +23,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-use tungstenite::http::header::{HeaderValue, SEC_WEBSOCKET_PROTOCOL};
 use tungstenite::handshake::server::{Request, Response};
+use tungstenite::http::header::{HeaderValue, SEC_WEBSOCKET_PROTOCOL};
 use tungstenite::{accept_hdr, Message};
 use url::form_urlencoded;
 
@@ -610,7 +610,11 @@ fn fnv1a32(text: &str) -> u32 {
 fn create_default_lease_record(url: &str) -> LeaseRecord {
     let normalized = normalize_lease_url(url);
     let span = u32::from(DEFAULT_PORT_BASE_MAX - DEFAULT_PORT_BASE_MIN);
-    let offset = if span == 0 { 0 } else { fnv1a32(&normalized) % span };
+    let offset = if span == 0 {
+        0
+    } else {
+        fnv1a32(&normalized) % span
+    };
     let mut base_port = DEFAULT_PORT_BASE_MIN + u16::try_from(offset).unwrap_or(0);
     if base_port % 2 != 0 {
         base_port = base_port.saturating_sub(1);
@@ -1061,7 +1065,10 @@ fn resolve_ffmpeg_binary() -> String {
         .ok()
         .map(|value| {
             let normalized = value.trim().to_ascii_lowercase();
-            !(normalized == "0" || normalized == "false" || normalized == "off" || normalized == "no")
+            !(normalized == "0"
+                || normalized == "false"
+                || normalized == "off"
+                || normalized == "no")
         })
         .unwrap_or(true);
 
@@ -1070,7 +1077,9 @@ fn resolve_ffmpeg_binary() -> String {
             eprintln!("[dragonfruit-rtsp-relay] ffmpeg-sidecar auto_download failed: {error}");
         }
 
-        let refreshed = ffmpeg_sidecar::paths::ffmpeg_path().to_string_lossy().to_string();
+        let refreshed = ffmpeg_sidecar::paths::ffmpeg_path()
+            .to_string_lossy()
+            .to_string();
         if ffmpeg_binary_is_runnable(&refreshed) {
             return refreshed;
         }

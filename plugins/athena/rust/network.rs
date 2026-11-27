@@ -31,7 +31,8 @@ fn epoch_ms_now() -> u64 {
         .unwrap_or(0)
 }
 
-fn nanodlp_upload_progress_registry() -> &'static Mutex<HashMap<String, NanoDlpUploadProgressEntry>> {
+fn nanodlp_upload_progress_registry() -> &'static Mutex<HashMap<String, NanoDlpUploadProgressEntry>>
+{
     NANODLP_UPLOAD_PROGRESS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -43,7 +44,9 @@ fn register_nanodlp_upload_progress(upload_id: &str, total_bytes: u64, sent_byte
     if let Ok(mut map) = nanodlp_upload_progress_registry().lock() {
         let now_ms = epoch_ms_now();
         // Best-effort pruning to prevent unbounded growth.
-        map.retain(|_, entry| !(entry.done && now_ms.saturating_sub(entry.updated_at_ms) > 15 * 60 * 1000));
+        map.retain(|_, entry| {
+            !(entry.done && now_ms.saturating_sub(entry.updated_at_ms) > 15 * 60 * 1000)
+        });
 
         map.insert(
             upload_id.to_string(),
@@ -66,9 +69,7 @@ fn complete_nanodlp_upload_progress(upload_id: &str, error: Option<String>) {
     if let Ok(mut map) = nanodlp_upload_progress_registry().lock() {
         if let Some(entry) = map.get_mut(upload_id) {
             if error.is_none() {
-                entry
-                    .sent_bytes
-                    .store(entry.total_bytes, Ordering::Relaxed);
+                entry.sent_bytes.store(entry.total_bytes, Ordering::Relaxed);
             }
             entry.done = true;
             entry.error = error;
@@ -392,7 +393,10 @@ fn normalize_machine_name(name: &str) -> String {
     normalize_model_name(name)
 }
 
-fn is_nanodlp_filter_debug_enabled(payload: &Value, requested_network_filter: Option<&str>) -> bool {
+fn is_nanodlp_filter_debug_enabled(
+    payload: &Value,
+    requested_network_filter: Option<&str>,
+) -> bool {
     if let Some(v) = payload
         .get("suppressNetworkFilterDebug")
         .and_then(|v| v.as_bool())
@@ -400,21 +404,18 @@ fn is_nanodlp_filter_debug_enabled(payload: &Value, requested_network_filter: Op
         return !v;
     }
 
-    if let Some(v) = payload
-        .get("debugNetworkFilter")
-        .and_then(|v| v.as_bool())
-    {
+    if let Some(v) = payload.get("debugNetworkFilter").and_then(|v| v.as_bool()) {
         return v;
     }
 
-    if let Some(v) = payload
-        .get("debugDiscovery")
-        .and_then(|v| v.as_bool())
-    {
+    if let Some(v) = payload.get("debugDiscovery").and_then(|v| v.as_bool()) {
         return v;
     }
 
-    if requested_network_filter.map(|v| !v.trim().is_empty()).unwrap_or(false) {
+    if requested_network_filter
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+    {
         return true;
     }
 
@@ -466,7 +467,10 @@ fn matches_model_hint(supported_model: &str, model_hint: Option<&'static str>) -
     }
 }
 
-fn device_matches_requested_model_hint(device: &Value, requested_model_hint: Option<&'static str>) -> bool {
+fn device_matches_requested_model_hint(
+    device: &Value,
+    requested_model_hint: Option<&'static str>,
+) -> bool {
     let Some(expected) = requested_model_hint else {
         return true;
     };
@@ -504,7 +508,9 @@ fn resolve_known_network_filter(machine_name: &str) -> Option<String> {
         if normalized_filter.is_empty() {
             continue;
         }
-        if normalized_machine.contains(&normalized_filter) || normalized_filter.contains(&normalized_machine) {
+        if normalized_machine.contains(&normalized_filter)
+            || normalized_filter.contains(&normalized_machine)
+        {
             return Some(filter.clone());
         }
     }
@@ -536,7 +542,10 @@ async fn fetch_nanodlp_machine_name(host: &str, port: u16, timeout_ms: u64) -> O
 /// printer's own friendly name (e.g. "Negotiator-Gourd"), bit depth, and screen
 /// metadata. Returns `None` on any failure so callers degrade gracefully.
 async fn fetch_nanodlp_printer_data(host: &str, port: u16, timeout_ms: u64) -> Option<Value> {
-    let url = format!("{}/athena-iot/dragonfruit/printer_data", build_base_url(host, port));
+    let url = format!(
+        "{}/athena-iot/dragonfruit/printer_data",
+        build_base_url(host, port)
+    );
     let resp = http_client()
         .get(&url)
         .header("Accept", "application/json")
@@ -552,7 +561,12 @@ async fn fetch_nanodlp_printer_data(host: &str, port: u16, timeout_ms: u64) -> O
 
 /// Prefer the friendly `printerName` reported by `printer_data` over the generic
 /// name from `/status`, falling back to the status-derived name.
-async fn resolve_friendly_printer_name(host: &str, port: u16, timeout_ms: u64, status_name: String) -> String {
+async fn resolve_friendly_printer_name(
+    host: &str,
+    port: u16,
+    timeout_ms: u64,
+    status_name: String,
+) -> String {
     match fetch_nanodlp_printer_data(host, port, timeout_ms).await {
         Some(data) => data
             .get("printerName")
@@ -658,7 +672,10 @@ fn resolve_nanodlp_webcam_candidates(status: &Value, host: &str, port: u16) -> V
 fn resolve_athena_camera_online(state_payload: &Value) -> bool {
     match state_payload {
         Value::Bool(v) => *v,
-        Value::Number(n) => n.as_f64().map(|v| v.is_finite() && v > 0.0).unwrap_or(false),
+        Value::Number(n) => n
+            .as_f64()
+            .map(|v| v.is_finite() && v > 0.0)
+            .unwrap_or(false),
         Value::String(s) => {
             let normalized = s.trim().to_lowercase();
             (normalized.contains("online")
@@ -678,7 +695,10 @@ fn resolve_athena_camera_online(state_payload: &Value) -> bool {
                     match value {
                         Value::Bool(true) => return true,
                         Value::Number(n) => {
-                            if n.as_f64().map(|v| v.is_finite() && v > 0.0).unwrap_or(false) {
+                            if n.as_f64()
+                                .map(|v| v.is_finite() && v > 0.0)
+                                .unwrap_or(false)
+                            {
                                 return true;
                             }
                         }
@@ -721,7 +741,10 @@ fn resolve_athena_camera_online(state_payload: &Value) -> bool {
     }
 }
 
-async fn fetch_athena_camera_info(host: &str, port: u16) -> (bool, Option<String>, Option<String>, Value) {
+async fn fetch_athena_camera_info(
+    host: &str,
+    port: u16,
+) -> (bool, Option<String>, Option<String>, Value) {
     let base_url = build_base_url(host, port);
     let state_url = format!("{base_url}/athena-camera/state");
     let stream_url = format!("{base_url}/athena-camera/stream");
@@ -896,7 +919,8 @@ async fn probe_nanodlp(host: &str, port: u16, timeout_ms: u64) -> Option<Value> 
     let status = fetch_nanodlp_status(host, port, timeout_ms).await?;
     resolve_supported_athena_model(&status)?;
     let hostname = resolve_status_hostname(&status);
-    let printer_name = resolve_friendly_printer_name(host, port, timeout_ms, resolve_printer_name(&status)).await;
+    let printer_name =
+        resolve_friendly_printer_name(host, port, timeout_ms, resolve_printer_name(&status)).await;
     let printer_model = resolve_printer_model(&status);
     let resolved_address = resolve_address(&status, host);
     let status_text = status
@@ -1306,7 +1330,8 @@ async fn nanodlp_connect(payload: &Value) -> (u16, Value) {
     let port = resolve_port(payload.get("port"), parsed.1);
     let requested_model_hint = normalize_model_hint(payload.get("modelHint"));
     let requested_network_filter = resolve_requested_network_filter(payload).await;
-    let debug_filter = is_nanodlp_filter_debug_enabled(payload, requested_network_filter.as_deref());
+    let debug_filter =
+        is_nanodlp_filter_debug_enabled(payload, requested_network_filter.as_deref());
 
     log_nanodlp_filter_debug(
         "connect/request",
@@ -1323,7 +1348,9 @@ async fn nanodlp_connect(payload: &Value) -> (u16, Value) {
         Some(status) => {
             let supported_model = resolve_supported_athena_model(&status);
             let hostname = resolve_status_hostname(&status);
-            let printer_name = resolve_friendly_printer_name(&parsed.0, port, 3500, resolve_printer_name(&status)).await;
+            let printer_name =
+                resolve_friendly_printer_name(&parsed.0, port, 3500, resolve_printer_name(&status))
+                    .await;
             let printer_model = resolve_printer_model(&status);
             let resolved = resolve_address(&status, &parsed.0);
             let status_text = status
@@ -1361,12 +1388,10 @@ async fn nanodlp_connect(payload: &Value) -> (u16, Value) {
             let normalized_requested_network_filter = requested_network_filter
                 .as_deref()
                 .map(normalize_machine_name);
-            let normalized_device_machine_name = device_machine_name
-                .as_deref()
-                .map(normalize_machine_name);
-            let normalized_device_network_filter = device_network_filter
-                .as_deref()
-                .map(normalize_machine_name);
+            let normalized_device_machine_name =
+                device_machine_name.as_deref().map(normalize_machine_name);
+            let normalized_device_network_filter =
+                device_network_filter.as_deref().map(normalize_machine_name);
             let network_filter_matched = normalized_requested_network_filter
                 .as_ref()
                 .zip(normalized_device_machine_name.as_ref())
@@ -1429,7 +1454,8 @@ async fn nanodlp_connect(payload: &Value) -> (u16, Value) {
                         None => match requested_label {
                             Some(label) => format!("Printer model mismatch: expected {label}."),
                             None => {
-                                "Unsupported printer model. Supported models: Athena, Athena 2.".to_string()
+                                "Unsupported printer model. Supported models: Athena, Athena 2."
+                                    .to_string()
                             }
                         },
                     }
@@ -1528,7 +1554,9 @@ async fn discover_mdns_hostnames(timeout_ms: u64) -> Vec<String> {
     tokio::task::spawn_blocking(move || {
         use mdns_sd::{ServiceDaemon, ServiceEvent};
 
-        let Ok(mdns) = ServiceDaemon::new() else { return Vec::new(); };
+        let Ok(mdns) = ServiceDaemon::new() else {
+            return Vec::new();
+        };
         let Ok(receiver) = mdns.browse("_http._tcp.local.") else {
             drop(mdns);
             return Vec::new();
@@ -1588,7 +1616,8 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
     };
     let requested_model_hint = normalize_model_hint(payload.get("modelHint"));
     let requested_network_filter = resolve_requested_network_filter(payload).await;
-    let debug_filter = is_nanodlp_filter_debug_enabled(payload, requested_network_filter.as_deref());
+    let debug_filter =
+        is_nanodlp_filter_debug_enabled(payload, requested_network_filter.as_deref());
 
     let raw_host = resolve_raw_host(payload);
     let forced_host_parsed = if raw_host.trim().is_empty() {
@@ -1753,11 +1782,19 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
     // port scan and may terminate the process (Windows Event 1005).  Keep the
     // concurrent socket count well below the heuristic threshold on Windows.
     #[cfg(target_os = "windows")]
-    let (subnet_concurrency_default, subnet_concurrency_max): (u64, u64) =
-        if forced_host.is_some() { (8, 24) } else { (24, 48) };
+    let (subnet_concurrency_default, subnet_concurrency_max): (u64, u64) = if forced_host.is_some()
+    {
+        (8, 24)
+    } else {
+        (24, 48)
+    };
     #[cfg(not(target_os = "windows"))]
-    let (subnet_concurrency_default, subnet_concurrency_max): (u64, u64) =
-        if forced_host.is_some() { (12, 64) } else { (84, 160) };
+    let (subnet_concurrency_default, subnet_concurrency_max): (u64, u64) = if forced_host.is_some()
+    {
+        (12, 64)
+    } else {
+        (84, 160)
+    };
     let subnet_concurrency = clamp_u64(
         payload.get("subnetConcurrency"),
         subnet_concurrency_default,
@@ -1793,17 +1830,23 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
     if let Some(expected_filter) = requested_network_filter.as_deref() {
         let mut filtered = Vec::with_capacity(found.len());
         for device in found {
-            let host = device.get("ipAddress").and_then(|v| v.as_str()).unwrap_or("");
-            let port = device.get("port").and_then(|v| v.as_u64()).and_then(|p| u16::try_from(p).ok()).unwrap_or(80);
+            let host = device
+                .get("ipAddress")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let port = device
+                .get("port")
+                .and_then(|v| v.as_u64())
+                .and_then(|p| u16::try_from(p).ok())
+                .unwrap_or(80);
             let machine_name = resolve_device_machine_name(host, port, 2500).await;
             let normalized_machine_name = machine_name.as_deref().map(normalize_machine_name);
             let normalized_expected = normalize_machine_name(expected_filter);
             let known_network_filter = machine_name
                 .as_deref()
                 .and_then(resolve_known_network_filter);
-            let normalized_known_network_filter = known_network_filter
-                .as_deref()
-                .map(normalize_machine_name);
+            let normalized_known_network_filter =
+                known_network_filter.as_deref().map(normalize_machine_name);
             let matched = normalized_machine_name
                 .as_deref()
                 .map(|name| name == normalized_expected)
@@ -1812,10 +1855,12 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
                 .as_deref()
                 .map(|known| known != normalized_expected)
                 .unwrap_or(false);
-            let model_hint_fallback = device_matches_requested_model_hint(&device, requested_model_hint);
+            let model_hint_fallback =
+                device_matches_requested_model_hint(&device, requested_model_hint);
             let device_has_unknown_filter = known_network_filter.is_none();
             let accepted = matched
-                || (!explicit_known_filter_mismatch && (model_hint_fallback || device_has_unknown_filter));
+                || (!explicit_known_filter_mismatch
+                    && (model_hint_fallback || device_has_unknown_filter));
             log_nanodlp_filter_debug(
                 if matched {
                     "discover/match"
@@ -1859,7 +1904,10 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
     if requested_network_filter.is_none() {
         if let Some(expected) = requested_model_hint {
             found.retain(|device| {
-                let model = device.get("printerModel").and_then(|v| v.as_str()).unwrap_or("");
+                let model = device
+                    .get("printerModel")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let normalized = normalize_model_name(model);
                 if expected == "athena-2" {
                     normalized.contains("athena 2") || normalized.contains("athena2")
@@ -1885,17 +1933,23 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
         if let Some(expected_filter) = requested_network_filter.as_deref() {
             let mut filtered = Vec::with_capacity(subnet_found.len());
             for device in subnet_found {
-                let host = device.get("ipAddress").and_then(|v| v.as_str()).unwrap_or("");
-                let port = device.get("port").and_then(|v| v.as_u64()).and_then(|p| u16::try_from(p).ok()).unwrap_or(80);
+                let host = device
+                    .get("ipAddress")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let port = device
+                    .get("port")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|p| u16::try_from(p).ok())
+                    .unwrap_or(80);
                 let machine_name = resolve_device_machine_name(host, port, 2500).await;
                 let normalized_machine_name = machine_name.as_deref().map(normalize_machine_name);
                 let normalized_expected = normalize_machine_name(expected_filter);
                 let known_network_filter = machine_name
                     .as_deref()
                     .and_then(resolve_known_network_filter);
-                let normalized_known_network_filter = known_network_filter
-                    .as_deref()
-                    .map(normalize_machine_name);
+                let normalized_known_network_filter =
+                    known_network_filter.as_deref().map(normalize_machine_name);
                 let matched = normalized_machine_name
                     .as_deref()
                     .map(|name| name == normalized_expected)
@@ -1904,10 +1958,12 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
                     .as_deref()
                     .map(|known| known != normalized_expected)
                     .unwrap_or(false);
-                let model_hint_fallback = device_matches_requested_model_hint(&device, requested_model_hint);
+                let model_hint_fallback =
+                    device_matches_requested_model_hint(&device, requested_model_hint);
                 let device_has_unknown_filter = known_network_filter.is_none();
                 let accepted = matched
-                    || (!explicit_known_filter_mismatch && (model_hint_fallback || device_has_unknown_filter));
+                    || (!explicit_known_filter_mismatch
+                        && (model_hint_fallback || device_has_unknown_filter));
                 log_nanodlp_filter_debug(
                     if matched {
                         "discover/match"
@@ -1952,7 +2008,10 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
         if requested_network_filter.is_none() {
             if let Some(expected) = requested_model_hint {
                 subnet_found.retain(|device| {
-                    let model = device.get("printerModel").and_then(|v| v.as_str()).unwrap_or("");
+                    let model = device
+                        .get("printerModel")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     let normalized = normalize_model_name(model);
                     if expected == "athena-2" {
                         normalized.contains("athena 2") || normalized.contains("athena2")
@@ -2014,17 +2073,23 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
         if let Some(expected_filter) = requested_network_filter.as_deref() {
             let mut filtered = Vec::with_capacity(subnet_found.len());
             for device in subnet_found {
-                let host = device.get("ipAddress").and_then(|v| v.as_str()).unwrap_or("");
-                let port = device.get("port").and_then(|v| v.as_u64()).and_then(|p| u16::try_from(p).ok()).unwrap_or(80);
+                let host = device
+                    .get("ipAddress")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let port = device
+                    .get("port")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|p| u16::try_from(p).ok())
+                    .unwrap_or(80);
                 let machine_name = resolve_device_machine_name(host, port, 2500).await;
                 let normalized_machine_name = machine_name.as_deref().map(normalize_machine_name);
                 let normalized_expected = normalize_machine_name(expected_filter);
                 let known_network_filter = machine_name
                     .as_deref()
                     .and_then(resolve_known_network_filter);
-                let normalized_known_network_filter = known_network_filter
-                    .as_deref()
-                    .map(normalize_machine_name);
+                let normalized_known_network_filter =
+                    known_network_filter.as_deref().map(normalize_machine_name);
                 let matched = normalized_machine_name
                     .as_deref()
                     .map(|name| name == normalized_expected)
@@ -2033,10 +2098,12 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
                     .as_deref()
                     .map(|known| known != normalized_expected)
                     .unwrap_or(false);
-                let model_hint_fallback = device_matches_requested_model_hint(&device, requested_model_hint);
+                let model_hint_fallback =
+                    device_matches_requested_model_hint(&device, requested_model_hint);
                 let device_has_unknown_filter = known_network_filter.is_none();
                 let accepted = matched
-                    || (!explicit_known_filter_mismatch && (model_hint_fallback || device_has_unknown_filter));
+                    || (!explicit_known_filter_mismatch
+                        && (model_hint_fallback || device_has_unknown_filter));
                 log_nanodlp_filter_debug(
                     if matched {
                         "discover/match"
@@ -2080,7 +2147,10 @@ async fn nanodlp_discover(payload: &Value) -> (u16, Value) {
         if requested_network_filter.is_none() {
             if let Some(expected) = requested_model_hint {
                 subnet_found.retain(|device| {
-                    let model = device.get("printerModel").and_then(|v| v.as_str()).unwrap_or("");
+                    let model = device
+                        .get("printerModel")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     let normalized = normalize_model_name(model);
                     if expected == "athena-2" {
                         normalized.contains("athena 2") || normalized.contains("athena2")
@@ -2383,7 +2453,10 @@ async fn nanodlp_job_import(payload: &Value) -> (u16, Value) {
             Ok(meta) => {
                 if meta.len() == 0 {
                     if zip_base64.is_empty() {
-                        return (400, json!({ "ok": false, "error": "zipFilePath points to an empty file" }));
+                        return (
+                            400,
+                            json!({ "ok": false, "error": "zipFilePath points to an empty file" }),
+                        );
                     }
                 } else {
                     upload_file_path = Some(zip_file_path.clone());
@@ -2410,7 +2483,12 @@ async fn nanodlp_job_import(payload: &Value) -> (u16, Value) {
             }
         }
     }
-    if upload_file_path.is_none() && zip_bytes.as_ref().map(|bytes| bytes.is_empty()).unwrap_or(true) {
+    if upload_file_path.is_none()
+        && zip_bytes
+            .as_ref()
+            .map(|bytes| bytes.is_empty())
+            .unwrap_or(true)
+    {
         return (
             400,
             json!({ "ok": false, "error": "Decoded job payload is empty" }),
@@ -2442,7 +2520,9 @@ async fn nanodlp_job_import(payload: &Value) -> (u16, Value) {
                 let file_len = file
                     .metadata()
                     .await
-                    .map_err(|e| format!("Failed to read upload file metadata '{}': {e}", upload_path))?
+                    .map_err(|e| {
+                        format!("Failed to read upload file metadata '{}': {e}", upload_path)
+                    })?
                     .len();
                 let progress_counter = Arc::new(AtomicU64::new(0));
                 if let Some(upload_id) = upload_id_for_request.as_deref() {
@@ -2450,8 +2530,7 @@ async fn nanodlp_job_import(payload: &Value) -> (u16, Value) {
                 }
                 let progress_counter_for_stream = progress_counter;
                 let stream = tokio_util::io::ReaderStream::new(file).inspect_ok(move |chunk| {
-                    progress_counter_for_stream
-                        .fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                    progress_counter_for_stream.fetch_add(chunk.len() as u64, Ordering::Relaxed);
                 });
                 let body = reqwest::Body::wrap_stream(stream);
                 reqwest::multipart::Part::stream_with_length(body, file_len)
@@ -2826,10 +2905,15 @@ async fn nanodlp_plate_delete(payload: &Value) -> (u16, Value) {
     let mut attempted: Vec<Value> = Vec::new();
     let mut last_error_message: Option<String> = None;
 
-    if let Some((file_path, location)) = resolve_nanodlp_plate_file_target(&parsed.0, port, plate_id).await {
+    if let Some((file_path, location)) =
+        resolve_nanodlp_plate_file_target(&parsed.0, port, plate_id).await
+    {
         let endpoint_path = "/file".to_string();
         match http_client()
-            .request(reqwest::Method::DELETE, format!("{base_url}{endpoint_path}"))
+            .request(
+                reqwest::Method::DELETE,
+                format!("{base_url}{endpoint_path}"),
+            )
             .query(&[("location", location), ("file_path", file_path.as_str())])
             .timeout(Duration::from_secs(15))
             .send()
@@ -3157,7 +3241,8 @@ async fn nanodlp_printer_webcam_info(payload: &Value) -> (u16, Value) {
 
     match status {
         Some(status_payload) => {
-            let status_candidates = resolve_nanodlp_webcam_candidates(&status_payload, &parsed.0, port);
+            let status_candidates =
+                resolve_nanodlp_webcam_candidates(&status_payload, &parsed.0, port);
             let had_status_candidates = !status_candidates.is_empty();
             let mut candidates = Vec::new();
             if let Some(stream) = camera_stream_url.clone() {
@@ -3272,7 +3357,12 @@ async fn nanodlp_printer_data(payload: &Value) -> (u16, Value) {
     let raw_host = resolve_raw_host(payload);
     let parsed = match parse_host_and_port(&raw_host) {
         Some(p) => p,
-        None => return (400, json!({ "ok": false, "error": "Invalid host or IP address" })),
+        None => {
+            return (
+                400,
+                json!({ "ok": false, "error": "Invalid host or IP address" }),
+            )
+        }
     };
     let port = resolve_port(payload.get("port"), parsed.1);
     let path_raw = payload
@@ -3315,12 +3405,14 @@ async fn nanodlp_printer_data(payload: &Value) -> (u16, Value) {
         let decoded: Value = resp.json().await.map_err(|e| e.to_string())?;
         let obj = match decoded.as_object() {
             Some(o) => o,
-            None => return Ok(json!({
-                "ok": false,
-                "ipAddress": parsed.0,
-                "port": port,
-                "error": "Invalid printer data payload",
-            })),
+            None => {
+                return Ok(json!({
+                    "ok": false,
+                    "ipAddress": parsed.0,
+                    "port": port,
+                    "error": "Invalid printer data payload",
+                }))
+            }
         };
 
         let as_number = |v: Option<&Value>| -> Option<f64> {
@@ -3372,7 +3464,10 @@ async fn nanodlp_printer_data(payload: &Value) -> (u16, Value) {
 // ---------------------------------------------------------------------------
 
 async fn handle_athena_network(operation: &str, payload: &Value) -> (u16, Value) {
-    let normalized_operation = operation.trim().trim_start_matches('/').trim_end_matches('/');
+    let normalized_operation = operation
+        .trim()
+        .trim_start_matches('/')
+        .trim_end_matches('/');
     let op = normalized_operation
         .strip_prefix("nanodlp/")
         .unwrap_or(normalized_operation);
@@ -3390,7 +3485,9 @@ async fn handle_athena_network(operation: &str, payload: &Value) -> (u16, Value)
         "printer/pause" => nanodlp_printer_pause(payload).await,
         "printer/unpause" | "printer/resume" => nanodlp_printer_resume(payload).await,
         "printer/stop" | "printer/cancel" => nanodlp_printer_cancel(payload).await,
-        "printer/force-stop" | "printer/emergency-stop" => nanodlp_printer_emergency_stop(payload).await,
+        "printer/force-stop" | "printer/emergency-stop" => {
+            nanodlp_printer_emergency_stop(payload).await
+        }
         "printer/status" => nanodlp_printer_status(payload).await,
         "printer/webcam/info" => nanodlp_printer_webcam_info(payload).await,
         "printerData" => nanodlp_printer_data(payload).await,
@@ -3402,7 +3499,10 @@ async fn handle_athena_network(operation: &str, payload: &Value) -> (u16, Value)
 }
 
 fn plugin_operation_deadline(operation: &str) -> Duration {
-    let normalized_operation = operation.trim().trim_start_matches('/').trim_end_matches('/');
+    let normalized_operation = operation
+        .trim()
+        .trim_start_matches('/')
+        .trim_end_matches('/');
     let op = normalized_operation
         .strip_prefix("nanodlp/")
         .unwrap_or(normalized_operation);
@@ -3426,7 +3526,9 @@ fn plugin_operation_deadline(operation: &str) -> Duration {
 // Plugin dispatcher entry point
 // ---------------------------------------------------------------------------
 
-pub async fn dispatch_plugin_network_request(request_json: String) -> Result<PluginNetworkResponse, String> {
+pub async fn dispatch_plugin_network_request(
+    request_json: String,
+) -> Result<PluginNetworkResponse, String> {
     let request: Value =
         serde_json::from_str(&request_json).map_err(|e| format!("Invalid request JSON: {e}"))?;
 
@@ -3490,10 +3592,7 @@ pub async fn dispatch_plugin_network_request(request_json: String) -> Result<Plu
                 "[plugin-network] Operation timed out after {}s",
                 deadline.as_secs()
             );
-            (
-                503,
-                json!({ "error": "Network operation timed out" }),
-            )
+            (503, json!({ "error": "Network operation timed out" }))
         }
     };
 

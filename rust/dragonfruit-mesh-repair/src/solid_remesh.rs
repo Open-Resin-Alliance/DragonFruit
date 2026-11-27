@@ -19,8 +19,8 @@
 //! Like the tetrahedral mode it is a mode a caller names, never a stage of [`crate::repair`]: repair
 //! may not invent geometry, and a boolean does nothing else.
 
-use crate::{IndexedMesh, Vec3};
 use crate::tet_wrap::PhaseSink;
+use crate::{IndexedMesh, Vec3};
 
 /// How the rebuild is done and what is done with the result.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -455,20 +455,32 @@ mod tests {
     /// A closed cube, twelve triangles, one shell.
     fn cube() -> IndexedMesh {
         let corners = [
-            Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0),
-            Vec3::new(0.0, 0.0, 1.0), Vec3::new(1.0, 1.0, 0.0), Vec3::new(1.0, 0.0, 1.0),
-            Vec3::new(0.0, 1.0, 1.0), Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 1.0),
+            Vec3::new(0.0, 1.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
         ];
         let quads: [[u32; 4]; 6] = [
-            [0, 2, 4, 1], [0, 1, 5, 3], [0, 3, 6, 2],
-            [7, 5, 1, 4], [7, 4, 2, 6], [7, 6, 3, 5],
+            [0, 2, 4, 1],
+            [0, 1, 5, 3],
+            [0, 3, 6, 2],
+            [7, 5, 1, 4],
+            [7, 4, 2, 6],
+            [7, 6, 3, 5],
         ];
         let mut triangles = Vec::new();
         for q in quads {
             triangles.push([q[0], q[1], q[3]]);
             triangles.push([q[1], q[2], q[3]]);
         }
-        IndexedMesh { positions: corners.to_vec(), triangles }
+        IndexedMesh {
+            positions: corners.to_vec(),
+            triangles,
+        }
     }
 
     /// A closed solid is already a solid, so resolving it returns it. This is worth pinning: it is
@@ -478,10 +490,18 @@ mod tests {
     fn a_closed_solid_comes_back_a_closed_solid() {
         let outcome = solid_remesh(&cube(), &SolidRemeshOptions::default());
         let report = &outcome.report;
-        assert!(report.declined.is_none(), "a cube must resolve: {:?}", report.declined);
+        assert!(
+            report.declined.is_none(),
+            "a cube must resolve: {:?}",
+            report.declined
+        );
         assert_eq!(report.shells_before, 1);
         assert_eq!(report.shells_after, 1);
-        assert!(report.output_triangles >= 12, "got {}", report.output_triangles);
+        assert!(
+            report.output_triangles >= 12,
+            "got {}",
+            report.output_triangles
+        );
         assert_eq!(outcome.mesh.triangles.len(), report.output_triangles);
     }
 
@@ -494,8 +514,15 @@ mod tests {
         open.triangles.truncate(open.triangles.len() - 2);
         let outcome = solid_remesh(&open, &SolidRemeshOptions::default());
         let report = &outcome.report;
-        assert!(report.holes_filled > 0, "the boundary should have been capped");
-        assert!(report.declined.is_none(), "a capped solid must resolve: {:?}", report.declined);
+        assert!(
+            report.holes_filled > 0,
+            "the boundary should have been capped"
+        );
+        assert!(
+            report.declined.is_none(),
+            "a capped solid must resolve: {:?}",
+            report.declined
+        );
         assert_eq!(report.shells_after, 1);
         assert!(report.output_triangles > open.triangles.len());
     }
@@ -513,7 +540,10 @@ mod tests {
             triangles: vec![[0, 1, 2]],
         };
         let outcome = solid_remesh(&sliver, &SolidRemeshOptions::default());
-        assert!(outcome.report.declined.is_some(), "a single triangle is not a solid");
+        assert!(
+            outcome.report.declined.is_some(),
+            "a single triangle is not a solid"
+        );
         assert_eq!(outcome.mesh.triangles.len(), sliver.triangles.len());
         assert!(!outcome.report.cancelled);
     }
@@ -523,10 +553,14 @@ mod tests {
     fn stopping_returns_the_input_unchanged() {
         let mesh = cube();
         let mut seen: Vec<String> = Vec::new();
-        let outcome = solid_remesh_with_progress(&mesh, &SolidRemeshOptions::default(), Some(&mut |name, _| {
-            seen.push(name.to_string());
-            name != "fill"
-        }));
+        let outcome = solid_remesh_with_progress(
+            &mesh,
+            &SolidRemeshOptions::default(),
+            Some(&mut |name, _| {
+                seen.push(name.to_string());
+                name != "fill"
+            }),
+        );
         assert_eq!(seen, vec!["prepare", "simplify", "fill"]);
         assert!(outcome.report.cancelled);
         assert_eq!(outcome.mesh.triangles.len(), mesh.triangles.len());

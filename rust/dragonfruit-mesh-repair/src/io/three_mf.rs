@@ -215,7 +215,9 @@ fn expand_body(
             // was written in. A part's own components resolve against the part.
             let child_objects = match child_path {
                 Some(path) => parts.get(&normalize_part_name(path)).ok_or_else(|| {
-                    MeshRepairError::Parse(format!("3MF: component path {path} is not in the archive"))
+                    MeshRepairError::Parse(format!(
+                        "3MF: component path {path} is not in the archive"
+                    ))
                 })?,
                 None => objects,
             };
@@ -402,7 +404,9 @@ fn parse_mesh_block(block: &str) -> Result<Option<IndexedMesh>, MeshRepairError>
     }))
 }
 
-fn parse_components_block(block: &str) -> Result<Vec<(String, Affine, Option<String>)>, MeshRepairError> {
+fn parse_components_block(
+    block: &str,
+) -> Result<Vec<(String, Affine, Option<String>)>, MeshRepairError> {
     let mut components = Vec::new();
     let mut cursor = 0;
     while let Some(at) = find_element(block, cursor, "<component") {
@@ -555,8 +559,8 @@ mod tests {
         ));
         let file = File::create(&path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        let options =
-            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("3D/3dmodel.model", options).unwrap();
         zip.write_all(model_xml.as_bytes()).unwrap();
         zip.finish().unwrap();
@@ -576,8 +580,8 @@ mod tests {
         ));
         let file = File::create(&path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        let options =
-            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         for (name, xml) in entries {
             zip.start_file(*name, options).unwrap();
             zip.write_all(xml.as_bytes()).unwrap();

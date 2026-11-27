@@ -214,7 +214,8 @@ fn list_installed(root: &Path) -> Vec<InstalledSideloadedPlugin> {
 }
 
 fn inspect_file(path: &Path, root: &Path) -> Result<(Vec<u8>, package::Inspected, bool), String> {
-    let bytes = std::fs::read(path).map_err(|err| format!("Failed reading '{}': {err}", path.display()))?;
+    let bytes =
+        std::fs::read(path).map_err(|err| format!("Failed reading '{}': {err}", path.display()))?;
     let inspected = package::inspect(&bytes).map_err(|err| err.to_string())?;
 
     let existing = installed_dir(root, &inspected.manifest.id);
@@ -231,7 +232,10 @@ fn inspect_file(path: &Path, root: &Path) -> Result<(Vec<u8>, package::Inspected
         None => false,
     };
 
-    if !version_at_least(env!("CARGO_PKG_VERSION"), &inspected.manifest.min_app_version) {
+    if !version_at_least(
+        env!("CARGO_PKG_VERSION"),
+        &inspected.manifest.min_app_version,
+    ) {
         return Err(format!(
             "This package needs DragonFruit {} or newer; this build is {}.",
             inspected.manifest.min_app_version,
@@ -326,7 +330,8 @@ fn install_from_bytes(
     }
     let _ = std::fs::remove_dir_all(&backup);
 
-    read_installed(&target).ok_or_else(|| "Installed package is unreadable after install.".to_string())
+    read_installed(&target)
+        .ok_or_else(|| "Installed package is unreadable after install.".to_string())
 }
 
 /// Payload bytes of an unsealed package: the manifest hash covers the raw
@@ -448,8 +453,8 @@ pub async fn sideloaded_plugin_import_file<R: tauri::Runtime>(
     let id = header("x-plugin-id")?;
     let file_name = header("x-file-name")?;
     let root = root_dir(&app)?;
-    let manifest = installed_manifest(&root, &id)
-        .ok_or_else(|| format!("plugin '{id}' is not installed"))?;
+    let manifest =
+        installed_manifest(&root, &id).ok_or_else(|| format!("plugin '{id}' is not installed"))?;
     if !manifest
         .capabilities
         .contains(&package::Capability::FileType)
@@ -458,7 +463,9 @@ pub async fn sideloaded_plugin_import_file<R: tauri::Runtime>(
     }
 
     let container = tauri::async_runtime::spawn_blocking(move || {
-        crate::plugin_sideload_runtime::import_with_plugin(&root, &id, &manifest, &file_name, &bytes)
+        crate::plugin_sideload_runtime::import_with_plugin(
+            &root, &id, &manifest, &file_name, &bytes,
+        )
     })
     .await
     .map_err(|error| format!("import task failed: {error}"))??;
@@ -501,7 +508,9 @@ fn read_asset(root: &Path, id: &str, asset_path: &str) -> Result<SideloadedAsset
     }
     let metadata = std::fs::metadata(&path).map_err(|err| err.to_string())?;
     if !metadata.is_file() || metadata.len() > MAX_ASSET_BYTES {
-        return Err(format!("asset '{asset_path}' is not a readable image under {MAX_ASSET_BYTES} bytes"));
+        return Err(format!(
+            "asset '{asset_path}' is not a readable image under {MAX_ASSET_BYTES} bytes"
+        ));
     }
     let mime = image_mime(&path)
         .ok_or_else(|| format!("asset '{asset_path}' is not an image type this build serves"))?;
@@ -566,7 +575,8 @@ pub async fn sideloaded_plugin_remove<R: tauri::Runtime>(
     if !dir.exists() {
         return Ok(());
     }
-    std::fs::remove_dir_all(&dir).map_err(|err| format!("Failed removing '{}': {err}", dir.display()))
+    std::fs::remove_dir_all(&dir)
+        .map_err(|err| format!("Failed removing '{}': {err}", dir.display()))
 }
 
 #[cfg(test)]
@@ -643,15 +653,8 @@ mod tests {
         files.insert("bin/test/plugin".to_string(), b"#!/bin/sh\n".to_vec());
         let payload = package::build_payload_zip(&files).expect("payload");
         let manifest = test_manifest(&key, min_app_version);
-        package::build_package(
-            &manifest,
-            &payload,
-            passphrase,
-            [9u8; 24],
-            [8u8; 16],
-            &key,
-        )
-        .expect("package")
+        package::build_package(&manifest, &payload, passphrase, [9u8; 24], [8u8; 16], &key)
+            .expect("package")
     }
 
     fn temp_root(label: &str) -> PathBuf {
@@ -665,7 +668,11 @@ mod tests {
         root
     }
 
-    fn install(root: &Path, bytes: &[u8], passphrase: Option<&str>) -> Result<InstalledSideloadedPlugin, String> {
+    fn install(
+        root: &Path,
+        bytes: &[u8],
+        passphrase: Option<&str>,
+    ) -> Result<InstalledSideloadedPlugin, String> {
         let inspected = package::inspect(bytes).map_err(|err| err.to_string())?;
         install_from_bytes(root, bytes, &inspected, passphrase)
     }
@@ -737,7 +744,9 @@ mod tests {
         let key = test_key(5);
         let payload = package::build_payload_zip(&BTreeMap::new()).expect("payload");
         let manifest = package::Manifest {
-            printer_presets: vec![serde_json::json!({ "presetId": "example.full-printer", "manufacturer": "Example", "name": "Echo Printer" })],
+            printer_presets: vec![
+                serde_json::json!({ "presetId": "example.full-printer", "manufacturer": "Example", "name": "Echo Printer" }),
+            ],
             material_templates: vec![serde_json::json!({ "name": "Echo Standard Resin" })],
             ..test_manifest(&key, "0.1.0")
         };
@@ -749,7 +758,10 @@ mod tests {
 
         let installed = installed_manifest(&root, "alphabeta.test").expect("manifest");
         assert_eq!(installed.printer_presets.len(), 1);
-        assert_eq!(installed.printer_presets[0]["presetId"], "example.full-printer");
+        assert_eq!(
+            installed.printer_presets[0]["presetId"],
+            "example.full-printer"
+        );
         assert_eq!(installed.material_templates.len(), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -759,7 +771,10 @@ mod tests {
         let root = temp_root("minapp");
         let bytes = test_package(5, None, "99.0.0");
         let inspected = package::inspect(&bytes).expect("inspect");
-        assert!(!version_at_least(env!("CARGO_PKG_VERSION"), &inspected.manifest.min_app_version));
+        assert!(!version_at_least(
+            env!("CARGO_PKG_VERSION"),
+            &inspected.manifest.min_app_version
+        ));
         let temp_file = root.join("pkg.dfplugin");
         std::fs::write(&temp_file, &bytes).expect("write");
         let error = inspect_file(&temp_file, &root).expect_err("must refuse");
@@ -768,7 +783,11 @@ mod tests {
     }
 
     fn install_asset(root: &Path, plugin_id: &str, relative: &str, bytes: &[u8]) {
-        let path = root.join(plugin_id).join(PAYLOAD_DIR).join("assets").join(relative);
+        let path = root
+            .join(plugin_id)
+            .join(PAYLOAD_DIR)
+            .join("assets")
+            .join(relative);
         std::fs::create_dir_all(path.parent().expect("parent")).expect("asset dir");
         std::fs::write(path, bytes).expect("asset");
     }
@@ -776,7 +795,12 @@ mod tests {
     #[test]
     fn serves_a_preset_image_as_a_data_url() {
         let root = temp_root("asset");
-        install_asset(&root, "alphabeta.test", "printers/alpha.png", b"\x89PNG\r\n\x1a\n");
+        install_asset(
+            &root,
+            "alphabeta.test",
+            "printers/alpha.png",
+            b"\x89PNG\r\n\x1a\n",
+        );
 
         let asset = read_asset(&root, "alphabeta.test", "printers/alpha.png").expect("asset");
         assert_eq!(asset.mime, "image/png");
@@ -791,7 +815,13 @@ mod tests {
         install_asset(&root, "alphabeta.test", "alpha.png", b"\x89PNG\r\n\x1a\n");
         std::fs::write(root.join("outside.png"), b"\x89PNG\r\n\x1a\n").expect("outside");
 
-        for path in ["../outside.png", "printers/../../outside.png", "/etc/passwd", ".hidden.png", ""] {
+        for path in [
+            "../outside.png",
+            "printers/../../outside.png",
+            "/etc/passwd",
+            ".hidden.png",
+            "",
+        ] {
             assert!(
                 read_asset(&root, "alphabeta.test", path).is_err(),
                 "'{path}' must be refused"

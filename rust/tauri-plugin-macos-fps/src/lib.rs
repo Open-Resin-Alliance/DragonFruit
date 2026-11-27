@@ -33,8 +33,8 @@
 
 use serde::Deserialize;
 use tauri::{
-    plugin::{Builder, TauriPlugin},
     Manager, Webview, Wry,
+    plugin::{Builder, TauriPlugin},
 };
 
 #[cfg(target_os = "macos")]
@@ -164,10 +164,7 @@ pub fn init() -> TauriPlugin<Wry, Config> {
                             macos::disable_60fps_cap(ptr);
                         }))
                     {
-                        log::error!(
-                            "tauri-plugin-macos-fps: panic in on_webview_ready: {:?}",
-                            e
-                        );
+                        log::error!("tauri-plugin-macos-fps: panic in on_webview_ready: {:?}", e);
                     }
                 });
             }

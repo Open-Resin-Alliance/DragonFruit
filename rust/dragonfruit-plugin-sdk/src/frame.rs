@@ -81,7 +81,11 @@ impl From<io::Error> for FrameError {
     }
 }
 
-pub fn write_frame<W: Write>(writer: &mut W, kind: FrameKind, payload: &[u8]) -> Result<(), FrameError> {
+pub fn write_frame<W: Write>(
+    writer: &mut W,
+    kind: FrameKind,
+    payload: &[u8],
+) -> Result<(), FrameError> {
     let length = payload
         .len()
         .checked_add(1)
@@ -91,7 +95,9 @@ pub fn write_frame<W: Write>(writer: &mut W, kind: FrameKind, payload: &[u8]) ->
     writer
         .write_all(&length.to_le_bytes())
         .map_err(FrameError::from)?;
-    writer.write_all(&[kind.to_wire()]).map_err(FrameError::from)?;
+    writer
+        .write_all(&[kind.to_wire()])
+        .map_err(FrameError::from)?;
     writer.write_all(payload).map_err(FrameError::from)?;
     writer.flush().map_err(FrameError::from)
 }
@@ -110,7 +116,9 @@ pub fn read_frame<R: Read>(reader: &mut R) -> Result<Option<Frame>, FrameError> 
     }
 
     let mut kind_byte = [0u8; 1];
-    reader.read_exact(&mut kind_byte).map_err(FrameError::from)?;
+    reader
+        .read_exact(&mut kind_byte)
+        .map_err(FrameError::from)?;
     let kind = FrameKind::from_wire(kind_byte[0])?;
 
     let mut payload = vec![0u8; (length - 1) as usize];
@@ -155,16 +163,25 @@ mod tests {
         bytes.push(9);
         bytes.push(b'x');
         let mut cursor = std::io::Cursor::new(bytes);
-        assert_eq!(read_frame(&mut cursor).unwrap_err(), FrameError::UnknownKind(9));
+        assert_eq!(
+            read_frame(&mut cursor).unwrap_err(),
+            FrameError::UnknownKind(9)
+        );
     }
 
     #[test]
     fn oversized_and_empty_frames_are_refused() {
         let mut too_big = std::io::Cursor::new((MAX_FRAME_BYTES + 1).to_le_bytes().to_vec());
-        assert!(matches!(read_frame(&mut too_big), Err(FrameError::TooLarge(_))));
+        assert!(matches!(
+            read_frame(&mut too_big),
+            Err(FrameError::TooLarge(_))
+        ));
 
         let mut zero = std::io::Cursor::new(0u32.to_le_bytes().to_vec());
-        assert!(matches!(read_frame(&mut zero), Err(FrameError::TooLarge(0))));
+        assert!(matches!(
+            read_frame(&mut zero),
+            Err(FrameError::TooLarge(0))
+        ));
     }
 
     #[test]

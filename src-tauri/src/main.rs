@@ -1,18 +1,18 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod mesh_minima;
-mod mesh_repair;
+mod ao_vertex;
 mod hollow_source;
-mod organic_cut_source;
+mod mesh_minima;
+mod mesh_refine;
+mod mesh_repair;
 mod mesh_store;
 mod mesh_store_ipc;
-mod mesh_refine;
 mod network;
-mod ao_vertex;
+mod organic_cut_source;
 mod overhang;
 mod spacemouse;
-mod updater_channel;
 mod undo_spill;
+mod updater_channel;
 
 fn default_minimum_aa_alpha_percent() -> f32 {
     35.0
@@ -72,12 +72,13 @@ mod mallinfo_shim;
 mod plugin_registry;
 mod plugin_sideload;
 mod plugin_sideload_encoder;
+mod plugin_sideload_runtime;
 #[cfg(test)]
 mod plugin_test_support;
-mod plugin_sideload_runtime;
 mod webview_watchdog;
 mod window_state;
 
+use base64::Engine as _;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use serde::Deserialize;
 use serde::Serialize;
@@ -86,7 +87,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tauri::ipc::{InvokeBody, Response};
 use tauri::Emitter;
 use tauri::Manager;
-use base64::Engine as _;
 
 // Runtime type aliases — the feat/cef branch requires an explicit runtime
 // generic. These select Cef or Wry based on the active cargo feature.
@@ -3695,7 +3695,9 @@ fn reveal_main_window(app: &DragonFruitAppHandle) {
                 #[cfg(target_os = "windows")]
                 {
                     if let Err(error) = window.set_skip_taskbar(false) {
-                        log::warn!("[startup] Failed to restore the main window's taskbar entry: {error}");
+                        log::warn!(
+                            "[startup] Failed to restore the main window's taskbar entry: {error}"
+                        );
                     }
                 }
                 if let Err(error) = window.show() {
@@ -3882,7 +3884,8 @@ async fn read_print_layer_pngs(
             })
             .collect();
 
-        let mut packed: Vec<u8> = Vec::with_capacity(decoded.iter().map(|bytes| bytes.len() + 4).sum());
+        let mut packed: Vec<u8> =
+            Vec::with_capacity(decoded.iter().map(|bytes| bytes.len() + 4).sum());
         for bytes in decoded {
             packed.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
             packed.extend_from_slice(&bytes);
@@ -4121,7 +4124,10 @@ async fn fetch_sponsor_avatar(url: String) -> Result<String, String> {
     if parsed.scheme() != "https" {
         return Err("Only https URLs are allowed".to_string());
     }
-    let host = parsed.host_str().ok_or("Missing host")?.to_ascii_lowercase();
+    let host = parsed
+        .host_str()
+        .ok_or("Missing host")?
+        .to_ascii_lowercase();
     const ALLOWED_HOSTS: &[&str] = &[
         "opencollective-production.s3.us-west-1.amazonaws.com",
         "opencollective-production.s3-us-west-1.amazonaws.com",
@@ -4147,7 +4153,10 @@ async fn fetch_sponsor_avatar(url: String) -> Result<String, String> {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("image/png")
         .to_string();
-    let bytes = resp.bytes().await.map_err(|e| format!("Read failed: {e}"))?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("Read failed: {e}"))?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Ok(format!("data:{content_type};base64,{b64}"))
 }
@@ -4180,7 +4189,10 @@ async fn fetch_github_plugin_resource(url: String) -> Result<GithubPluginResourc
     if parsed.scheme() != "https" {
         return Err("Only https URLs are allowed".to_string());
     }
-    let host = parsed.host_str().ok_or("Missing host")?.to_ascii_lowercase();
+    let host = parsed
+        .host_str()
+        .ok_or("Missing host")?
+        .to_ascii_lowercase();
     const ALLOWED_HOSTS: &[&str] = &["github.com", "api.github.com", "raw.githubusercontent.com"];
     if !ALLOWED_HOSTS.contains(&host.as_str()) {
         return Err(format!("Host not allowed: {host}"));
@@ -4205,7 +4217,10 @@ async fn fetch_github_plugin_resource(url: String) -> Result<GithubPluginResourc
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
         .to_string();
-    let bytes = resp.bytes().await.map_err(|e| format!("Read failed: {e}"))?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("Read failed: {e}"))?;
 
     Ok(GithubPluginResource {
         status,
@@ -4226,8 +4241,15 @@ async fn fetch_external_text(url: String) -> Result<String, String> {
     if parsed.scheme() != "https" {
         return Err("Only https URLs are allowed".to_string());
     }
-    let host = parsed.host_str().ok_or("Missing host")?.to_ascii_lowercase();
-    const ALLOWED_HOSTS: &[&str] = &["opencollective.com", "www.opencollective.com", "api.opencollective.com"];
+    let host = parsed
+        .host_str()
+        .ok_or("Missing host")?
+        .to_ascii_lowercase();
+    const ALLOWED_HOSTS: &[&str] = &[
+        "opencollective.com",
+        "www.opencollective.com",
+        "api.opencollective.com",
+    ];
     if !ALLOWED_HOSTS.contains(&host.as_str()) {
         return Err(format!("Host not allowed: {host}"));
     }

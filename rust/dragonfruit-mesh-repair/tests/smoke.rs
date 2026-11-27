@@ -271,10 +271,16 @@ fn a_hole_in_a_curved_wall_is_patched_tangent_to_it() {
         let (c, d) = (index(ROWS - 1, segment), index(ROWS - 1, segment + 1));
         triangles.push([top, c, d]);
     }
-    let mut mesh = IndexedMesh { positions, triangles };
+    let mut mesh = IndexedMesh {
+        positions,
+        triangles,
+    };
 
     let before = evaluate(&mesh);
-    assert_eq!(before.holes, 1, "the removed block must leave exactly one loop");
+    assert_eq!(
+        before.holes, 1,
+        "the removed block must leave exactly one loop"
+    );
 
     let before_triangles = mesh.triangles.len();
     let added = dragonfruit_mesh_repair::holes::holes_all(&mut mesh, usize::MAX);
@@ -398,15 +404,22 @@ fn a_cavity_keeps_its_orientation() {
         mesh.positions.push(corner);
     }
     let inner = [
-        [0u32, 2, 1], [0, 3, 2],
-        [4, 5, 6], [4, 6, 7],
-        [0, 1, 5], [0, 5, 4],
-        [3, 7, 6], [3, 6, 2],
-        [0, 4, 7], [0, 7, 3],
-        [1, 2, 6], [1, 6, 5],
+        [0u32, 2, 1],
+        [0, 3, 2],
+        [4, 5, 6],
+        [4, 6, 7],
+        [0, 1, 5],
+        [0, 5, 4],
+        [3, 7, 6],
+        [3, 6, 2],
+        [0, 4, 7],
+        [0, 7, 3],
+        [1, 2, 6],
+        [1, 6, 5],
     ];
     for face in inner {
-        mesh.triangles.push([face[0] + base, face[1] + base, face[2] + base]);
+        mesh.triangles
+            .push([face[0] + base, face[1] + base, face[2] + base]);
     }
     assert_eq!(mesh.triangles.len(), outer_faces * 2);
 
@@ -512,19 +525,29 @@ fn small_shells_that_are_not_scraps_are_kept() {
             mesh.positions.push(corner);
         }
         for face in [
-            [0u32, 2, 1], [0, 3, 2],
-            [4, 5, 6], [4, 6, 7],
-            [0, 1, 5], [0, 5, 4],
-            [3, 7, 6], [3, 6, 2],
-            [0, 4, 7], [0, 7, 3],
-            [1, 2, 6], [1, 6, 5],
+            [0u32, 2, 1],
+            [0, 3, 2],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 4],
+            [3, 7, 6],
+            [3, 6, 2],
+            [0, 4, 7],
+            [0, 7, 3],
+            [1, 2, 6],
+            [1, 6, 5],
         ] {
-            mesh.triangles.push([face[0] + base, face[1] + base, face[2] + base]);
+            mesh.triangles
+                .push([face[0] + base, face[1] + base, face[2] + base]);
         }
     }
 
     let before = analyze(&mesh);
-    assert_eq!(before.connected_components, 13, "the fixture is a model and 12 pillars");
+    assert_eq!(
+        before.connected_components, 13,
+        "the fixture is a model and 12 pillars"
+    );
 
     let outcome = repair(mesh, &RepairOptions::default());
     let after = &outcome.report.post;

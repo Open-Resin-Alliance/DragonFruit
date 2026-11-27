@@ -52,7 +52,8 @@ fn main() -> Result<(), String> {
     };
 
     let bytes = std::fs::read(Path::new(mesh_path)).map_err(|e| format!("{mesh_path}: {e}"))?;
-    let floats: &[f32] = bytemuck::try_cast_slice(&bytes).map_err(|e| format!("{mesh_path}: {e}"))?;
+    let floats: &[f32] =
+        bytemuck::try_cast_slice(&bytes).map_err(|e| format!("{mesh_path}: {e}"))?;
     let mesh = IndexedMesh::from_triangle_soup(floats, MERGE_EPSILON);
     let json = std::fs::read_to_string(Path::new(options_path))
         .map_err(|e| format!("{options_path}: {e}"))?;
@@ -95,7 +96,11 @@ fn main() -> Result<(), String> {
             "[cut] part {i}: {} tris in {} shell(s){}",
             part.triangle_count(),
             shells.len(),
-            if small.is_empty() { String::new() } else { format!(", the loose ones {small:?}") },
+            if small.is_empty() {
+                String::new()
+            } else {
+                format!(", the loose ones {small:?}")
+            },
         );
     }
 

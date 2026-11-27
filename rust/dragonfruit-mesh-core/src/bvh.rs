@@ -282,7 +282,12 @@ impl Bvh {
             return false;
         }
         let inv_dir = inverse_direction(dir);
-        let entry = node_entry(origin, inv_dir, &self.nodes[self.root as usize], max_distance);
+        let entry = node_entry(
+            origin,
+            inv_dir,
+            &self.nodes[self.root as usize],
+            max_distance,
+        );
         if entry.is_infinite() {
             return false;
         }
@@ -414,7 +419,13 @@ impl Bvh {
         }
     }
 
-    fn traverse_count<F>(&self, mesh: &IndexedMesh, origin: Vec3, dir: Vec3, include_face: &F) -> u32
+    fn traverse_count<F>(
+        &self,
+        mesh: &IndexedMesh,
+        origin: Vec3,
+        dir: Vec3,
+        include_face: &F,
+    ) -> u32
     where
         F: Fn(u32) -> bool,
     {
@@ -524,7 +535,13 @@ fn build_rec(
 
 #[inline]
 fn inverse_direction(dir: Vec3) -> Vec3 {
-    let axis = |v: f32| if v.abs() > 1e-20 { 1.0 / v } else { f32::INFINITY };
+    let axis = |v: f32| {
+        if v.abs() > 1e-20 {
+            1.0 / v
+        } else {
+            f32::INFINITY
+        }
+    };
     Vec3::new(axis(dir.x), axis(dir.y), axis(dir.z))
 }
 
@@ -877,9 +894,18 @@ mod gpu_layout_tests {
         };
         let bytes: &[u8] = bytemuck::bytes_of(&node);
         assert_eq!(bytes.len(), 32);
-        assert_eq!(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]), 1.0);
-        assert_eq!(u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]), 7);
-        assert_eq!(u32::from_le_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]), 8);
+        assert_eq!(
+            f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            1.0
+        );
+        assert_eq!(
+            u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]),
+            7
+        );
+        assert_eq!(
+            u32::from_le_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]),
+            8
+        );
     }
 
     #[test]
@@ -949,6 +975,9 @@ mod gpu_layout_tests {
             }
             compared += 1;
         }
-        assert!(compared > 500 && hits > 50, "the test has to actually hit things: {hits} hits");
+        assert!(
+            compared > 500 && hits > 50,
+            "the test has to actually hit things: {hits} hits"
+        );
     }
 }

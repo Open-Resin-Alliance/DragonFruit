@@ -50,8 +50,10 @@ pub fn load<R: Runtime>(app: &AppHandle<R>) -> Option<WindowState> {
 /// after unplugging an external display.
 pub fn restore<R: Runtime>(window: &WebviewWindow<R>, state: &WindowState) {
     let monitors = window.available_monitors().unwrap_or_default();
-    let work_areas: Vec<PhysicalRect<i32, u32>> =
-        monitors.iter().map(|monitor| *monitor.work_area()).collect();
+    let work_areas: Vec<PhysicalRect<i32, u32>> = monitors
+        .iter()
+        .map(|monitor| *monitor.work_area())
+        .collect();
     if work_areas.iter().any(|work| rect_inside(state, work)) {
         apply_settled(window, state.width, state.height, state.x, state.y);
     } else {

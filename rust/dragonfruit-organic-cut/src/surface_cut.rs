@@ -66,7 +66,9 @@ pub fn seams_enclose_a_piece(mesh: &IndexedMesh, loops: &[Vec<Vec3>]) -> SeamVer
     pieces.sort_unstable();
     match pieces.len() {
         0 | 1 => SeamVerdict::NotSeparating,
-        _ => SeamVerdict::Enclosed { piece_faces: pieces[0] },
+        _ => SeamVerdict::Enclosed {
+            piece_faces: pieces[0],
+        },
     }
 }
 
@@ -78,7 +80,11 @@ fn median_edge_length(mesh: &IndexedMesh) -> f32 {
         .triangles
         .iter()
         .step_by(stride)
-        .map(|t| mesh.positions[t[1] as usize].sub(mesh.positions[t[0] as usize]).length())
+        .map(|t| {
+            mesh.positions[t[1] as usize]
+                .sub(mesh.positions[t[0] as usize])
+                .length()
+        })
         .filter(|l| *l > 0.0)
         .collect();
     if lengths.is_empty() {
@@ -193,15 +199,33 @@ mod tests {
     fn cube(size: f32) -> IndexedMesh {
         let s = size;
         let positions = vec![
-            Vec3::new(0.0, 0.0, 0.0), Vec3::new(s, 0.0, 0.0), Vec3::new(s, s, 0.0), Vec3::new(0.0, s, 0.0),
-            Vec3::new(0.0, 0.0, s), Vec3::new(s, 0.0, s), Vec3::new(s, s, s), Vec3::new(0.0, s, s),
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(s, 0.0, 0.0),
+            Vec3::new(s, s, 0.0),
+            Vec3::new(0.0, s, 0.0),
+            Vec3::new(0.0, 0.0, s),
+            Vec3::new(s, 0.0, s),
+            Vec3::new(s, s, s),
+            Vec3::new(0.0, s, s),
         ];
         let triangles = vec![
-            [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7],
-            [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5],
-            [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7],
+            [0, 2, 1],
+            [0, 3, 2],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 4],
+            [1, 2, 6],
+            [1, 6, 5],
+            [2, 3, 7],
+            [2, 7, 6],
+            [3, 0, 4],
+            [3, 4, 7],
         ];
-        IndexedMesh { positions, triangles }
+        IndexedMesh {
+            positions,
+            triangles,
+        }
     }
 
     /// A torus — the shape a tentacle makes when it leaves the body and fuses
@@ -224,7 +248,10 @@ mod tests {
                 triangles.push([idx(i, j), idx(i + 1, j + 1), idx(i, j + 1)]);
             }
         }
-        IndexedMesh { positions, triangles }
+        IndexedMesh {
+            positions,
+            triangles,
+        }
     }
 
     /// A ring round the torus's tube at `angle` — the loop a user draws to lop a
@@ -254,7 +281,10 @@ mod tests {
             })
             .collect();
         assert!(
-            matches!(seams_enclose_a_piece(&model, &[patch]), SeamVerdict::Enclosed { .. }),
+            matches!(
+                seams_enclose_a_piece(&model, &[patch]),
+                SeamVerdict::Enclosed { .. }
+            ),
             "a loop drawn on the skin encloses the patch inside it",
         );
     }
@@ -275,7 +305,10 @@ mod tests {
                 }
             })
             .collect();
-        assert_eq!(seams_enclose_a_piece(&model, &[seam]), SeamVerdict::TooCoarse);
+        assert_eq!(
+            seams_enclose_a_piece(&model, &[seam]),
+            SeamVerdict::TooCoarse
+        );
     }
 
     #[test]
@@ -293,7 +326,10 @@ mod tests {
             "one loop round a handle can never free anything",
         );
         assert!(
-            matches!(seams_enclose_a_piece(&model, &[one, two]), SeamVerdict::Enclosed { .. }),
+            matches!(
+                seams_enclose_a_piece(&model, &[one, two]),
+                SeamVerdict::Enclosed { .. }
+            ),
             "two loops round the same handle do enclose a piece",
         );
     }

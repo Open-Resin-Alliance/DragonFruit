@@ -42,9 +42,9 @@ pub fn scan_layer(
 #[cfg(test)]
 mod tests {
     use crate::model::*;
-    use crate::scan::*;
-    use crate::rle::*;
     use crate::rle::rle_encode;
+    use crate::rle::*;
+    use crate::scan::*;
 
     #[test]
     fn first_layer_all_candidates() {

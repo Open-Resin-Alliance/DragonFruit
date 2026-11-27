@@ -127,9 +127,7 @@ pub fn ao_available() -> bool {
 #[tauri::command]
 pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, String> {
     if !dragonfruit_ao_gpu::has_discrete_adapter() {
-        return Err(
-            "bake_vertex_occlusion: AO is disabled without a discrete GPU".to_string(),
-        );
+        return Err("bake_vertex_occlusion: AO is disabled without a discrete GPU".to_string());
     }
 
     // Two ways in. A JSON body names a mesh the loader registered for this bake
@@ -172,8 +170,8 @@ pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, Str
         InvokeBody::Json(_) => unreachable!("JSON answered above"),
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let soup: &[f32] = bytemuck::try_cast_slice(&bytes)
-            .map_err(|e| format!("positions cast: {e}"))?;
+        let soup: &[f32] =
+            bytemuck::try_cast_slice(&bytes).map_err(|e| format!("positions cast: {e}"))?;
         if soup.len() % 9 != 0 {
             return Err(format!(
                 "positions are not a multiple of 9 floats: {}",
@@ -228,4 +226,3 @@ pub async fn bake_vertex_occlusion(request: Request<'_>) -> Result<Response, Str
     .await
     .map_err(|e| format!("vertex occlusion task panicked: {e}"))?
 }
-

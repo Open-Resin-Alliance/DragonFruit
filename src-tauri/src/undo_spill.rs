@@ -68,11 +68,17 @@ pub async fn undo_spill_append(request: Request<'_>) -> Result<u64, String> {
         OpenOptions::new().append(true).open(&path)
     }
     .map_err(|e| format!("undo spill: open {}: {e}", path.display()))?;
-    let length = file.metadata().map_err(|e| format!("undo spill: {e}"))?.len();
+    let length = file
+        .metadata()
+        .map_err(|e| format!("undo spill: {e}"))?
+        .len();
     if length != offset {
-        return Err(format!("undo spill: chunk at {offset} but the file holds {length} bytes"));
+        return Err(format!(
+            "undo spill: chunk at {offset} but the file holds {length} bytes"
+        ));
     }
-    file.write_all(bytes).map_err(|e| format!("undo spill: write: {e}"))?;
+    file.write_all(bytes)
+        .map_err(|e| format!("undo spill: write: {e}"))?;
     Ok(offset + bytes.len() as u64)
 }
 

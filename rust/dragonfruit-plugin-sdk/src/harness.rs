@@ -134,21 +134,35 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
         Err(error) => return Err(io::Error::other(error.to_string())),
     };
     if hello.kind != FrameKind::Json {
-        return fail(&mut output, "malformed-handshake", "expected a JSON hello frame");
+        return fail(
+            &mut output,
+            "malformed-handshake",
+            "expected a JSON hello frame",
+        );
     }
 
     let message: HostMessage = match serde_json::from_slice(&hello.payload) {
         Ok(message) => message,
         Err(error) => {
-            return fail(&mut output, "malformed-handshake", &format!("hello is not a control message: {error}"));
+            return fail(
+                &mut output,
+                "malformed-handshake",
+                &format!("hello is not a control message: {error}"),
+            );
         }
     };
 
     let (proto, transport) = match message {
-        HostMessage::Hello { proto, transport, .. } => (proto, transport),
+        HostMessage::Hello {
+            proto, transport, ..
+        } => (proto, transport),
         HostMessage::Shutdown => return Ok(()),
         _ => {
-            return fail(&mut output, "unexpected-frame", "a request arrived before the handshake completed");
+            return fail(
+                &mut output,
+                "unexpected-frame",
+                "a request arrived before the handshake completed",
+            );
         }
     };
     if proto != PROTOCOL_VERSION {
@@ -176,20 +190,32 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
             Err(error) => return Err(io::Error::other(error.to_string())),
         };
         if frame.kind != FrameKind::Json {
-            return fail(&mut output, "unexpected-frame", "bulk frames are not part of the control protocol");
+            return fail(
+                &mut output,
+                "unexpected-frame",
+                "bulk frames are not part of the control protocol",
+            );
         }
 
         let message: HostMessage = match serde_json::from_slice(&frame.payload) {
             Ok(message) => message,
             Err(error) => {
-                return fail(&mut output, "malformed-message", &format!("not a control message: {error}"));
+                return fail(
+                    &mut output,
+                    "malformed-message",
+                    &format!("not a control message: {error}"),
+                );
             }
         };
 
         match message {
             HostMessage::Shutdown => return Ok(()),
             HostMessage::Hello { .. } => {
-                return fail(&mut output, "unexpected-frame", "the handshake was already answered");
+                return fail(
+                    &mut output,
+                    "unexpected-frame",
+                    "the handshake was already answered",
+                );
             }
             HostMessage::Network { id, request } => {
                 let (status, body) = capabilities.network(request);
@@ -203,13 +229,21 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                 job,
             } => {
                 if session.is_some() {
-                    return fail(&mut output, "encode-in-progress", "one encode session at a time");
+                    return fail(
+                        &mut output,
+                        "encode-in-progress",
+                        "one encode session at a time",
+                    );
                 }
                 let layout = if transport == Transport::Pipe {
                     None
                 } else {
                     let Some(ring_bytes) = ring.as_deref_mut() else {
-                        return fail(&mut output, "ring-required", "this host offered no ring for layer data");
+                        return fail(
+                            &mut output,
+                            "ring-required",
+                            "this host offered no ring for layer data",
+                        );
                     };
                     match read_layout(ring_bytes) {
                         Ok(layout) => Some(layout),
@@ -217,7 +251,11 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                     }
                 };
                 let Some(mut encoder) = capabilities.encoder() else {
-                    return fail(&mut output, "encoder-unsupported", "the plugin offers no encoder");
+                    return fail(
+                        &mut output,
+                        "encoder-unsupported",
+                        "the plugin offers no encoder",
+                    );
                 };
                 if let Err(message) = encoder.begin(EncodeStart {
                     format: &format,
@@ -254,10 +292,18 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
             }
             HostMessage::EncodeEnd { id, output: target } => {
                 let Some(mut state) = session.take() else {
-                    return fail(&mut output, "unexpected-frame", "no encode session to finish");
+                    return fail(
+                        &mut output,
+                        "unexpected-frame",
+                        "no encode session to finish",
+                    );
                 };
                 if state.id != id {
-                    return fail(&mut output, "unexpected-frame", "end id does not match the session");
+                    return fail(
+                        &mut output,
+                        "unexpected-frame",
+                        "end id does not match the session",
+                    );
                 }
                 match state.encoder.finish(Path::new(&target)) {
                     Ok(bytes) => {
@@ -283,23 +329,43 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                 bytes,
             } => {
                 let Some(state) = session.as_mut() else {
-                    return fail(&mut output, "unexpected-frame", "a layer arrived with no encode session");
+                    return fail(
+                        &mut output,
+                        "unexpected-frame",
+                        "a layer arrived with no encode session",
+                    );
                 };
                 if state.id != id {
-                    return fail(&mut output, "unexpected-frame", "layer id does not match the session");
+                    return fail(
+                        &mut output,
+                        "unexpected-frame",
+                        "layer id does not match the session",
+                    );
                 }
 
                 if transport == Transport::Pipe {
                     // The bytes are the next frame, not a slot: the host writes the
                     // announcement and then one bulk frame with the layer payload.
                     let Some(bulk) = read_frame(&mut input).map_err(to_io)? else {
-                        return fail(&mut output, "layer-missing", "the layer announcement had no payload frame");
+                        return fail(
+                            &mut output,
+                            "layer-missing",
+                            "the layer announcement had no payload frame",
+                        );
                     };
                     if bulk.kind != FrameKind::Bulk {
-                        return fail(&mut output, "layer-malformed", "the layer payload must be a bulk frame");
+                        return fail(
+                            &mut output,
+                            "layer-malformed",
+                            "the layer payload must be a bulk frame",
+                        );
                     }
                     if bulk.payload.len() as u64 != bytes {
-                        return fail(&mut output, "layer-malformed", "the bulk frame does not match its announcement");
+                        return fail(
+                            &mut output,
+                            "layer-malformed",
+                            "the bulk frame does not match its announcement",
+                        );
                     }
                     if let Err(message) = state.encoder.layer(LayerRef {
                         index,
@@ -325,7 +391,11 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                 }
 
                 let Some(ring_bytes) = ring.as_deref_mut() else {
-                    return fail(&mut output, "ring-required", "this host offered no ring for layer data");
+                    return fail(
+                        &mut output,
+                        "ring-required",
+                        "this host offered no ring for layer data",
+                    );
                 };
 
                 {
@@ -333,12 +403,23 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                     let view = match slot_view(ring_bytes, layout, slot) {
                         Ok(Some(view)) => view,
                         Ok(None) => {
-                            return fail(&mut output, "slot-empty", "the published slot holds nothing");
+                            return fail(
+                                &mut output,
+                                "slot-empty",
+                                "the published slot holds nothing",
+                            );
                         }
                         Err(error) => return fail(&mut output, "ring-invalid", &error.to_string()),
                     };
-                    if view.layer_index != index || view.kind != kind || view.payload.len() as u64 != bytes {
-                        return fail(&mut output, "slot-mismatch", "the slot does not match its announcement");
+                    if view.layer_index != index
+                        || view.kind != kind
+                        || view.payload.len() as u64 != bytes
+                    {
+                        return fail(
+                            &mut output,
+                            "slot-mismatch",
+                            "the slot does not match its announcement",
+                        );
                     }
                     if let Err(message) = state.encoder.layer(LayerRef {
                         index: view.layer_index,
@@ -352,7 +433,11 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                     }
                 }
 
-                if let Err(error) = release_slot(ring_bytes, state.layout.as_ref().expect("ring layout"), slot) {
+                if let Err(error) = release_slot(
+                    ring_bytes,
+                    state.layout.as_ref().expect("ring layout"),
+                    slot,
+                ) {
                     return fail(&mut output, "ring-invalid", &error.to_string());
                 }
                 write_json(&mut output, &PluginMessage::SlotFree { slot }).map_err(to_io)?;
@@ -367,7 +452,6 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                     },
                 )
                 .map_err(to_io)?;
-
             }
             HostMessage::Import {
                 id,
@@ -375,20 +459,18 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                 output: target,
             } => {
                 let Some(mut importer) = capabilities.importer() else {
-                    return fail(&mut output, "import-unsupported", "the plugin offers no importer");
+                    return fail(
+                        &mut output,
+                        "import-unsupported",
+                        "the plugin offers no importer",
+                    );
                 };
                 let input_path = PathBuf::from(&input);
                 let target_path = PathBuf::from(&target);
                 match importer.import(&input_path, &target_path) {
                     Ok(()) => {
-                        write_json(
-                            &mut output,
-                            &PluginMessage::ImportDone {
-                                id,
-                                path: target,
-                            },
-                        )
-                        .map_err(to_io)?;
+                        write_json(&mut output, &PluginMessage::ImportDone { id, path: target })
+                            .map_err(to_io)?;
                     }
                     Err(message) => return fail(&mut output, "import-failed", &message),
                 }
@@ -446,11 +528,17 @@ mod tests {
 
     impl PluginCapabilities for EchoNetwork {
         fn network(&self, request: serde_json::Value) -> (u16, serde_json::Value) {
-            let operation = request.get("operation").and_then(|value| value.as_str()).unwrap_or("");
+            let operation = request
+                .get("operation")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
             if operation == "printer/status" {
                 (200, serde_json::json!({ "state": "printing" }))
             } else {
-                (404, serde_json::json!({ "error": format!("unknown operation: {operation}") }))
+                (
+                    404,
+                    serde_json::json!({ "error": format!("unknown operation: {operation}") }),
+                )
             }
         }
     }
@@ -471,7 +559,11 @@ mod tests {
         }
         fn finish(&mut self, output: &Path) -> Result<u64, String> {
             self.last_output = Some(output.to_path_buf());
-            Ok(self.layers.iter().map(|(_, bytes)| bytes.len() as u64).sum())
+            Ok(self
+                .layers
+                .iter()
+                .map(|(_, bytes)| bytes.len() as u64)
+                .sum())
         }
     }
 
@@ -520,7 +612,11 @@ mod tests {
             Ok(())
         }
         fn layer(&mut self, layer: LayerRef<'_>) -> Result<(), String> {
-            self.0.layers.lock().expect("layers").push(layer.bytes.to_vec());
+            self.0
+                .layers
+                .lock()
+                .expect("layers")
+                .push(layer.bytes.to_vec());
             self.0.tanks.lock().expect("tanks").push(layer.tank);
             Ok(())
         }
@@ -528,7 +624,9 @@ mod tests {
             Ok(1)
         }
         fn cancel(&mut self) {
-            self.0.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.0
+                .cancelled
+                .store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
@@ -601,7 +699,10 @@ mod tests {
         )
         .expect("serve");
 
-        assert_eq!(seen.layers.lock().expect("layers").as_slice(), &[vec![1u8, 2, 3, 4]]);
+        assert_eq!(
+            seen.layers.lock().expect("layers").as_slice(),
+            &[vec![1u8, 2, 3, 4]]
+        );
         assert_eq!(
             seen.tanks.lock().expect("tanks").as_slice(),
             &[2],
@@ -610,7 +711,11 @@ mod tests {
         let messages = sent_messages(&output);
         assert!(messages.iter().any(|message| matches!(
             message,
-            PluginMessage::Progress { done: 1, total: 1, .. }
+            PluginMessage::Progress {
+                done: 1,
+                total: 1,
+                ..
+            }
         )));
         assert!(matches!(
             messages.last(),
@@ -646,10 +751,9 @@ mod tests {
 
         assert!(seen.cancelled.load(std::sync::atomic::Ordering::SeqCst));
         let messages = sent_messages(&output);
-        assert!(messages.iter().any(|message| matches!(
-            message,
-            PluginMessage::EncodeCancelled { id: 9 }
-        )));
+        assert!(messages
+            .iter()
+            .any(|message| matches!(message, PluginMessage::EncodeCancelled { id: 9 })));
     }
 
     #[test]
@@ -790,8 +894,18 @@ mod tests {
 
         for (index, payload) in layers.iter().enumerate() {
             let slot = index as u32;
-            publish_slot(&mut buffer.0, &LAYOUT, slot, SlotKind::Png, index as u32, 0, payload, 4096, 2560)
-                .expect("publish");
+            publish_slot(
+                &mut buffer.0,
+                &LAYOUT,
+                slot,
+                SlotKind::Png,
+                index as u32,
+                0,
+                payload,
+                4096,
+                2560,
+            )
+            .expect("publish");
             write_json(
                 &mut bytes,
                 &HostMessage::EncodeLayer {

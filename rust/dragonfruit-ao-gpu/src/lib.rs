@@ -18,9 +18,7 @@
 
 use dragonfruit_mesh_core::bvh::Bvh;
 use dragonfruit_mesh_core::mesh::{IndexedMesh, Vec3};
-use dragonfruit_mesh_core::vertex_occlusion::{
-    smooth_over_mesh_graph, SMOOTHING_PASSES,
-};
+use dragonfruit_mesh_core::vertex_occlusion::{smooth_over_mesh_graph, SMOOTHING_PASSES};
 
 const REACH_RATIO: f32 = 0.08;
 const FALLOFF_PLATEAU: f32 = 0.15;
@@ -116,7 +114,11 @@ static GPU: std::sync::LazyLock<Option<Gpu>> = std::sync::LazyLock::new(|| {
         ..Default::default()
     }))
     .ok()?;
-    Some(Gpu { device, queue, adapter: name })
+    Some(Gpu {
+        device,
+        queue,
+        adapter: name,
+    })
 });
 
 fn gpu() -> Option<&'static Gpu> {
@@ -133,12 +135,7 @@ pub fn adapter_name() -> Option<&'static str> {
     gpu().map(|g| g.adapter.as_str())
 }
 
-fn writable(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    label: &str,
-    bytes: &[u8],
-) -> wgpu::Buffer {
+fn writable(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, bytes: &[u8]) -> wgpu::Buffer {
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size: bytes.len() as u64,
@@ -227,9 +224,24 @@ pub fn bake_raw(mesh: &IndexedMesh, rays: usize, rotate: bool) -> Result<Vec<f32
     let queue = &gpu.queue;
     let node_buf = writable(device, queue, "nodes", bytemuck::cast_slice(node_words));
     let face_buf = writable(device, queue, "faces", bytemuck::cast_slice(layout.faces));
-    let pos_buf = writable(device, queue, "positions", bytemuck::cast_slice(&positions_flat));
-    let idx_buf = writable(device, queue, "indices", bytemuck::cast_slice(&indices_flat));
-    let nrm_buf = writable(device, queue, "normals", bytemuck::cast_slice(&normals_flat));
+    let pos_buf = writable(
+        device,
+        queue,
+        "positions",
+        bytemuck::cast_slice(&positions_flat),
+    );
+    let idx_buf = writable(
+        device,
+        queue,
+        "indices",
+        bytemuck::cast_slice(&indices_flat),
+    );
+    let nrm_buf = writable(
+        device,
+        queue,
+        "normals",
+        bytemuck::cast_slice(&normals_flat),
+    );
     let param_buf = {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("params"),
@@ -266,13 +278,34 @@ pub fn bake_raw(mesh: &IndexedMesh, rays: usize, rotate: bool) -> Result<Vec<f32
         label: None,
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: node_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: face_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: pos_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: idx_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 4, resource: nrm_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 5, resource: param_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 6, resource: out_buf.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: node_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: face_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: pos_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: idx_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: nrm_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: param_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: out_buf.as_entire_binding(),
+            },
         ],
     });
 
@@ -316,7 +349,8 @@ pub fn bake_raw(mesh: &IndexedMesh, rays: usize, rotate: bool) -> Result<Vec<f32
         params.vertex_start = params.vertex_end;
     }
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     encoder.copy_buffer_to_buffer(&out_buf, 0, &readback, 0, out_size);
     queue.submit(Some(encoder.finish()));
     device

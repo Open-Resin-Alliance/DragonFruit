@@ -148,7 +148,8 @@ mod tests {
             }
             stl.extend_from_slice(&[0u8; 2]);
         }
-        let path = std::env::temp_dir().join(format!("df-coarse-as-written-{}.stl", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("df-coarse-as-written-{}.stl", std::process::id()));
         std::fs::write(&path, &stl).unwrap();
 
         let single = load_mesh_from_path(&path).unwrap();

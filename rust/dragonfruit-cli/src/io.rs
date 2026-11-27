@@ -7,10 +7,10 @@ use std::path::Path;
 
 use serde::{de::DeserializeOwned, Serialize};
 
-use dragonfruit_slicing_engine::geometry::Triangle;
+use dragonfruit_islands::model::{RleLabels, RleMask};
 #[cfg(test)]
 use dragonfruit_slicing_engine::geometry::parse_triangles;
-use dragonfruit_islands::model::{RleLabels, RleMask};
+use dragonfruit_slicing_engine::geometry::Triangle;
 
 // ---------------------------------------------------------------------------
 // Slice job
@@ -35,7 +35,9 @@ pub fn slice_job_from_json(
         .as_object_mut()
         .ok_or("The slice job must be a JSON object")?;
     if object.contains_key("triangles_xyz") {
-        return Err("The slice job must not carry triangles_xyz; the mesh comes from the input file".into());
+        return Err(
+            "The slice job must not carry triangles_xyz; the mesh comes from the input file".into(),
+        );
     }
     object.insert("triangles_xyz".into(), serde_json::Value::Array(Vec::new()));
     let mut job: dragonfruit_slicing_engine::types::SliceJobV3 =
@@ -63,7 +65,9 @@ pub fn load_binary_stl(path: &Path) -> Result<Vec<f32>, String> {
     if data.len() < expected {
         return Err(format!(
             "STL file truncated: expected {} bytes for {} triangles, got {}",
-            expected, num_triangles, data.len()
+            expected,
+            num_triangles,
+            data.len()
         ));
     }
 
@@ -107,14 +111,21 @@ pub fn write_positions_bin(path: &Path, flat: &[f32]) -> Result<(), String> {
 pub fn read_positions_bin(path: &Path) -> Result<Vec<f32>, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("Failed to read positions.bin: {e}"))?;
     if bytes.len() % 4 != 0 {
-        return Err(format!("positions.bin size {} not multiple of 4", bytes.len()));
+        return Err(format!(
+            "positions.bin size {} not multiple of 4",
+            bytes.len()
+        ));
     }
     let count = bytes.len() / 4;
     let mut floats = vec![0.0f32; count];
     #[cfg(target_endian = "little")]
     {
         unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), floats.as_mut_ptr() as *mut u8, bytes.len());
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                floats.as_mut_ptr() as *mut u8,
+                bytes.len(),
+            );
         }
     }
     #[cfg(not(target_endian = "little"))]
@@ -172,8 +183,8 @@ pub fn write_json<T: Serialize>(path: &Path, data: &T) -> Result<(), String> {
 }
 
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
-    let text =
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
     serde_json::from_str(&text).map_err(|e| format!("JSON parse {}: {e}", path.display()))
 }
 
@@ -197,11 +208,7 @@ impl From<&RleMask> for RleMaskJson {
             rows: m
                 .rows
                 .iter()
-                .map(|row| {
-                    row.iter()
-                        .flat_map(|r| vec![r.start, r.length])
-                        .collect()
-                })
+                .map(|row| row.iter().flat_map(|r| vec![r.start, r.length]).collect())
                 .collect(),
         }
     }
@@ -382,7 +389,8 @@ pub fn write_3mf(path: &Path, positions: &[f32]) -> Result<(), String> {
 
     // Deduplicate vertices for compact 3MF (hash position to index)
     let mut vertices: Vec<[f32; 3]> = Vec::new();
-    let mut vertex_map: std::collections::HashMap<[u32; 3], usize> = std::collections::HashMap::new();
+    let mut vertex_map: std::collections::HashMap<[u32; 3], usize> =
+        std::collections::HashMap::new();
     let mut tri_indices: Vec<[usize; 3]> = Vec::with_capacity(num_triangles);
 
     for t in 0..num_triangles {
@@ -452,8 +460,7 @@ pub fn write_3mf(path: &Path, positions: &[f32]) -> Result<(), String> {
 </Relationships>
 "#;
 
-    let file = std::fs::File::create(path)
-        .map_err(|e| format!("Failed to create 3MF: {e}"))?;
+    let file = std::fs::File::create(path).map_err(|e| format!("Failed to create 3MF: {e}"))?;
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
@@ -491,7 +498,9 @@ pub fn parse_binary_stl_bytes(data: &[u8]) -> Result<Vec<f32>, String> {
     if data.len() < expected {
         return Err(format!(
             "STL bytes truncated: expected {} bytes for {} triangles, got {}",
-            expected, num_triangles, data.len()
+            expected,
+            num_triangles,
+            data.len()
         ));
     }
     let mut flat = Vec::with_capacity(num_triangles * 9);
@@ -617,7 +626,11 @@ pub struct VoxlVec3 {
     pub z: f32,
 }
 
-const UNIT_SCALE: VoxlVec3 = VoxlVec3 { x: 1.0, y: 1.0, z: 1.0 };
+const UNIT_SCALE: VoxlVec3 = VoxlVec3 {
+    x: 1.0,
+    y: 1.0,
+    z: 1.0,
+};
 
 fn unit_scale() -> VoxlVec3 {
     UNIT_SCALE
@@ -693,7 +706,9 @@ pub fn load_binary_stl_from_bytes(data: &[u8]) -> Result<Vec<f32>, String> {
     if data.len() < expected {
         return Err(format!(
             "STL data truncated: expected {} bytes for {} triangles, got {}",
-            expected, num_triangles, data.len()
+            expected,
+            num_triangles,
+            data.len()
         ));
     }
 
@@ -743,14 +758,21 @@ pub fn parse_mesh_bytes(data: &[u8]) -> Result<Vec<f32>, String> {
 
 pub fn read_positions_bin_from_bytes(bytes: &[u8]) -> Result<Vec<f32>, String> {
     if bytes.len() % 4 != 0 {
-        return Err(format!("positions.bin size {} not multiple of 4", bytes.len()));
+        return Err(format!(
+            "positions.bin size {} not multiple of 4",
+            bytes.len()
+        ));
     }
     let count = bytes.len() / 4;
     let mut floats = vec![0.0f32; count];
     #[cfg(target_endian = "little")]
     {
         unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), floats.as_mut_ptr() as *mut u8, bytes.len());
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                floats.as_mut_ptr() as *mut u8,
+                bytes.len(),
+            );
         }
     }
     #[cfg(not(target_endian = "little"))]
@@ -819,11 +841,15 @@ fn decompress_chunk_bytes(data: &[u8], chunk: &VoxlChunkHeader) -> Result<Vec<u8
     } else if chunk.compression == 1 {
         let mut decompressed = vec![0u8; chunk.raw_size];
         let mut decompressor = libdeflater::Decompressor::new();
-        decompressor.zlib_decompress(slice, &mut decompressed)
+        decompressor
+            .zlib_decompress(slice, &mut decompressed)
             .map_err(|e| format!("Decompress chunk failed: {e:?}"))?;
         Ok(decompressed)
     } else {
-        Err(format!("Unsupported chunk compression: {}", chunk.compression))
+        Err(format!(
+            "Unsupported chunk compression: {}",
+            chunk.compression
+        ))
     }
 }
 
@@ -845,14 +871,41 @@ fn voxl_chunk_directory(data: &[u8]) -> Result<Vec<VoxlChunkHeader>, String> {
     let mut chunks = Vec::with_capacity(chunk_count);
     let mut dir_offset = 16;
     for _ in 0..chunk_count {
-        let tag = [data[dir_offset], data[dir_offset + 1], data[dir_offset + 2], data[dir_offset + 3]];
+        let tag = [
+            data[dir_offset],
+            data[dir_offset + 1],
+            data[dir_offset + 2],
+            data[dir_offset + 3],
+        ];
         let index = u16::from_le_bytes([data[dir_offset + 4], data[dir_offset + 5]]);
         let compression = u16::from_le_bytes([data[dir_offset + 6], data[dir_offset + 7]]);
-        let offset = u32::from_le_bytes([data[dir_offset + 8], data[dir_offset + 9], data[dir_offset + 10], data[dir_offset + 11]]) as usize;
-        let comp_size = u32::from_le_bytes([data[dir_offset + 12], data[dir_offset + 13], data[dir_offset + 14], data[dir_offset + 15]]) as usize;
-        let raw_size = u32::from_le_bytes([data[dir_offset + 16], data[dir_offset + 17], data[dir_offset + 18], data[dir_offset + 19]]) as usize;
+        let offset = u32::from_le_bytes([
+            data[dir_offset + 8],
+            data[dir_offset + 9],
+            data[dir_offset + 10],
+            data[dir_offset + 11],
+        ]) as usize;
+        let comp_size = u32::from_le_bytes([
+            data[dir_offset + 12],
+            data[dir_offset + 13],
+            data[dir_offset + 14],
+            data[dir_offset + 15],
+        ]) as usize;
+        let raw_size = u32::from_le_bytes([
+            data[dir_offset + 16],
+            data[dir_offset + 17],
+            data[dir_offset + 18],
+            data[dir_offset + 19],
+        ]) as usize;
         dir_offset += 20;
-        chunks.push(VoxlChunkHeader { tag, index, compression, offset, comp_size, raw_size });
+        chunks.push(VoxlChunkHeader {
+            tag,
+            index,
+            compression,
+            offset,
+            comp_size,
+            raw_size,
+        });
     }
     Ok(chunks)
 }
@@ -860,7 +913,10 @@ fn voxl_chunk_directory(data: &[u8]) -> Result<Vec<VoxlChunkHeader>, String> {
 /// Where a model's original file lives, when the container references one instead of
 /// embedding it.
 fn voxl_sidecar_path(model: &VoxlModelEntry, container: &Path) -> Option<std::path::PathBuf> {
-    let name = model.original_ref.as_ref().and_then(|r| r.file_name.as_deref())
+    let name = model
+        .original_ref
+        .as_ref()
+        .and_then(|r| r.file_name.as_deref())
         .or(model.source_path.as_deref())?
         .trim();
     if name.is_empty() {
@@ -870,7 +926,10 @@ fn voxl_sidecar_path(model: &VoxlModelEntry, container: &Path) -> Option<std::pa
     Some(if referenced.is_absolute() {
         referenced.to_path_buf()
     } else {
-        container.parent().unwrap_or_else(|| Path::new("")).join(referenced)
+        container
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join(referenced)
     })
 }
 
@@ -945,7 +1004,10 @@ fn voxl_classification_split(
 ) -> Option<usize> {
     let classification = classification?;
     let boundary = classification.model_triangle_count? as usize;
-    if classification.post.triangle_count as usize != triangles || boundary == 0 || boundary >= triangles {
+    if classification.post.triangle_count as usize != triangles
+        || boundary == 0
+        || boundary >= triangles
+    {
         return None;
     }
     Some(boundary)
@@ -960,7 +1022,9 @@ fn voxl_classification_split(
 /// `MESH` chunk's soup, the AO bake's corner table).
 fn collect_voxl_geometry(data: &[u8], path: &Path) -> Result<VoxlGeometry, String> {
     let chunks = voxl_chunk_directory(data)?;
-    let modl_chunk = chunks.iter().find(|c| &c.tag == b"MODL")
+    let modl_chunk = chunks
+        .iter()
+        .find(|c| &c.tag == b"MODL")
         .ok_or_else(|| "VOXL container missing MODL chunk".to_string())?;
     let modl_raw_bytes = decompress_chunk_bytes(data, modl_chunk)?;
     let modl_json_str = std::str::from_utf8(&modl_raw_bytes)
@@ -968,16 +1032,26 @@ fn collect_voxl_geometry(data: &[u8], path: &Path) -> Result<VoxlGeometry, Strin
     let models: Vec<VoxlModelEntry> = serde_json::from_str(modl_json_str)
         .map_err(|e| format!("Failed to parse MODL JSON: {e}"))?;
 
-    let mut geometry = VoxlGeometry { model: Vec::new(), support: Vec::new(), used_orig: false };
+    let mut geometry = VoxlGeometry {
+        model: Vec::new(),
+        support: Vec::new(),
+        used_orig: false,
+    };
 
     for (index, model) in models.iter().enumerate() {
         if !model.visible.unwrap_or(true) {
             continue;
         }
-        let chunk_index = model.mesh.as_ref().and_then(|m| m.chunk_index).unwrap_or(index as u16);
+        let chunk_index = model
+            .mesh
+            .as_ref()
+            .and_then(|m| m.chunk_index)
+            .unwrap_or(index as u16);
         let is_support = model.is_support_geometry.unwrap_or(false);
 
-        let embedded = chunks.iter().find(|c| &c.tag == b"ORIG" && c.index == chunk_index);
+        let embedded = chunks
+            .iter()
+            .find(|c| &c.tag == b"ORIG" && c.index == chunk_index);
         let mut triangles = match embedded {
             Some(chunk) => {
                 geometry.used_orig = true;
@@ -990,7 +1064,10 @@ fn collect_voxl_geometry(data: &[u8], path: &Path) -> Result<VoxlGeometry, Strin
                         geometry.used_orig = true;
                         load_binary_stl(&sidecar)?
                     }
-                    None => match chunks.iter().find(|c| &c.tag == b"MESH" && c.index == chunk_index) {
+                    None => match chunks
+                        .iter()
+                        .find(|c| &c.tag == b"MESH" && c.index == chunk_index)
+                    {
                         Some(chunk) => parse_mesh_bytes(&decompress_chunk_bytes(data, chunk)?)?,
                         None => continue,
                     },
@@ -1002,8 +1079,11 @@ fn collect_voxl_geometry(data: &[u8], path: &Path) -> Result<VoxlGeometry, Strin
 
         let total = triangles.len() / 9;
         if !is_support {
-            if let Some(boundary) = voxl_classification_split(model.classification.as_ref(), total) {
-                geometry.support.extend_from_slice(&triangles[boundary * 9..]);
+            if let Some(boundary) = voxl_classification_split(model.classification.as_ref(), total)
+            {
+                geometry
+                    .support
+                    .extend_from_slice(&triangles[boundary * 9..]);
                 triangles.truncate(boundary * 9);
             }
         }
@@ -1023,7 +1103,11 @@ fn load_voxl_v2_from_bytes_with_path(data: &[u8], path: &Path) -> Result<VoxlLoa
     let mut triangles_xyz = geometry.model;
     triangles_xyz.extend(geometry.support);
     let total_triangle_count = triangles_xyz.len() / 9;
-    let mesh_encoding = if geometry.used_orig { "voxl_orig" } else { "voxl_mesh" };
+    let mesh_encoding = if geometry.used_orig {
+        "voxl_orig"
+    } else {
+        "voxl_mesh"
+    };
 
     Ok(VoxlLoadedMesh {
         triangles_xyz,
@@ -1051,16 +1135,19 @@ mod tests {
         fn new() -> Self {
             static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let dir = std::env::temp_dir().join(format!(
-                "df-cli-test-{}-{}", std::process::id(), n
-            ));
+            let dir =
+                std::env::temp_dir().join(format!("df-cli-test-{}-{}", std::process::id(), n));
             std::fs::create_dir_all(&dir).unwrap();
             Self(dir)
         }
 
-        fn path(&self) -> &Path { &self.0 }
+        fn path(&self) -> &Path {
+            &self.0
+        }
 
-        fn join(&self, name: &str) -> PathBuf { self.0.join(name) }
+        fn join(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
     }
 
     impl Drop for TempDir {
@@ -1102,9 +1189,21 @@ mod tests {
             width: 10,
             height: 3,
             rows: vec![
-                vec![RleRun { start: 2, length: 3 }, RleRun { start: 7, length: 2 }],
+                vec![
+                    RleRun {
+                        start: 2,
+                        length: 3,
+                    },
+                    RleRun {
+                        start: 7,
+                        length: 2,
+                    },
+                ],
                 vec![],
-                vec![RleRun { start: 0, length: 10 }],
+                vec![RleRun {
+                    start: 0,
+                    length: 10,
+                }],
             ],
         };
         write_rle_mask_json(&path, &mask).unwrap();
@@ -1117,23 +1216,32 @@ mod tests {
         (1..50i32, 1..50i32).prop_flat_map(|(w, h)| {
             let w2 = w;
             proptest::collection::vec(
-                proptest::collection::vec((0..w2 as usize, 1..w2.max(2) as usize), 0..5)
-                    .prop_map(move |raw_runs| {
+                proptest::collection::vec((0..w2 as usize, 1..w2.max(2) as usize), 0..5).prop_map(
+                    move |raw_runs| {
                         let mut runs = Vec::new();
                         let mut x = 0i32;
                         for (offset, len) in raw_runs {
                             let start = x + offset as i32;
-                            if start >= w2 { break; }
+                            if start >= w2 {
+                                break;
+                            }
                             let length = (len as i32).min(w2 - start);
-                            if length <= 0 { continue; }
+                            if length <= 0 {
+                                continue;
+                            }
                             runs.push(RleRun { start, length });
                             x = start + length;
                         }
                         runs
-                    }),
+                    },
+                ),
                 h as usize,
             )
-            .prop_map(move |rows| RleMask { width: w, height: h, rows })
+            .prop_map(move |rows| RleMask {
+                width: w,
+                height: h,
+                rows,
+            })
         })
     }
 
@@ -1158,8 +1266,23 @@ mod tests {
             width: 10,
             height: 2,
             rows: vec![
-                vec![RleLabelRun { start: 1, length: 3, id: 1 }, RleLabelRun { start: 6, length: 2, id: 2 }],
-                vec![RleLabelRun { start: 0, length: 5, id: 1 }],
+                vec![
+                    RleLabelRun {
+                        start: 1,
+                        length: 3,
+                        id: 1,
+                    },
+                    RleLabelRun {
+                        start: 6,
+                        length: 2,
+                        id: 2,
+                    },
+                ],
+                vec![RleLabelRun {
+                    start: 0,
+                    length: 5,
+                    id: 1,
+                }],
             ],
         };
         write_rle_labels_json(&path, &labels).unwrap();
@@ -1245,8 +1368,8 @@ mod tests {
     #[test]
     fn stl_write_roundtrip() {
         let positions = vec![
-            0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+            0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+            1.0,
         ];
         let dir = TempDir::new();
         let path = dir.join("rt.stl");
@@ -1300,8 +1423,8 @@ mod tests {
     #[test]
     fn write_3mf_contains_correct_counts() {
         let positions = vec![
-            0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+            0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+            1.0,
         ];
         let dir = TempDir::new();
         let path = dir.join("test2.3mf");
@@ -1309,7 +1432,8 @@ mod tests {
         let file = std::fs::File::open(&path).unwrap();
         let mut zip = zip::ZipArchive::new(file).unwrap();
         let mut model = String::new();
-        std::io::Read::read_to_string(&mut zip.by_name("3D/3dmodel.model").unwrap(), &mut model).unwrap();
+        std::io::Read::read_to_string(&mut zip.by_name("3D/3dmodel.model").unwrap(), &mut model)
+            .unwrap();
         // 2 triangles
         assert_eq!(model.matches("<triangle ").count(), 2);
         // vertices (deduplicated: 6 input verts but some may share coords)
@@ -1358,10 +1482,7 @@ mod tests {
 
         // manifest
         zip.start_file("manifest.json", opts).unwrap();
-        std::io::Write::write_all(
-            &mut zip,
-            br#"{"layers":3,"format":"nanodlp"}"#,
-        ).unwrap();
+        std::io::Write::write_all(&mut zip, br#"{"layers":3,"format":"nanodlp"}"#).unwrap();
 
         zip.finish().unwrap();
 
@@ -1401,8 +1522,8 @@ mod tests {
     #[test]
     fn stl_to_3mf_inspect_roundtrip() {
         let positions = vec![
-            0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+            0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+            1.0,
         ];
         let dir = TempDir::new();
 
@@ -1427,7 +1548,8 @@ mod tests {
         std::io::Read::read_to_string(
             &mut archive.by_name("3D/3dmodel.model").unwrap(),
             &mut model,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(model.matches("<triangle ").count(), 2);
         drop(archive); // release file handle before TempDir cleanup
     }
@@ -1506,7 +1628,10 @@ mod tests {
         assert_eq!((job.width_px, job.height_px), (40, 80));
         assert_eq!(job.anti_aliasing_mode, "Vertical2");
         assert_eq!(job.z_blend_look_back, 5);
-        assert_eq!(job.z_blend_custom_lut.as_deref(), Some(&[0u8, 120, 255][..]));
+        assert_eq!(
+            job.z_blend_custom_lut.as_deref(),
+            Some(&[0u8, 120, 255][..])
+        );
         assert_eq!(job.zaa_pattern.as_deref(), Some("halton"));
         assert_eq!(job.container_compression_level, 3);
         assert_eq!(job.total_layers, 123, "the payload's layer count wins");
@@ -1577,7 +1702,10 @@ mod tests {
         std::fs::write(&path, &data).unwrap();
         let err = load_voxl_triangles(&path).unwrap_err();
         assert!(err.contains("Unsupported VOXL binary version 1"), "{err}");
-        assert!(!is_voxl_file(&path), "V1 must not be accepted as a VOXL file");
+        assert!(
+            !is_voxl_file(&path),
+            "V1 must not be accepted as a VOXL file"
+        );
     }
 
     #[test]
@@ -1618,7 +1746,8 @@ mod tests {
                 "isSupportGeometry": true,
                 "mesh": { "chunkIndex": 1 }
             }
-        ]).to_string();
+        ])
+        .to_string();
         let modl_bytes = modl_json.into_bytes();
 
         // Let's assemble a VOXL V2 file.
@@ -1742,12 +1871,16 @@ mod tests {
                 "post": { "triangle_count": 2 },
                 "model_triangle_count": 1
             }
-        }]).to_string();
+        }])
+        .to_string();
 
         let voxl = load_voxl_from_bytes(&voxl_v2_container(&modl, &two_triangle_soup())).unwrap();
 
         assert_eq!(voxl.total_triangle_count, 2);
-        assert_eq!(voxl.model_triangle_count, 1, "the baked boundary splits the mesh");
+        assert_eq!(
+            voxl.model_triangle_count, 1,
+            "the baked boundary splits the mesh"
+        );
         let first = &voxl.triangles_xyz[0..3];
         assert!((first[0] - 10.5).abs() < 1e-5, "x was {}", first[0]);
         assert!((first[1] + 0.5).abs() < 1e-5, "y was {}", first[1]);
@@ -1771,7 +1904,8 @@ mod tests {
                 "post": { "triangle_count": 3 },
                 "model_triangle_count": 1
             }
-        }]).to_string();
+        }])
+        .to_string();
 
         let voxl = load_voxl_from_bytes(&voxl_v2_container(&modl, &two_triangle_soup())).unwrap();
 

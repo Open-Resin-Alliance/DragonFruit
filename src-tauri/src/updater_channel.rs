@@ -55,11 +55,9 @@ fn cached_update() -> &'static Mutex<Option<tauri_plugin_updater::Update>> {
 
 // Unused on Linux, where the check is skipped entirely (see `check_updates`).
 #[cfg(not(target_os = "linux"))]
-const STABLE_ENDPOINT: &str =
-    "https://open-resin-alliance.github.io/DragonFruit/latest.json";
+const STABLE_ENDPOINT: &str = "https://open-resin-alliance.github.io/DragonFruit/latest.json";
 #[cfg(not(target_os = "linux"))]
-const DEV_ENDPOINT: &str =
-    "https://open-resin-alliance.github.io/DragonFruit/latest-dev.json";
+const DEV_ENDPOINT: &str = "https://open-resin-alliance.github.io/DragonFruit/latest-dev.json";
 
 #[cfg(not(target_os = "linux"))]
 fn endpoint_for_channel(channel: &str) -> &'static str {
@@ -141,9 +139,10 @@ async fn check_updates_impl(
     // When allow_same_version, treat >= as available so the current version's installer
     // is returned as an available update for in-place reinstall testing.
     if allow_same_version {
-        builder = builder.version_comparator(|current, remote: tauri_plugin_updater::RemoteRelease| {
-            remote.version >= current
-        });
+        builder =
+            builder.version_comparator(|current, remote: tauri_plugin_updater::RemoteRelease| {
+                remote.version >= current
+            });
     }
 
     let updater = builder.build().map_err(|e| {
@@ -151,13 +150,10 @@ async fn check_updates_impl(
         format!("Failed to build updater: {e}")
     })?;
 
-    let update = updater
-        .check()
-        .await
-        .map_err(|e| {
-            warn!("[updater] Update check failed: {e}");
-            format!("Update check failed: {e}")
-        })?;
+    let update = updater.check().await.map_err(|e| {
+        warn!("[updater] Update check failed: {e}");
+        format!("Update check failed: {e}")
+    })?;
 
     match update {
         Some(update) => {
@@ -169,7 +165,10 @@ async fn check_updates_impl(
             if body.as_ref().map_or(true, |b| b.trim().is_empty()) && allow_same_version {
                 let tag = version.to_string();
                 let gh_url = format!("https://api.github.com/repos/Open-Resin-Alliance/DragonFruit/releases/tags/v{tag}");
-                if let Ok(client) = reqwest::Client::builder().user_agent("DragonFruit-updater").build() {
+                if let Ok(client) = reqwest::Client::builder()
+                    .user_agent("DragonFruit-updater")
+                    .build()
+                {
                     if let Ok(resp) = client.get(&gh_url).send().await {
                         if let Ok(json) = resp.json::<serde_json::Value>().await {
                             if let Some(b) = json.get("body").and_then(|v| v.as_str()) {
@@ -177,7 +176,8 @@ async fn check_updates_impl(
                                     body = Some(b.to_string());
                                 }
                             }
-                            if let Some(_pub_at) = json.get("published_at").and_then(|v| v.as_str()) {
+                            if let Some(_pub_at) = json.get("published_at").and_then(|v| v.as_str())
+                            {
                                 // Try to keep date from GitHub if updater date is None (currently unused — updater provides date)
                             }
                         }
@@ -186,9 +186,10 @@ async fn check_updates_impl(
             }
             // RFC 3339, not Display: `time` renders as "2026-07-06 4:55:17.703
             // +00:00:00", which `new Date()` on the frontend cannot parse.
-            let date = update
-                .date
-                .and_then(|d| d.format(&time::format_description::well_known::Rfc3339).ok());
+            let date = update.date.and_then(|d| {
+                d.format(&time::format_description::well_known::Rfc3339)
+                    .ok()
+            });
             let download_url = Some(update.download_url.to_string());
 
             info!("[updater] Update available: current={current_version} → new={version} url={} body_len={}", download_url.as_deref().unwrap_or("?"), body.as_ref().map(|b| b.len()).unwrap_or(0));
@@ -220,16 +221,23 @@ async fn check_updates_impl(
                     // (the primary check already used allow_same_version, but if it still returned None due to transient, retry explicitly)
                     let feed_url: Result<url::Url, _> = endpoint_str.parse();
                     if let Ok(url) = feed_url {
-                        if let Ok(mut dbg_builder) = app_handle.updater_builder().endpoints(vec![url]) {
+                        if let Ok(mut dbg_builder) =
+                            app_handle.updater_builder().endpoints(vec![url])
+                        {
                             #[cfg(target_os = "macos")]
                             {
                                 dbg_builder = dbg_builder.target("darwin-universal");
                             }
-                            dbg_builder = dbg_builder.version_comparator(|cur, rem: tauri_plugin_updater::RemoteRelease| rem.version >= cur);
+                            dbg_builder = dbg_builder.version_comparator(
+                                |cur, rem: tauri_plugin_updater::RemoteRelease| rem.version >= cur,
+                            );
                             if let Ok(updater) = dbg_builder.build() {
                                 if let Ok(Some(dbg_update)) = updater.check().await {
                                     let body = dbg_update.body.clone();
-                                    let date = dbg_update.date.and_then(|d| d.format(&time::format_description::well_known::Rfc3339).ok());
+                                    let date = dbg_update.date.and_then(|d| {
+                                        d.format(&time::format_description::well_known::Rfc3339)
+                                            .ok()
+                                    });
                                     let dl = Some(dbg_update.download_url.to_string());
                                     if let Ok(mut cache) = cached_update().lock() {
                                         *cache = Some(dbg_update);

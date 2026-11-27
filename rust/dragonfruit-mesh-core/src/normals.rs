@@ -55,7 +55,10 @@ mod tests {
     }
 
     fn triangle(positions: Vec<Vec3>) -> IndexedMesh {
-        IndexedMesh { positions, triangles: vec![[0, 1, 2]] }
+        IndexedMesh {
+            positions,
+            triangles: vec![[0, 1, 2]],
+        }
     }
 
     /// Two quads sharing an edge, folded by `fold_deg` about it.

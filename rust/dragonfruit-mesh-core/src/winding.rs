@@ -418,11 +418,17 @@ mod tests {
         let mut nested = outer.clone();
         let offset = nested.positions.len() as u32;
         nested.positions.extend_from_slice(&inner.positions);
-        nested
-            .triangles
-            .extend(inner.triangles.iter().map(|t| [t[0] + offset, t[1] + offset, t[2] + offset]));
+        nested.triangles.extend(
+            inner
+                .triangles
+                .iter()
+                .map(|t| [t[0] + offset, t[1] + offset, t[2] + offset]),
+        );
         let value = winding_number_exact(&nested, Vec3::new(0.0, 0.0, 0.0));
-        assert!((value - 2.0).abs() < 1e-6, "nested pair should read 2, got {value}");
+        assert!(
+            (value - 2.0).abs() < 1e-6,
+            "nested pair should read 2, got {value}"
+        );
 
         // Reversing the inner sphere's winding makes the two cancel to zero, which is what a cavity
         // is: the same geometry, the opposite answer, decided entirely by orientation.

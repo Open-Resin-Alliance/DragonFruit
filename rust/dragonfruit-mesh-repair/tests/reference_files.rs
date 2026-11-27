@@ -10,12 +10,19 @@
 
 use std::path::PathBuf;
 
-use dragonfruit_mesh_repair::{analyze, evaluate::evaluate, repair_path, RepairOptions, RepairOutcome};
+use dragonfruit_mesh_repair::{
+    analyze, evaluate::evaluate, repair_path, RepairOptions, RepairOutcome,
+};
 
 /// The automatic route, from a path — what the app's auto-repair calls.
-fn repair_path_auto(path: &std::path::Path) -> Result<RepairOutcome, dragonfruit_mesh_repair::MeshRepairError> {
+fn repair_path_auto(
+    path: &std::path::Path,
+) -> Result<RepairOutcome, dragonfruit_mesh_repair::MeshRepairError> {
     let mesh = dragonfruit_mesh_repair::io::load_mesh_from_path(path)?;
-    Ok(dragonfruit_mesh_repair::repair_auto(mesh, &RepairOptions::default()))
+    Ok(dragonfruit_mesh_repair::repair_auto(
+        mesh,
+        &RepairOptions::default(),
+    ))
 }
 
 fn reference(name: &str) -> Option<PathBuf> {
@@ -118,7 +125,11 @@ fn the_automatic_route_settles_a_mesh_the_local_pipeline_cannot() {
         outcome.report.residual_issues
     );
     assert!(
-        outcome.report.residual_issues.iter().any(|n| n.contains("rebuilt rather than repaired")),
+        outcome
+            .report
+            .residual_issues
+            .iter()
+            .any(|n| n.contains("rebuilt rather than repaired")),
         "and it says the surface moved: {:?}",
         outcome.report.residual_issues
     );

@@ -456,7 +456,8 @@ fn read_entry<R: Read + std::io::Seek>(
         return Err(PackageError::Invalid(format!("{name} is too large")));
     }
     let mut out = Vec::with_capacity(file.size() as usize);
-    file.read_to_end(&mut out).map_err(|err| PackageError::Io(err.to_string()))?;
+    file.read_to_end(&mut out)
+        .map_err(|err| PackageError::Io(err.to_string()))?;
     Ok(out)
 }
 
@@ -480,9 +481,9 @@ fn validate_material_settings_entry(
     let format = output.trim();
     if format.is_empty()
         || format.len() > 32
-        || !format
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '-' | '_'))
+        || !format.chars().all(|ch| {
+            ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '-' | '_')
+        })
     {
         return Err(PackageError::Invalid(format!(
             "materialSettings output '{output}' may only contain a-z, 0-9, '.', '-' and '_'"
@@ -515,7 +516,9 @@ fn validate(manifest: &Manifest) -> Result<(), PackageError> {
         )));
     }
     if manifest.id.trim().is_empty() || manifest.id.len() > 120 {
-        return Err(PackageError::Invalid("id must be 1..120 characters".to_string()));
+        return Err(PackageError::Invalid(
+            "id must be 1..120 characters".to_string(),
+        ));
     }
     if !manifest
         .id
@@ -527,10 +530,14 @@ fn validate(manifest: &Manifest) -> Result<(), PackageError> {
         ));
     }
     if manifest.name.trim().is_empty() || manifest.name.len() > 120 {
-        return Err(PackageError::Invalid("name must be 1..120 characters".to_string()));
+        return Err(PackageError::Invalid(
+            "name must be 1..120 characters".to_string(),
+        ));
     }
     if manifest.version.trim().is_empty() || manifest.version.len() > 48 {
-        return Err(PackageError::Invalid("version must be 1..48 characters".to_string()));
+        return Err(PackageError::Invalid(
+            "version must be 1..48 characters".to_string(),
+        ));
     }
     if manifest.capabilities.is_empty() {
         return Err(PackageError::Invalid(
@@ -650,9 +657,13 @@ fn validate(manifest: &Manifest) -> Result<(), PackageError> {
         }
     }
     if let Some(network) = &manifest.network {
-        if !manifest.capabilities.contains(&Capability::NetworkOperations) {
+        if !manifest
+            .capabilities
+            .contains(&Capability::NetworkOperations)
+        {
             return Err(PackageError::Invalid(
-                "a network block is declared but the networkOperations capability is not".to_string(),
+                "a network block is declared but the networkOperations capability is not"
+                    .to_string(),
             ));
         }
         if network.plugin_id != manifest.id {
@@ -667,7 +678,9 @@ fn validate(manifest: &Manifest) -> Result<(), PackageError> {
                 "network.mode must be 1..48 characters".to_string(),
             ));
         }
-        if !mode.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+        if !mode
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
             || mode.starts_with('-')
             || mode.ends_with('-')
         {
@@ -736,11 +749,31 @@ fn validate(manifest: &Manifest) -> Result<(), PackageError> {
                     _ => Ok(()),
                 }
             };
-            bounded(monitoring.busy_response_grace_ms, 120_000, "busyResponseGraceMs")?;
-            bounded(monitoring.inconclusive_reachability_max_polls, 100, "inconclusiveReachabilityMaxPolls")?;
-            bounded(monitoring.webcam_max_consecutive_timeouts, 100, "webcamMaxConsecutiveTimeouts")?;
-            bounded(monitoring.webcam_timeout_cooldown_ms, 600_000, "webcamTimeoutCooldownMs")?;
-            bounded(monitoring.webcam_failure_cooldown_ms, 600_000, "webcamFailureCooldownMs")?;
+            bounded(
+                monitoring.busy_response_grace_ms,
+                120_000,
+                "busyResponseGraceMs",
+            )?;
+            bounded(
+                monitoring.inconclusive_reachability_max_polls,
+                100,
+                "inconclusiveReachabilityMaxPolls",
+            )?;
+            bounded(
+                monitoring.webcam_max_consecutive_timeouts,
+                100,
+                "webcamMaxConsecutiveTimeouts",
+            )?;
+            bounded(
+                monitoring.webcam_timeout_cooldown_ms,
+                600_000,
+                "webcamTimeoutCooldownMs",
+            )?;
+            bounded(
+                monitoring.webcam_failure_cooldown_ms,
+                600_000,
+                "webcamFailureCooldownMs",
+            )?;
         }
         for (key, operation) in network.operations.overrides() {
             let Some(operation) = operation else { continue };
@@ -750,10 +783,11 @@ fn validate(manifest: &Manifest) -> Result<(), PackageError> {
                     "network operation '{key}' must be 1..64 characters"
                 )));
             }
-            if !operation
-                .chars()
-                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '_' | '.' | '-' | '/'))
-            {
+            if !operation.chars().all(|ch| {
+                ch.is_ascii_lowercase()
+                    || ch.is_ascii_digit()
+                    || matches!(ch, '_' | '.' | '-' | '/')
+            }) {
                 return Err(PackageError::Invalid(format!(
                     "network operation '{key}' may only contain a-z, 0-9, '_', '.', '-' and '/'"
                 )));
@@ -789,8 +823,8 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspected, PackageError> {
     validate(&manifest)?;
 
     let key = decode_key(&manifest)?;
-    let signature = Signature::from_slice(&signature_bytes)
-        .map_err(|_| PackageError::SignatureInvalid)?;
+    let signature =
+        Signature::from_slice(&signature_bytes).map_err(|_| PackageError::SignatureInvalid)?;
     key.verify_strict(&manifest_bytes, &signature)
         .map_err(|_| PackageError::SignatureInvalid)?;
 
@@ -803,10 +837,16 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspected, PackageError> {
 
 fn derive_key(passphrase: &str, seal: &Seal) -> Result<[u8; KEY_BYTES], PackageError> {
     if seal.alg != "xchacha20poly1305" {
-        return Err(PackageError::Unsupported(format!("seal algorithm '{}'", seal.alg)));
+        return Err(PackageError::Unsupported(format!(
+            "seal algorithm '{}'",
+            seal.alg
+        )));
     }
     if seal.kdf != "argon2id" {
-        return Err(PackageError::Unsupported(format!("seal kdf '{}'", seal.kdf)));
+        return Err(PackageError::Unsupported(format!(
+            "seal kdf '{}'",
+            seal.kdf
+        )));
     }
     let salt = base64::engine::general_purpose::STANDARD
         .decode(seal.salt.trim())
@@ -832,7 +872,11 @@ pub fn derive_seal_key(passphrase: &str, seal: &Seal) -> Result<[u8; KEY_BYTES],
 
 /// Unseal the payload and check it against the manifest hash. Returns the
 /// plaintext payload ZIP bytes.
-pub fn unseal(bytes: &[u8], inspected: &Inspected, passphrase: &str) -> Result<Vec<u8>, PackageError> {
+pub fn unseal(
+    bytes: &[u8],
+    inspected: &Inspected,
+    passphrase: &str,
+) -> Result<Vec<u8>, PackageError> {
     let seal = inspected
         .manifest
         .payload
@@ -867,7 +911,9 @@ pub fn payload_entry_allowed(name: &str) -> bool {
         return false;
     }
     ALLOWED_PAYLOAD_FILES.contains(&name)
-        || ALLOWED_PAYLOAD_ROOTS.iter().any(|root| name.starts_with(root) && name.len() > root.len())
+        || ALLOWED_PAYLOAD_ROOTS
+            .iter()
+            .any(|root| name.starts_with(root) && name.len() > root.len())
 }
 
 /// Extract a plaintext payload ZIP into `dest`, refusing anything outside the
@@ -883,10 +929,14 @@ pub fn extract_payload(payload_zip: &[u8], dest: &Path) -> Result<Vec<String>, P
             continue;
         }
         if !payload_entry_allowed(&name) {
-            return Err(PackageError::Invalid(format!("payload entry '{name}' is not allowed")));
+            return Err(PackageError::Invalid(format!(
+                "payload entry '{name}' is not allowed"
+            )));
         }
         if entry.size() > MAX_PAYLOAD_FILE_BYTES {
-            return Err(PackageError::Invalid(format!("payload entry '{name}' is too large")));
+            return Err(PackageError::Invalid(format!(
+                "payload entry '{name}' is too large"
+            )));
         }
         let target = dest.join(&name);
         if let Some(parent) = target.parent() {
@@ -911,10 +961,14 @@ pub fn build_payload_zip(files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, P
         .compression_method(zip::CompressionMethod::Deflated);
     for (name, bytes) in files {
         if !payload_entry_allowed(name) {
-            return Err(PackageError::Invalid(format!("payload entry '{name}' is not allowed")));
+            return Err(PackageError::Invalid(format!(
+                "payload entry '{name}' is not allowed"
+            )));
         }
         writer.start_file(name.as_str(), options).map_err(zip_err)?;
-        writer.write_all(bytes).map_err(|err| PackageError::Io(err.to_string()))?;
+        writer
+            .write_all(bytes)
+            .map_err(|err| PackageError::Io(err.to_string()))?;
     }
     let cursor = writer.finish().map_err(zip_err)?;
     Ok(cursor.into_inner())
@@ -985,13 +1039,17 @@ pub fn build_package(
     let signature = signing_key.sign(&manifest_bytes);
 
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
-    writer.start_file(MANIFEST_ENTRY, options).map_err(zip_err)?;
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    writer
+        .start_file(MANIFEST_ENTRY, options)
+        .map_err(zip_err)?;
     writer
         .write_all(&manifest_bytes)
         .map_err(|err| PackageError::Io(err.to_string()))?;
-    writer.start_file(SIGNATURE_ENTRY, options).map_err(zip_err)?;
+    writer
+        .start_file(SIGNATURE_ENTRY, options)
+        .map_err(zip_err)?;
     writer
         .write_all(&signature.to_bytes())
         .map_err(|err| PackageError::Io(err.to_string()))?;
@@ -1019,7 +1077,14 @@ pub fn build_package_sealed(
     let mut salt = [0u8; SALT_BYTES];
     getrandom::getrandom(&mut nonce).map_err(|err| PackageError::Io(err.to_string()))?;
     getrandom::getrandom(&mut salt).map_err(|err| PackageError::Io(err.to_string()))?;
-    build_package(manifest, payload_zip, Some(passphrase), nonce, salt, signing_key)
+    build_package(
+        manifest,
+        payload_zip,
+        Some(passphrase),
+        nonce,
+        salt,
+        signing_key,
+    )
 }
 
 /// Public key bytes as base64, for embedding in a manifest.
@@ -1142,13 +1207,11 @@ mod tests {
         let primary_fields = (0..fields)
             .map(|index| serde_json::json!({ "key": format!("field{index}"), "defaultValue": 1 }))
             .collect();
-        manifest
-            .network
-            .as_mut()
-            .expect("network")
-            .remote_materials = Some(RemoteMaterialsDecl {
+        manifest.network.as_mut().expect("network").remote_materials = Some(RemoteMaterialsDecl {
             primary_fields,
-            basic_sections: vec![serde_json::json!({ "id": "print", "title": "Print", "keys": [] })],
+            basic_sections: vec![
+                serde_json::json!({ "id": "print", "title": "Print", "keys": [] }),
+            ],
             advanced_sections: Vec::new(),
         });
         manifest
@@ -1220,10 +1283,10 @@ mod tests {
     fn rejects_more_than_eight_output_formats() {
         let mut manifest = material_settings_manifest();
         for index in 0..9 {
-            manifest.material_settings.by_output.insert(
-                format!(".fmt{index}"),
-                serde_json::json!({ "fields": [] }),
-            );
+            manifest
+                .material_settings
+                .by_output
+                .insert(format!(".fmt{index}"), serde_json::json!({ "fields": [] }));
         }
         assert!(matches!(validate(&manifest), Err(PackageError::Invalid(_))));
     }
@@ -1240,7 +1303,8 @@ mod tests {
 
     #[test]
     fn accepts_a_declared_network_mode() {
-        validate(&network_manifest("echo-net", "alphabeta.alphaprint")).expect("valid network block");
+        validate(&network_manifest("echo-net", "alphabeta.alphaprint"))
+            .expect("valid network block");
     }
 
     #[test]
@@ -1273,11 +1337,21 @@ mod tests {
     #[test]
     fn rejects_network_operation_names_outside_the_charset() {
         let mut manifest = network_manifest("echo-net", "alphabeta.alphaprint");
-        manifest.network.as_mut().expect("network").operations.connect = Some("Connect Me".to_string());
+        manifest
+            .network
+            .as_mut()
+            .expect("network")
+            .operations
+            .connect = Some("Connect Me".to_string());
         assert!(matches!(validate(&manifest), Err(PackageError::Invalid(_))));
 
         let mut manifest = network_manifest("echo-net", "alphabeta.alphaprint");
-        manifest.network.as_mut().expect("network").operations.status = Some("printer/status".to_string());
+        manifest
+            .network
+            .as_mut()
+            .expect("network")
+            .operations
+            .status = Some("printer/status".to_string());
         validate(&manifest).expect("a namespaced operation name is allowed");
     }
 
@@ -1330,7 +1404,10 @@ mod tests {
             writer.write_all(data).expect("write");
         }
         let tampered = writer.finish().expect("finish").into_inner();
-        assert!(matches!(inspect(&tampered), Err(PackageError::SignatureInvalid)));
+        assert!(matches!(
+            inspect(&tampered),
+            Err(PackageError::SignatureInvalid)
+        ));
     }
 
     #[test]
@@ -1339,7 +1416,10 @@ mod tests {
         let inspected = inspect(&bytes).expect("inspect");
 
         let wrong = unseal(&bytes, &inspected, "not the passphrase");
-        assert!(matches!(wrong, Err(PackageError::WrongKey)), "wrong key accepted");
+        assert!(
+            matches!(wrong, Err(PackageError::WrongKey)),
+            "wrong key accepted"
+        );
 
         let plaintext = unseal(&bytes, &inspected, PASSPHRASE).expect("unseal");
         assert_eq!(sha256_hex(&plaintext), inspected.manifest.payload.sha256);
@@ -1350,8 +1430,13 @@ mod tests {
         let key = signing_key();
         let mut manifest = manifest_for(&key);
         let payload_zip = payload();
-        let (sealed, seal) = seal_payload(&payload_zip, PASSPHRASE, [3u8; NONCE_BYTES], [4u8; SALT_BYTES])
-            .expect("seal");
+        let (sealed, seal) = seal_payload(
+            &payload_zip,
+            PASSPHRASE,
+            [3u8; NONCE_BYTES],
+            [4u8; SALT_BYTES],
+        )
+        .expect("seal");
         manifest.payload = PayloadRef {
             sha256: sha256_hex(b"something else"),
             bytes: payload_zip.len() as u64,
@@ -1429,6 +1514,9 @@ mod tests {
     fn build_refuses_a_payload_entry_outside_the_allowed_roots() {
         let mut files = BTreeMap::new();
         files.insert("elsewhere/plugin".to_string(), b"x".to_vec());
-        assert!(matches!(build_payload_zip(&files), Err(PackageError::Invalid(_))));
+        assert!(matches!(
+            build_payload_zip(&files),
+            Err(PackageError::Invalid(_))
+        ));
     }
 }

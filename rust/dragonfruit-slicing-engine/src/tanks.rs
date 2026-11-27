@@ -64,11 +64,7 @@ mod tests {
         let mut flat = Vec::new();
         for index in 0..6 {
             let x = index as f32;
-            flat.extend_from_slice(&[
-                x, 0.0, 0.0,
-                x + 1.0, 0.0, 0.0,
-                x, 1.0, 0.0,
-            ]);
+            flat.extend_from_slice(&[x, 0.0, 0.0, x + 1.0, 0.0, 0.0, x, 1.0, 0.0]);
         }
         parse_triangles(&flat)
     }
@@ -102,12 +98,24 @@ mod tests {
         let tanks = partition_triangles_by_tank(&job, &tris);
 
         assert_eq!(
-            tanks[0].triangles.len(), 3,
+            tanks[0].triangles.len(),
+            3,
             "the tank-0 model triangle plus both supports, whatever the supports claimed",
         );
-        assert_eq!(tanks[1].triangles.len(), 1, "model triangle assigned tank 1");
-        assert_eq!(tanks[2].triangles.len(), 2, "model triangles assigned tank 2");
-        assert_eq!(tanks[0].model_triangle_count, 1, "supports are not model triangles");
+        assert_eq!(
+            tanks[1].triangles.len(),
+            1,
+            "model triangle assigned tank 1"
+        );
+        assert_eq!(
+            tanks[2].triangles.len(),
+            2,
+            "model triangles assigned tank 2"
+        );
+        assert_eq!(
+            tanks[0].model_triangle_count, 1,
+            "supports are not model triangles"
+        );
     }
 
     #[test]

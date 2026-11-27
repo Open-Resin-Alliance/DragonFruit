@@ -196,9 +196,7 @@ pub fn refine_long_edges_with_budget(
                 if let Some(&existing) = midpoints.get(&key) {
                     return existing;
                 }
-                let point = positions[a as usize]
-                    .add(positions[b as usize])
-                    .scale(0.5);
+                let point = positions[a as usize].add(positions[b as usize]).scale(0.5);
                 let index = positions.len() as u32;
                 positions.push(point);
                 midpoints.insert(key, index);
@@ -351,7 +349,10 @@ mod tests {
         let mesh = coarse_cube(100.0);
         let max_edge = 10.0;
         assert_eq!(non_manifold_edges(&mesh), 0);
-        assert!(longest_edge(&mesh) > max_edge, "the fixture must start coarse");
+        assert!(
+            longest_edge(&mesh) > max_edge,
+            "the fixture must start coarse"
+        );
 
         let refined = refine_long_edges(&mesh, max_edge, MAX_PASSES);
 
@@ -372,7 +373,6 @@ mod tests {
             "the surface moved: volume {before} became {after}"
         );
     }
-
 
     /// A budget spent longest-edge-first, without stranding a T-junction.
     ///

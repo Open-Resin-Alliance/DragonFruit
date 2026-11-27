@@ -121,7 +121,10 @@ impl RingLayout {
     }
 
     pub const fn payload_offset(self) -> usize {
-        align_up(HEADER_BYTES + self.slot_count as usize * SLOT_HEADER_BYTES, 4096)
+        align_up(
+            HEADER_BYTES + self.slot_count as usize * SLOT_HEADER_BYTES,
+            4096,
+        )
     }
 
     pub const fn bytes_needed(self) -> usize {
@@ -174,7 +177,9 @@ impl std::fmt::Display for RingError {
             Self::SlotNotReadable(slot) => write!(f, "slot {slot} holds nothing to read"),
             Self::UnknownState(state) => write!(f, "unknown slot state {state}"),
             Self::UnknownKind(kind) => write!(f, "unknown slot kind {kind}"),
-            Self::PayloadTooLarge(bytes) => write!(f, "payload of {bytes} bytes does not fit a slot"),
+            Self::PayloadTooLarge(bytes) => {
+                write!(f, "payload of {bytes} bytes does not fit a slot")
+            }
             Self::Misaligned => write!(f, "ring mapping is not 8-byte aligned"),
         }
     }
@@ -473,8 +478,22 @@ mod tests {
         assert_eq!(slot_state(&buffer.0, &LAYOUT, 0).unwrap(), SlotState::Free);
         assert!(slot_view(&buffer.0, &LAYOUT, 0).unwrap().is_none());
 
-        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Rle, 7, 0, b"runs", 0, 0).expect("publish");
-        assert_eq!(slot_state(&buffer.0, &LAYOUT, 0).unwrap(), SlotState::Filled);
+        publish_slot(
+            &mut buffer.0,
+            &LAYOUT,
+            0,
+            SlotKind::Rle,
+            7,
+            0,
+            b"runs",
+            0,
+            0,
+        )
+        .expect("publish");
+        assert_eq!(
+            slot_state(&buffer.0, &LAYOUT, 0).unwrap(),
+            SlotState::Filled
+        );
 
         let view = slot_view(&buffer.0, &LAYOUT, 0).unwrap().expect("filled");
         assert_eq!(view.kind, SlotKind::Rle);
@@ -489,7 +508,18 @@ mod tests {
     #[test]
     fn publishing_over_a_filled_slot_is_refused() {
         let mut buffer = ring();
-        publish_slot(&mut buffer.0, &LAYOUT, 1, SlotKind::Png, 0, 0, b"png", 4096, 2560).expect("first");
+        publish_slot(
+            &mut buffer.0,
+            &LAYOUT,
+            1,
+            SlotKind::Png,
+            0,
+            0,
+            b"png",
+            4096,
+            2560,
+        )
+        .expect("first");
         assert!(matches!(
             publish_slot(&mut buffer.0, &LAYOUT, 1, SlotKind::Png, 1, 0, b"png", 0, 0),
             Err(RingError::SlotNotFree(1))
@@ -501,7 +531,17 @@ mod tests {
         let mut buffer = ring();
         let payload = vec![0u8; LAYOUT.slot_bytes as usize + 1];
         assert!(matches!(
-            publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::RawMask, 0, 0, &payload, 0, 0),
+            publish_slot(
+                &mut buffer.0,
+                &LAYOUT,
+                0,
+                SlotKind::RawMask,
+                0,
+                0,
+                &payload,
+                0,
+                0
+            ),
             Err(RingError::PayloadTooLarge(_))
         ));
     }
@@ -509,11 +549,27 @@ mod tests {
     #[test]
     fn a_slot_can_be_claimed_before_reading() {
         let mut buffer = ring();
-        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 2, 0, b"png", 4096, 2560).expect("publish");
+        publish_slot(
+            &mut buffer.0,
+            &LAYOUT,
+            0,
+            SlotKind::Png,
+            2,
+            0,
+            b"png",
+            4096,
+            2560,
+        )
+        .expect("publish");
 
         claim_slot(&mut buffer.0, &LAYOUT, 0).expect("claim");
-        assert_eq!(slot_state(&buffer.0, &LAYOUT, 0).unwrap(), SlotState::Consuming);
-        let view = slot_view(&buffer.0, &LAYOUT, 0).unwrap().expect("still readable while consuming");
+        assert_eq!(
+            slot_state(&buffer.0, &LAYOUT, 0).unwrap(),
+            SlotState::Consuming
+        );
+        let view = slot_view(&buffer.0, &LAYOUT, 0)
+            .unwrap()
+            .expect("still readable while consuming");
         assert_eq!(view.layer_index, 2);
 
         release_slot(&mut buffer.0, &LAYOUT, 0).expect("release");
@@ -528,7 +584,8 @@ mod tests {
     #[test]
     fn claiming_twice_is_refused() {
         let mut buffer = ring();
-        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 0, 0, b"png", 0, 0).expect("publish");
+        publish_slot(&mut buffer.0, &LAYOUT, 0, SlotKind::Png, 0, 0, b"png", 0, 0)
+            .expect("publish");
         claim_slot(&mut buffer.0, &LAYOUT, 0).expect("first claim");
         assert!(matches!(
             claim_slot(&mut buffer.0, &LAYOUT, 0),
@@ -540,9 +597,16 @@ mod tests {
     fn an_unaligned_buffer_is_refused() {
         // One byte of padding puts the mapping on an odd address.
         let mut backing = vec![0u8; LAYOUT_BYTES + 1];
-        let offset = if (backing.as_ptr() as usize) % 8 == 0 { 1 } else { 0 };
+        let offset = if (backing.as_ptr() as usize) % 8 == 0 {
+            1
+        } else {
+            0
+        };
         let bytes = &mut backing[offset..offset + LAYOUT_BYTES];
-        assert!(matches!(init_ring(bytes, LAYOUT), Err(RingError::Misaligned)));
+        assert!(matches!(
+            init_ring(bytes, LAYOUT),
+            Err(RingError::Misaligned)
+        ));
     }
 
     #[test]
