@@ -138,14 +138,19 @@ impl Encoder for EchoEncoder {
             return self.finish_multi_tank(output);
         }
         let mut file = std::fs::File::create(output).map_err(|error| error.to_string())?;
-        file.write_all(b"ECHOENC1").map_err(|error| error.to_string())?;
-        file.write_all(self.format.as_bytes()).map_err(|error| error.to_string())?;
+        file.write_all(b"ECHOENC1")
+            .map_err(|error| error.to_string())?;
+        file.write_all(self.format.as_bytes())
+            .map_err(|error| error.to_string())?;
         for (index, _tank, kind, runs, bytes) in &self.layers {
-            file.write_all(&index.to_le_bytes()).map_err(|error| error.to_string())?;
+            file.write_all(&index.to_le_bytes())
+                .map_err(|error| error.to_string())?;
             file.write_all(&(bytes.len() as u32).to_le_bytes())
                 .map_err(|error| error.to_string())?;
-            file.write_all(kind.as_bytes()).map_err(|error| error.to_string())?;
-            file.write_all(&runs.to_le_bytes()).map_err(|error| error.to_string())?;
+            file.write_all(kind.as_bytes())
+                .map_err(|error| error.to_string())?;
+            file.write_all(&runs.to_le_bytes())
+                .map_err(|error| error.to_string())?;
             file.write_all(bytes).map_err(|error| error.to_string())?;
         }
         file.write_all(format!("layers={}", self.layers.len()).as_bytes())
@@ -168,7 +173,8 @@ impl EchoEncoder {
             return Err("a multi-tank job carries no layer resolution".to_string());
         }
 
-        self.layers.sort_by_key(|(index, tank, _, _, _)| (*index, *tank));
+        self.layers
+            .sort_by_key(|(index, tank, _, _, _)| (*index, *tank));
         for (index, tank, kind, _, _) in &self.layers {
             if *kind != "rle" {
                 return Err(format!(
@@ -231,7 +237,8 @@ struct EchoImporter;
 
 impl Importer for EchoImporter {
     fn import(&mut self, input: &Path, output: &Path) -> Result<(), String> {
-        let source = std::fs::read(input).map_err(|error| format!("read {}: {error}", input.display()))?;
+        let source =
+            std::fs::read(input).map_err(|error| format!("read {}: {error}", input.display()))?;
 
         // Empty arrays are a valid support document: the collections exist and
         // hold nothing.
@@ -254,18 +261,24 @@ impl Importer for EchoImporter {
         let meta_bytes = serde_json::to_vec(&meta).map_err(|error| error.to_string())?;
 
         let mut file = std::fs::File::create(output).map_err(|error| error.to_string())?;
-        file.write_all(CONTAINER_MAGIC).map_err(|error| error.to_string())?;
-        file.write_all(&1u32.to_le_bytes()).map_err(|error| error.to_string())?;
+        file.write_all(CONTAINER_MAGIC)
+            .map_err(|error| error.to_string())?;
+        file.write_all(&1u32.to_le_bytes())
+            .map_err(|error| error.to_string())?;
         file.write_all(&(meta_bytes.len() as u32).to_le_bytes())
             .map_err(|error| error.to_string())?;
-        file.write_all(&meta_bytes).map_err(|error| error.to_string())?;
+        file.write_all(&meta_bytes)
+            .map_err(|error| error.to_string())?;
         for value in positions {
-            file.write_all(&value.to_le_bytes()).map_err(|error| error.to_string())?;
+            file.write_all(&value.to_le_bytes())
+                .map_err(|error| error.to_string())?;
         }
         for value in indices {
-            file.write_all(&value.to_le_bytes()).map_err(|error| error.to_string())?;
+            file.write_all(&value.to_le_bytes())
+                .map_err(|error| error.to_string())?;
         }
-        file.write_all(&support_bytes).map_err(|error| error.to_string())?;
+        file.write_all(&support_bytes)
+            .map_err(|error| error.to_string())?;
         Ok(())
     }
 }
@@ -284,29 +297,54 @@ impl FullCapabilities {
     /// plugin can read it at that offset, `end` reports the plate. A real backend
     /// would send the bytes it reads to the printer instead.
     fn upload(&self, request: &serde_json::Value) -> (u16, serde_json::Value) {
-        let phase = request.get("phase").and_then(|value| value.as_str()).unwrap_or("");
+        let phase = request
+            .get("phase")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
         let mut uploads = self.uploads.lock().expect("upload state");
 
         match phase {
             "begin" => {
-                let source = request.get("sourcePath").and_then(|value| value.as_str()).unwrap_or("");
-                let total = request.get("totalBytes").and_then(|value| value.as_u64()).unwrap_or(0);
+                let source = request
+                    .get("sourcePath")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let total = request
+                    .get("totalBytes")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
                 if source.is_empty() {
-                    return (400, serde_json::json!({ "error": "upload begin needs sourcePath" }));
+                    return (
+                        400,
+                        serde_json::json!({ "error": "upload begin needs sourcePath" }),
+                    );
                 }
                 let id = format!("echo-upload-{}", uploads.len() + 1);
                 uploads.insert(id.clone(), PathBuf::from(source));
-                (200, serde_json::json!({ "uploadId": id, "totalBytes": total }))
+                (
+                    200,
+                    serde_json::json!({ "uploadId": id, "totalBytes": total }),
+                )
             }
             "chunk" => {
-                let Some(upload_id) = request.get("uploadId").and_then(|value| value.as_str()) else {
-                    return (400, serde_json::json!({ "error": "upload chunk needs uploadId" }));
+                let Some(upload_id) = request.get("uploadId").and_then(|value| value.as_str())
+                else {
+                    return (
+                        400,
+                        serde_json::json!({ "error": "upload chunk needs uploadId" }),
+                    );
                 };
                 let Some(path) = uploads.get(upload_id) else {
                     return (404, serde_json::json!({ "error": "unknown upload id" }));
                 };
-                let offset = request.get("offset").and_then(|value| value.as_u64()).unwrap_or(0);
-                let length = request.get("length").and_then(|value| value.as_u64()).unwrap_or(0);
+                let offset = request
+                    .get("offset")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
+                let length = request
+                    .get("length")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
                 let mut file = match std::fs::File::open(path) {
                     Ok(file) => file,
                     Err(error) => return (500, serde_json::json!({ "error": error.to_string() })),
@@ -321,15 +359,22 @@ impl FullCapabilities {
                 (200, serde_json::json!({ "received": offset + read as u64 }))
             }
             "end" => {
-                let Some(upload_id) = request.get("uploadId").and_then(|value| value.as_str()) else {
-                    return (400, serde_json::json!({ "error": "upload end needs uploadId" }));
+                let Some(upload_id) = request.get("uploadId").and_then(|value| value.as_str())
+                else {
+                    return (
+                        400,
+                        serde_json::json!({ "error": "upload end needs uploadId" }),
+                    );
                 };
                 if uploads.remove(upload_id).is_none() {
                     return (404, serde_json::json!({ "error": "unknown upload id" }));
                 }
                 (200, serde_json::json!({ "ok": true, "plateId": 1 }))
             }
-            other => (400, serde_json::json!({ "error": format!("unknown upload phase: {other}") })),
+            other => (
+                400,
+                serde_json::json!({ "error": format!("unknown upload phase: {other}") }),
+            ),
         }
     }
 }
@@ -448,7 +493,9 @@ impl PluginCapabilities for FullCapabilities {
 
     fn preview(&self, archive: &Path, layer: u32) -> Result<Vec<u8>, String> {
         let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
-        png.extend_from_slice(format!("full-plugin-preview:{}:{layer}", archive.display()).as_bytes());
+        png.extend_from_slice(
+            format!("full-plugin-preview:{}:{layer}", archive.display()).as_bytes(),
+        );
         Ok(png)
     }
 }
@@ -505,7 +552,11 @@ mod tests {
             "format_version": "exm",
         });
         encoder
-            .begin(EncodeStart { format: ".exf", layers: 2, job: &job })
+            .begin(EncodeStart {
+                format: ".exf",
+                layers: 2,
+                job: &job,
+            })
             .expect("begin");
 
         let bytes = layer_bytes();
@@ -527,7 +578,11 @@ mod tests {
         let written = std::fs::read(&path).expect("read");
         let _ = std::fs::remove_file(&path);
 
-        assert_eq!(&written[..4], &0x0403_4b50u32.to_le_bytes(), "a store-only zip");
+        assert_eq!(
+            &written[..4],
+            &0x0403_4b50u32.to_le_bytes(),
+            "a store-only zip"
+        );
         let text = String::from_utf8_lossy(&written);
         assert!(text.contains("layer_00001_tank_1.png"));
         assert!(text.contains("layer_00001_tank_2.png"));
@@ -545,7 +600,11 @@ mod tests {
             "format_version": "exf",
         });
         encoder
-            .begin(EncodeStart { format: ".exf", layers: 2, job: &job })
+            .begin(EncodeStart {
+                format: ".exf",
+                layers: 2,
+                job: &job,
+            })
             .expect("begin");
         let bytes = layer_bytes();
         encoder

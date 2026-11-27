@@ -48,7 +48,6 @@ pub fn declared_file_extensions() -> Vec<&'static str> {
         .collect()
 }
 
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -316,18 +315,39 @@ mod tests {
     #[test]
     fn the_declared_table_describes_the_formats_the_app_writes() {
         let declared = locator::output_file_types();
-        let extensions: Vec<&str> = declared.iter().map(locator::OutputFileType::file_extension).collect();
+        let extensions: Vec<&str> = declared
+            .iter()
+            .map(locator::OutputFileType::file_extension)
+            .collect();
 
         // Both containers in the tree are declared, and each declaration carries the
         // identifiers the platform registrations need.
-        assert!(extensions.contains(&".voxl"), "VOXL is declared: {extensions:?}");
-        assert!(extensions.contains(&".lumen"), "LUMEN is declared: {extensions:?}");
+        assert!(
+            extensions.contains(&".voxl"),
+            "VOXL is declared: {extensions:?}"
+        );
+        assert!(
+            extensions.contains(&".lumen"),
+            "LUMEN is declared: {extensions:?}"
+        );
         assert_eq!(declared_file_extensions().len(), declared.len());
 
         for file_type in declared {
-            assert!(file_type.mime_type().contains('/'), "{} has no media type", file_type.file_extension());
-            assert!(file_type.uti().contains('.'), "{} has no UTI", file_type.file_extension());
-            assert!(!file_type.display_name().is_empty(), "{} has no display name", file_type.file_extension());
+            assert!(
+                file_type.mime_type().contains('/'),
+                "{} has no media type",
+                file_type.file_extension()
+            );
+            assert!(
+                file_type.uti().contains('.'),
+                "{} has no UTI",
+                file_type.file_extension()
+            );
+            assert!(
+                !file_type.display_name().is_empty(),
+                "{} has no display name",
+                file_type.file_extension()
+            );
         }
     }
 
@@ -335,7 +355,8 @@ mod tests {
     fn voxl_scene_preview_round_trips() {
         let png = make_test_png();
         for compressed in [false, true] {
-            let extracted = extract_thumbnail_from_bytes(&make_test_voxl(&png, compressed)).unwrap();
+            let extracted =
+                extract_thumbnail_from_bytes(&make_test_voxl(&png, compressed)).unwrap();
             assert_eq!(extracted, png, "zlib_compressed={compressed}");
         }
     }
@@ -370,7 +391,8 @@ mod tests {
     fn voxl_unknown_compression_is_refused() {
         let mut data = make_test_voxl(&make_test_png(), false);
         // Compression code 7 is not a code the declaration lists.
-        data[VOXL_HEADER_SIZE + VOXL_DIR_ENTRY_SIZE - 12..VOXL_HEADER_SIZE + VOXL_DIR_ENTRY_SIZE - 10]
+        data[VOXL_HEADER_SIZE + VOXL_DIR_ENTRY_SIZE - 12
+            ..VOXL_HEADER_SIZE + VOXL_DIR_ENTRY_SIZE - 10]
             .copy_from_slice(&7u16.to_le_bytes());
 
         let err = extract_thumbnail_from_bytes(&data).unwrap_err();
@@ -395,7 +417,8 @@ mod tests {
         let large = make_test_png();
 
         // Small is written first: the declared role order picks the winner.
-        let lumen = make_test_lumen(&[(LUMEN_ROLE_SMALL, small), (LUMEN_ROLE_LARGE, large.clone())]);
+        let lumen =
+            make_test_lumen(&[(LUMEN_ROLE_SMALL, small), (LUMEN_ROLE_LARGE, large.clone())]);
 
         assert_eq!(extract_thumbnail_from_bytes(&lumen).unwrap(), large);
     }
@@ -419,7 +442,8 @@ mod tests {
     #[test]
     fn lumen_skips_a_role_the_format_does_not_use_for_previews() {
         let png = make_test_png();
-        let with_other_role = make_test_lumen(&[(4, make_test_png()), (LUMEN_ROLE_LARGE, png.clone())]);
+        let with_other_role =
+            make_test_lumen(&[(4, make_test_png()), (LUMEN_ROLE_LARGE, png.clone())]);
         assert_eq!(extract_thumbnail_from_bytes(&with_other_role).unwrap(), png);
 
         let only_other_role = make_test_lumen(&[(4, make_test_png())]);

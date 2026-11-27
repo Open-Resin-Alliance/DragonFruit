@@ -185,12 +185,7 @@ pub struct Island {
 }
 
 impl Island {
-    pub fn new(
-        id: IslandId,
-        layer: u32,
-        area_mm2: f64,
-        comp: Option<&ComponentInfo>,
-    ) -> Self {
+    pub fn new(id: IslandId, layer: u32, area_mm2: f64, comp: Option<&ComponentInfo>) -> Self {
         let (centroid_sum_x, centroid_sum_y, centroid_sum_z, centroid_count, last_layer_centroid) =
             if let Some(c) = comp {
                 let count = c.size as u64;

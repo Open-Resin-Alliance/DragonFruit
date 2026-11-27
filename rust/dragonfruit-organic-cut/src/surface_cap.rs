@@ -44,7 +44,10 @@ pub struct CapRefusal {
 
 impl CapRefusal {
     fn new(why: impl Into<String>, at: Vec<Vec3>) -> Self {
-        CapRefusal { why: why.into(), at }
+        CapRefusal {
+            why: why.into(),
+            at,
+        }
     }
 }
 
@@ -71,7 +74,12 @@ pub fn close_pieces(
     smoothing: f32,
 ) -> Result<ClosedPieces, CapRefusal> {
     let mesh = &split.mesh;
-    let piece_count = split.piece_of_face.iter().copied().max().map_or(0, |m| m as usize + 1);
+    let piece_count = split
+        .piece_of_face
+        .iter()
+        .copied()
+        .max()
+        .map_or(0, |m| m as usize + 1);
     if piece_count == 0 {
         return Err(CapRefusal::new("the cut surface has no faces", Vec::new()));
     }
@@ -86,7 +94,11 @@ pub fn close_pieces(
     let mut cap_between = Vec::with_capacity(rims.len());
 
     for rim in &rims {
-        let ring: Vec<Vec3> = rim.ring.iter().map(|&v| mesh.positions[v as usize]).collect();
+        let ring: Vec<Vec3> = rim
+            .ring
+            .iter()
+            .map(|&v| mesh.positions[v as usize])
+            .collect();
         let cap = build_membrane_on_ring(&ring, grid_divisions, smoothing).ok_or_else(|| {
             CapRefusal::new(
                 format!("no cap spans the {}-vertex rim of this cut", ring.len()),
@@ -99,9 +111,18 @@ pub fn close_pieces(
         let base = positions.len() as u32;
         let rim_len = rim.ring.len() as u32;
         positions.extend(cap.vertices.iter().skip(rim_len as usize).copied());
-        let global = |v: u32| if v < rim_len { rim.ring[v as usize] } else { base + v - rim_len };
-        let cap_tris: Vec<[u32; 3]> =
-            cap.triangles.iter().map(|t| [global(t[0]), global(t[1]), global(t[2])]).collect();
+        let global = |v: u32| {
+            if v < rim_len {
+                rim.ring[v as usize]
+            } else {
+                base + v - rim_len
+            }
+        };
+        let cap_tris: Vec<[u32; 3]> = cap
+            .triangles
+            .iter()
+            .map(|t| [global(t[0]), global(t[1]), global(t[2])])
+            .collect();
 
         // The cap has to close the rim and nothing else. Checked rather than assumed:
         // the triangulator works on the rim FLATTENED onto its best-fit plane, and a
@@ -115,8 +136,11 @@ pub fn close_pieces(
                 *edge_uses.entry(edge_key(t[k], t[(k + 1) % 3])).or_default() += 1;
             }
         }
-        let free: AHashSet<(u32, u32)> =
-            edge_uses.iter().filter(|(_, n)| **n == 1).map(|(e, _)| *e).collect();
+        let free: AHashSet<(u32, u32)> = edge_uses
+            .iter()
+            .filter(|(_, n)| **n == 1)
+            .map(|(e, _)| *e)
+            .collect();
         let wanted: AHashSet<(u32, u32)> = (0..rim.ring.len())
             .map(|k| edge_key(rim.ring[k], rim.ring[(k + 1) % rim.ring.len()]))
             .collect();
@@ -136,9 +160,15 @@ pub fn close_pieces(
         // Which way the cap runs along the rim, read off the one triangle that owns
         // the rim's first edge.
         let (u, v) = (rim.ring[0], rim.ring[1]);
-        let cap_runs_u_to_v = cap_tris.iter().find_map(|t| directed(t, u, v)).ok_or_else(|| {
-            CapRefusal::new("the cap does not reach the rim edge it was built on", marks(&ring))
-        })?;
+        let cap_runs_u_to_v = cap_tris
+            .iter()
+            .find_map(|t| directed(t, u, v))
+            .ok_or_else(|| {
+                CapRefusal::new(
+                    "the cap does not reach the rim edge it was built on",
+                    marks(&ring),
+                )
+            })?;
 
         // A piece and its cap must traverse their shared edge in OPPOSITE directions,
         // or the solid comes out inside out. `side_a`'s faces traverse the ring in
@@ -152,9 +182,13 @@ pub fn close_pieces(
         }
         for &(piece, face_runs_u_to_v) in &sides {
             let flip = cap_runs_u_to_v != !face_runs_u_to_v;
-            extra_faces[piece as usize].extend(
-                cap_tris.iter().map(|t| if flip { [t[0], t[2], t[1]] } else { *t }),
-            );
+            extra_faces[piece as usize].extend(cap_tris.iter().map(|t| {
+                if flip {
+                    [t[0], t[2], t[1]]
+                } else {
+                    *t
+                }
+            }));
         }
 
         caps.push(cap);
@@ -200,7 +234,11 @@ pub fn close_pieces(
         ));
     }
 
-    Ok(ClosedPieces { solids, caps, cap_between })
+    Ok(ClosedPieces {
+        solids,
+        caps,
+        cap_between,
+    })
 }
 
 /// Edges used by exactly `uses` faces. `open_edges(m, 1)` counts holes; anything
@@ -256,7 +294,10 @@ fn rims_between_pieces(mesh: &IndexedMesh, piece_of_face: &[u32]) -> Result<Vec<
     let mut edge_faces: AHashMap<(u32, u32), Vec<u32>> = AHashMap::new();
     for (fi, t) in mesh.triangles.iter().enumerate() {
         for k in 0..3 {
-            edge_faces.entry(edge_key(t[k], t[(k + 1) % 3])).or_default().push(fi as u32);
+            edge_faces
+                .entry(edge_key(t[k], t[(k + 1) % 3]))
+                .or_default()
+                .push(fi as u32);
         }
     }
     // The face across `e` from `f`, when the edge is an honest two-sided one.
@@ -268,13 +309,16 @@ fn rims_between_pieces(mesh: &IndexedMesh, piece_of_face: &[u32]) -> Result<Vec<
     };
     // Is the directed edge u->v of face f a boundary of f's piece?
     let is_boundary = |f: u32, u: u32, v: u32| -> bool {
-        across(f, edge_key(u, v))
-            .map_or(true, |g| piece_of_face[g as usize] != piece_of_face[f as usize])
+        across(f, edge_key(u, v)).map_or(true, |g| {
+            piece_of_face[g as usize] != piece_of_face[f as usize]
+        })
     };
     // v's successor in f, walking the face's own winding.
     let next_in_face = |f: u32, v: u32| -> u32 {
         let t = &mesh.triangles[f as usize];
-        let k = (0..3).find(|&k| t[k] == v).expect("the walk stays on faces that hold its vertex");
+        let k = (0..3)
+            .find(|&k| t[k] == v)
+            .expect("the walk stays on faces that hold its vertex");
         t[(k + 1) % 3]
     };
 
@@ -294,7 +338,9 @@ fn rims_between_pieces(mesh: &IndexedMesh, piece_of_face: &[u32]) -> Result<Vec<
     let mut starts: Vec<(u32, u32)> = pending.keys().copied().collect();
     starts.sort_unstable();
     for start in starts {
-        let Some(&start_face) = pending.get(&start) else { continue };
+        let Some(&start_face) = pending.get(&start) else {
+            continue;
+        };
         let piece = piece_of_face[start_face as usize];
 
         let mut ring: Vec<u32> = Vec::new();
@@ -336,7 +382,10 @@ fn rims_between_pieces(mesh: &IndexedMesh, piece_of_face: &[u32]) -> Result<Vec<
         }
         if ring.len() < 3 {
             let at: Vec<Vec3> = ring.iter().map(|&v| mesh.positions[v as usize]).collect();
-            return Err(CapRefusal::new("a rim of the cut is shorter than a triangle", at));
+            return Err(CapRefusal::new(
+                "a rim of the cut is shorter than a triangle",
+                at,
+            ));
         }
 
         let mut key = edges;
@@ -349,9 +398,18 @@ fn rims_between_pieces(mesh: &IndexedMesh, piece_of_face: &[u32]) -> Result<Vec<
                 rims[i].shared = true;
             }
             None => {
-                let side_b = *others.iter().max_by_key(|(_, n)| **n).map(|(p, _)| p).unwrap();
+                let side_b = *others
+                    .iter()
+                    .max_by_key(|(_, n)| **n)
+                    .map(|(p, _)| p)
+                    .unwrap();
                 seen_loops.insert(key, rims.len());
-                rims.push(Rim { ring, side_a: piece, side_b, shared: false });
+                rims.push(Rim {
+                    ring,
+                    side_a: piece,
+                    side_b,
+                    shared: false,
+                });
             }
         }
     }
@@ -383,7 +441,11 @@ fn directed(tri: &[u32; 3], u: u32, v: u32) -> Option<bool> {
 }
 
 fn edge_key(a: u32, b: u32) -> (u32, u32) {
-    if a < b { (a, b) } else { (b, a) }
+    if a < b {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 
 /// Keep only the vertices `triangles` actually name, renumbered from zero.
@@ -401,7 +463,10 @@ fn compact(positions: &[Vec3], triangles: &[[u32; 3]]) -> IndexedMesh {
         }
         out.push(n);
     }
-    IndexedMesh { positions: kept, triangles: out }
+    IndexedMesh {
+        positions: kept,
+        triangles: out,
+    }
 }
 
 #[cfg(test)]
@@ -468,7 +533,10 @@ mod tests {
                 triangles.push([idx(i, j), idx(i + 1, j + 1), idx(i, j + 1)]);
             }
         }
-        IndexedMesh { positions, triangles }
+        IndexedMesh {
+            positions,
+            triangles,
+        }
     }
 
     fn tube_ring(major: f32, minor: f32, angle: f32, steps: usize) -> Vec<Vec3> {
@@ -537,12 +605,7 @@ mod tests {
         let closed = close_pieces(&split, DEFAULT_GRID_DIVISIONS, 1.0).expect("both sides cap");
 
         let cap = &closed.caps[0];
-        let on_cut: AHashSet<[u32; 3]> = split
-            .mesh
-            .positions
-            .iter()
-            .map(|&p| key(p))
-            .collect();
+        let on_cut: AHashSet<[u32; 3]> = split.mesh.positions.iter().map(|&p| key(p)).collect();
         for &b in &cap.boundary {
             assert!(
                 on_cut.contains(&key(cap.vertices[b as usize])),
@@ -571,8 +634,10 @@ mod tests {
                 .collect()
         };
         let (a, b) = (faces_of(&closed.solids[0]), faces_of(&closed.solids[1]));
-        let shared: Vec<&[[u32; 3]; 3]> =
-            a.iter().filter(|t| b.contains(&[t[0], t[2], t[1]])).collect();
+        let shared: Vec<&[[u32; 3]; 3]> = a
+            .iter()
+            .filter(|t| b.contains(&[t[0], t[2], t[1]]))
+            .collect();
         assert_eq!(
             shared.len(),
             closed.caps[0].triangles.len(),
@@ -608,7 +673,11 @@ mod tests {
         .expect("both offset seams cut the surface");
         let closed = close_pieces(&split, DEFAULT_GRID_DIVISIONS, 1.0).expect("all three cap");
 
-        assert_eq!(closed.solids.len(), 3, "above, below, and the strip between");
+        assert_eq!(
+            closed.solids.len(),
+            3,
+            "above, below, and the strip between"
+        );
         for (i, solid) in closed.solids.iter().enumerate() {
             assert_eq!(open_edges(solid, 1), 0, "solid {i} is closed");
         }
@@ -641,7 +710,11 @@ mod tests {
 
         assert!(closed.caps.is_empty(), "no rim, no cap");
         assert_eq!(closed.solids.len(), 1, "the surface stayed in one piece");
-        assert_eq!(open_edges(&closed.solids[0], 1), 0, "and it is still closed");
+        assert_eq!(
+            open_edges(&closed.solids[0], 1),
+            0,
+            "and it is still closed"
+        );
     }
 
     #[test]

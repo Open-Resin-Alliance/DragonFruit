@@ -107,7 +107,13 @@ pub fn bake_visibility_for_soup(
 ) -> (VertexVisibility, usize) {
     let corner_count = positions.len() / 3;
     if corner_count == 0 {
-        return (VertexVisibility { occlusion: Vec::new(), moment: Vec::new() }, 0);
+        return (
+            VertexVisibility {
+                occlusion: Vec::new(),
+                moment: Vec::new(),
+            },
+            0,
+        );
     }
 
     let (mesh, corner_map) =
@@ -377,7 +383,10 @@ fn bake_against_with_visibility_and_rotation(
 ) -> VertexVisibility {
     let vertex_count = mesh.positions.len();
     if vertex_count == 0 {
-        return VertexVisibility { occlusion: Vec::new(), moment: Vec::new() };
+        return VertexVisibility {
+            occlusion: Vec::new(),
+            moment: Vec::new(),
+        };
     }
 
     // Vertex normals from the adjacent faces: the probe fan's axis is the smooth
@@ -485,7 +494,10 @@ fn bake_against_with_visibility_and_rotation(
             *moment = escaped.scale(1.0 / sample_count);
         });
 
-    VertexVisibility { occlusion: out, moment: moments }
+    VertexVisibility {
+        occlusion: out,
+        moment: moments,
+    }
 }
 
 /// The precondition behind baking a mesh the loader already welded instead of
@@ -601,7 +613,10 @@ mod tests {
 
         let open_face = value_near([10.0, 2.0, 4.0]);
         let crease_floor = value_near([10.0, 10.0, 4.0]);
-        assert!(open_face > 0.8, "open face should stay open, got {open_face}");
+        assert!(
+            open_face > 0.8,
+            "open face should stay open, got {open_face}"
+        );
         assert!(
             crease_floor < open_face - 0.2,
             "slot floor ({crease_floor}) should be clearly darker than the open face ({open_face})"
@@ -621,7 +636,10 @@ mod tests {
         // with the first copy's, and every value must follow.
         let nudge = 1e-7f32;
         let mut soup = base.clone();
-        soup.extend(base.chunks_exact(3).flat_map(|c| [c[0] + nudge, c[1], c[2]]));
+        soup.extend(
+            base.chunks_exact(3)
+                .flat_map(|c| [c[0] + nudge, c[1], c[2]]),
+        );
 
         let (values, _) = bake_vertex_occlusion_for_soup(&soup, DEFAULT_RAYS, None);
         assert_eq!(values.len(), soup.len() / 3, "one value per corner");
@@ -638,7 +656,6 @@ mod tests {
             );
         }
     }
-
 
     /// Occlusion counts by distance: a wall within the plateau darkens the floor
     /// under it, one part way down the taper darkens it less, and one past the
@@ -695,7 +712,10 @@ mod tests {
 
         // Inside the plateau (0.15 of a 6.8mm reach, so 1mm): full weight.
         let near = occluded_under_wall_at(0.5);
-        assert!(near < 0.75, "a wall half a millimetre away should shade the floor, got {near}");
+        assert!(
+            near < 0.75,
+            "a wall half a millimetre away should shade the floor, got {near}"
+        );
         // Part way down the taper (5.5mm is 0.8 of the reach): lighter than near.
         let mid = occluded_under_wall_at(5.5);
         assert!(
@@ -721,7 +741,9 @@ mod tests {
     /// with one normal it is the entire reading of a vertex far from its occluder.
     fn fan_bias() -> Vec3 {
         let samples = hemisphere_samples(DEFAULT_RAYS);
-        let sum = samples.iter().fold(Vec3::ZERO, |acc, sample| acc.add(*sample));
+        let sum = samples
+            .iter()
+            .fold(Vec3::ZERO, |acc, sample| acc.add(*sample));
         sum.scale(1.0 / samples.len() as f32)
     }
 
@@ -753,7 +775,10 @@ mod tests {
         assert_eq!(visibility.moment.len(), mesh.positions.len());
         for (index, moment) in visibility.moment.iter().enumerate() {
             let occlusion = visibility.occlusion[index];
-            assert!(occlusion > 0.999, "the plate should be open, got {occlusion}");
+            assert!(
+                occlusion > 0.999,
+                "the plate should be open, got {occlusion}"
+            );
             assert!(
                 (moment.z - 2.0 / 3.0).abs() < 0.01,
                 "an open surface's moment should sit at 2/3 of its normal, got {moment:?}",
@@ -825,7 +850,11 @@ mod tests {
                 }
             }
             let index = nearest.expect("a floor vertex in the walk");
-            walk.push((x, visibility.occlusion[index], visibility.moment[index].x - bias));
+            walk.push((
+                x,
+                visibility.occlusion[index],
+                visibility.moment[index].x - bias,
+            ));
         }
 
         // The walk has to span the decay, or the monotonicity below proves nothing.
@@ -1066,6 +1095,9 @@ mod smoothing_tests {
         let (again, welded_again) = bake_smoothed_occlusion_for_soup(&soup, 8, None);
         assert_eq!(values, again, "a re-bake has to reproduce itself");
         assert_eq!(welded, welded_again);
-        assert!(welded > 0 && welded < values.len(), "the soup has corners to weld: {welded}");
+        assert!(
+            welded > 0 && welded < values.len(),
+            "the soup has corners to weld: {welded}"
+        );
     }
 }

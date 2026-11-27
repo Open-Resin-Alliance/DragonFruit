@@ -1,6 +1,6 @@
 //! Floyd-Steinberg energy-based dithering for low-bit-depth display systems.
 
-use crate::rle::{RleRun, RleAccum, emit_row, emit_zero_rows};
+use crate::rle::{emit_row, emit_zero_rows, RleAccum, RleRun};
 
 /// Lowest desired energy the binned lookup table covers.
 const MIN_ENERGY: f32 = -0.5;
@@ -16,10 +16,10 @@ pub struct DitherPaletteV3 {
     /// Maps 8-bit input grayscale directly to physical energy based on the job LUT and gamma:
     /// E = (lut[V] / 255.0) ^ gamma
     pub source_energy: [f32; 256],
-    
+
     /// Target PWM byte values for the low-bit-depth palette levels (e.g. 8 levels for 3-bit).
     pub target_bytes: Vec<u8>,
-    
+
     /// Maps each target palette index to its corresponding physical energy level.
     pub target_energy: Vec<f32>,
 
@@ -117,7 +117,9 @@ fn zero_is_inert(palette: &DitherPaletteV3) -> bool {
 /// Search the edges rather than rescanning the already-active interior.
 #[inline]
 fn nonzero_error_bounds(
-    lo: usize, hi: usize, mut error_at: impl FnMut(usize) -> f32,
+    lo: usize,
+    hi: usize,
+    mut error_at: impl FnMut(usize) -> f32,
 ) -> (usize, usize) {
     let Some(lo) = (lo..=hi).find(|&x| error_at(x) != 0.0) else {
         return (usize::MAX, 0);
@@ -134,7 +136,9 @@ fn nonzero_source_rows(runs: &[RleRun], width: usize, height: usize) -> Option<(
     let mut first = usize::MAX;
     let mut last = 0;
     for run in runs {
-        if offset >= total_pixels { break; }
+        if offset >= total_pixels {
+            break;
+        }
         let length = (run.length as usize).min(total_pixels - offset);
         if run.value != 0 && length != 0 {
             first = first.min(offset);
@@ -142,7 +146,11 @@ fn nonzero_source_rows(runs: &[RleRun], width: usize, height: usize) -> Option<(
         }
         offset += length;
     }
-    if first == usize::MAX { None } else { Some((first / width, last / width)) }
+    if first == usize::MAX {
+        None
+    } else {
+        Some((first / width, last / width))
+    }
 }
 
 /// A borrowed run position shared by the row-bound scan and its cheap snapshot.
@@ -156,7 +164,11 @@ struct RleSourcePosition<'a> {
 
 impl<'a> RleSourcePosition<'a> {
     fn new(runs: &'a [RleRun]) -> Self {
-        Self { runs, run_idx: 0, run_end: runs.first().map_or(usize::MAX, |run| run.length as usize) }
+        Self {
+            runs,
+            run_idx: 0,
+            run_end: runs.first().map_or(usize::MAX, |run| run.length as usize),
+        }
     }
 
     #[inline]
@@ -204,15 +216,25 @@ struct RleEnergyCursor<'a> {
 impl<'a> RleEnergyCursor<'a> {
     fn new(mut position: RleSourcePosition<'a>, source_energy: &'a [f32; 256]) -> Self {
         position.seek(0);
-        let value = position.runs.get(position.run_idx).map_or(0, |run| run.value);
-        Self { position, source_energy, energy: source_energy[value as usize] }
+        let value = position
+            .runs
+            .get(position.run_idx)
+            .map_or(0, |run| run.value);
+        Self {
+            position,
+            source_energy,
+            energy: source_energy[value as usize],
+        }
     }
 
     #[inline]
     fn start_row(&mut self, mut position: RleSourcePosition<'a>, offset: usize) {
         position.seek(offset);
         if position.run_idx != self.position.run_idx {
-            let value = position.runs.get(position.run_idx).map_or(0, |run| run.value);
+            let value = position
+                .runs
+                .get(position.run_idx)
+                .map_or(0, |run| run.value);
             self.energy = self.source_energy[value as usize];
         }
         self.position = position;
@@ -222,7 +244,11 @@ impl<'a> RleEnergyCursor<'a> {
     fn energy_at(&mut self, offset: usize) -> f32 {
         if offset >= self.position.run_end {
             self.position.seek(offset);
-            let value = self.position.runs.get(self.position.run_idx).map_or(0, |run| run.value);
+            let value = self
+                .position
+                .runs
+                .get(self.position.run_idx)
+                .map_or(0, |run| run.value);
             self.energy = self.source_energy[value as usize];
         }
         self.energy
@@ -253,8 +279,7 @@ pub fn dither_rle_layer_with_lut_and_gamma(
         return Vec::new();
     }
 
-    let Some((min_y, max_y)) = nonzero_source_rows(runs, width, height)
-    else {
+    let Some((min_y, max_y)) = nonzero_source_rows(runs, width, height) else {
         let mut out = RleAccum::new();
         emit_zero_rows(&mut out, height, width);
         return out.finish();
@@ -361,11 +386,16 @@ pub(crate) const LAYER_DITHER_BATCH: usize = 4;
 
 /// Decide scheduling once, outside worker/vector loops. Scalar and curing-zero
 /// jobs keep individual task scheduling instead of serializing a partial group.
-pub(crate) fn can_batch_layers(palette: &DitherPaletteV3, backend: crate::pulp_simd::Backend) -> bool {
+pub(crate) fn can_batch_layers(
+    palette: &DitherPaletteV3,
+    backend: crate::pulp_simd::Backend,
+) -> bool {
     struct NativeFour;
     impl pulp::WithSimd for NativeFour {
         type Output = bool;
-        fn with_simd<S: pulp::Simd>(self, _simd: S) -> bool { S::F32_LANES == LAYER_DITHER_BATCH }
+        fn with_simd<S: pulp::Simd>(self, _simd: S) -> bool {
+            S::F32_LANES == LAYER_DITHER_BATCH
+        }
     }
     zero_is_inert(palette) && backend.for_layer_dither().dispatch(NativeFour)
 }
@@ -378,7 +408,9 @@ pub(crate) fn dither_rle_layers(
     backend: crate::pulp_simd::Backend,
 ) -> [Vec<RleRun>; LAYER_DITHER_BATCH] {
     assert!(layers.len() <= LAYER_DITHER_BATCH);
-    backend.for_layer_dither().dispatch(LayerDither { layers, palette })
+    backend
+        .for_layer_dither()
+        .dispatch(LayerDither { layers, palette })
 }
 
 struct LayerDither<'a, 'r> {
@@ -391,12 +423,20 @@ impl pulp::WithSimd for LayerDither<'_, '_> {
 
     #[inline(always)]
     fn with_simd<S: pulp::Simd>(self, simd: S) -> Self::Output {
-        if self.layers.len() != LAYER_DITHER_BATCH || S::F32_LANES != LAYER_DITHER_BATCH
+        if self.layers.len() != LAYER_DITHER_BATCH
+            || S::F32_LANES != LAYER_DITHER_BATCH
             || !zero_is_inert(self.palette)
         {
-            return std::array::from_fn(|lane| self.layers.get(lane).map_or_else(Vec::new, |layer| {
-                dither_rle_layer_with_lut_and_gamma(layer.runs, self.palette, layer.width, layer.height)
-            }));
+            return std::array::from_fn(|lane| {
+                self.layers.get(lane).map_or_else(Vec::new, |layer| {
+                    dither_rle_layer_with_lut_and_gamma(
+                        layer.runs,
+                        self.palette,
+                        layer.width,
+                        layer.height,
+                    )
+                })
+            });
         }
         dither_independent_layers_with_simd(simd, self.layers, self.palette)
     }
@@ -422,7 +462,10 @@ struct LayerDitherStream<'a> {
 /// Keep separate multiply/add operations: FS rounding is part of the format.
 #[inline(always)]
 fn add_layer_error<S: pulp::Simd>(
-    simd: S, destination: &mut S::f32s, error: S::f32s, weight: f32,
+    simd: S,
+    destination: &mut S::f32s,
+    error: S::f32s,
+    weight: f32,
     lanes: &[u32; LAYER_DITHER_BATCH],
 ) {
     let mask = simd.transmute_m32s_u32s(simd.partial_load_u32s(lanes));
@@ -435,33 +478,61 @@ fn add_layer_error<S: pulp::Simd>(
 /// interleaved complete four-f32 vectors; each lane retains the scalar carry band.
 #[inline(never)]
 fn dither_independent_layers_with_simd<S: pulp::Simd>(
-    simd: S, layers: &[DitherLayer<'_>], palette: &DitherPaletteV3,
+    simd: S,
+    layers: &[DitherLayer<'_>],
+    palette: &DitherPaletteV3,
 ) -> [Vec<RleRun>; LAYER_DITHER_BATCH] {
     debug_assert_eq!(S::F32_LANES, LAYER_DITHER_BATCH);
     let mut outputs = std::array::from_fn(|_| Vec::new());
-    let mut streams: [Option<LayerDitherStream<'_>>; LAYER_DITHER_BATCH] = std::array::from_fn(|lane| {
-        let layer = &layers[lane];
-        if layer.runs.is_empty() || layer.width == 0 || layer.height == 0 { return None; }
-        let Some((first_y, last_y)) = nonzero_source_rows(layer.runs, layer.width, layer.height) else {
+    let mut streams: [Option<LayerDitherStream<'_>>; LAYER_DITHER_BATCH] =
+        std::array::from_fn(|lane| {
+            let layer = &layers[lane];
+            if layer.runs.is_empty() || layer.width == 0 || layer.height == 0 {
+                return None;
+            }
+            let Some((first_y, last_y)) =
+                nonzero_source_rows(layer.runs, layer.width, layer.height)
+            else {
+                let mut out = RleAccum::new();
+                emit_zero_rows(&mut out, layer.height, layer.width);
+                outputs[lane] = out.finish();
+                return None;
+            };
             let mut out = RleAccum::new();
-            emit_zero_rows(&mut out, layer.height, layer.width);
-            outputs[lane] = out.finish();
-            return None;
-        };
-        let mut out = RleAccum::new();
-        emit_zero_rows(&mut out, first_y, layer.width);
-        let mut source_rows = RleSourcePosition::new(layer.runs);
-        source_rows.seek(first_y.saturating_mul(layer.width));
-        let source = RleEnergyCursor::new(source_rows, &palette.source_energy);
-        Some(LayerDitherStream {
-            source_rows, source, row_start: 0, out, row: vec![0; layer.width], width: layer.width, height: layer.height,
-            first_y, last_y,
-            curr_lo: usize::MAX, curr_hi: 0, lo: usize::MAX, hi: 0, finished: false,
-        })
-    });
+            emit_zero_rows(&mut out, first_y, layer.width);
+            let mut source_rows = RleSourcePosition::new(layer.runs);
+            source_rows.seek(first_y.saturating_mul(layer.width));
+            let source = RleEnergyCursor::new(source_rows, &palette.source_energy);
+            Some(LayerDitherStream {
+                source_rows,
+                source,
+                row_start: 0,
+                out,
+                row: vec![0; layer.width],
+                width: layer.width,
+                height: layer.height,
+                first_y,
+                last_y,
+                curr_lo: usize::MAX,
+                curr_hi: 0,
+                lo: usize::MAX,
+                hi: 0,
+                finished: false,
+            })
+        });
     let width = streams.iter().flatten().map(|s| s.width).max().unwrap_or(0);
-    let height = streams.iter().flatten().map(|s| s.height).max().unwrap_or(0);
-    let first_y = streams.iter().flatten().map(|s| s.first_y).min().unwrap_or(height);
+    let height = streams
+        .iter()
+        .flatten()
+        .map(|s| s.height)
+        .max()
+        .unwrap_or(0);
+    let first_y = streams
+        .iter()
+        .flatten()
+        .map(|s| s.first_y)
+        .min()
+        .unwrap_or(height);
     let zero = simd.splat_f32s(0.0);
     let mut err_curr = vec![zero; width];
     let mut err_next = vec![zero; width];
@@ -472,7 +543,9 @@ fn dither_independent_layers_with_simd<S: pulp::Simd>(
         for stream in streams.iter_mut().flatten() {
             stream.lo = usize::MAX;
             stream.hi = 0;
-            if stream.finished || y < stream.first_y || y >= stream.height { continue; }
+            if stream.finished || y < stream.first_y || y >= stream.height {
+                continue;
+            }
             let err_empty = stream.curr_lo > stream.curr_hi;
             if y > stream.last_y && err_empty {
                 emit_zero_rows(&mut stream.out, stream.height - y, stream.width);
@@ -481,14 +554,18 @@ fn dither_independent_layers_with_simd<S: pulp::Simd>(
             }
             stream.row_start = y.saturating_mul(stream.width);
             let row_source = stream.source_rows;
-            let (input_lo, input_hi) = stream.source_rows.row_bounds(stream.row_start, stream.width);
+            let (input_lo, input_hi) = stream
+                .source_rows
+                .row_bounds(stream.row_start, stream.width);
             if input_lo > input_hi && err_empty {
                 emit_zero_rows(&mut stream.out, 1, stream.width);
                 continue;
             }
             stream.lo = input_lo.min(stream.curr_lo).min(stream.width - 1);
             stream.hi = input_hi.max(stream.curr_hi).min(stream.width - 1);
-            stream.source.start_row(row_source, stream.row_start + stream.lo);
+            stream
+                .source
+                .start_row(row_source, stream.row_start + stream.lo);
             first_x = first_x.min(stream.lo);
             last_x = last_x.max(stream.hi);
         }
@@ -498,18 +575,27 @@ fn dither_independent_layers_with_simd<S: pulp::Simd>(
             let mut sources = [0.0; LAYER_DITHER_BATCH];
             let mut active = [false; LAYER_DITHER_BATCH];
             for (lane, stream) in streams.iter_mut().enumerate() {
-                let Some(stream) = stream else { continue; };
-                if x < stream.lo || x > stream.hi { continue; }
+                let Some(stream) = stream else {
+                    continue;
+                };
+                if x < stream.lo || x > stream.hi {
+                    continue;
+                }
                 active[lane] = true;
                 sources[lane] = stream.source.energy_at(stream.row_start + x);
             }
             let desired = simd.add_f32s(simd.partial_load_f32s(&sources), err_curr[x]);
-            let scaled = simd.mul_f32s(simd.sub_f32s(desired, simd.splat_f32s(MIN_ENERGY)), simd.splat_f32s(ENERGY_SCALE));
+            let scaled = simd.mul_f32s(
+                simd.sub_f32s(desired, simd.splat_f32s(MIN_ENERGY)),
+                simd.splat_f32s(ENERGY_SCALE),
+            );
             let mut bins = [0.0; LAYER_DITHER_BATCH];
             simd.partial_store_f32s(&mut bins, scaled);
             let mut targets = [0.0; LAYER_DITHER_BATCH];
             for (lane, stream) in streams.iter_mut().enumerate() {
-                if !active[lane] { continue; }
+                if !active[lane] {
+                    continue;
+                }
                 let stream = stream.as_mut().unwrap();
                 let bin = bins[lane].clamp(0.0, 4095.0) as usize;
                 stream.row[x] = palette.bin_bytes[bin];
@@ -524,7 +610,9 @@ fn dither_independent_layers_with_simd<S: pulp::Simd>(
             let mut below_right = [0; LAYER_DITHER_BATCH];
             let mut diffuse = false;
             for (lane, stream) in streams.iter_mut().enumerate() {
-                if !active[lane] || errors[lane] == 0.0 { continue; }
+                if !active[lane] || errors[lane] == 0.0 {
+                    continue;
+                }
                 let stream = stream.as_mut().unwrap();
                 diffuse = true;
                 if x + 1 < stream.width {
@@ -533,32 +621,50 @@ fn dither_independent_layers_with_simd<S: pulp::Simd>(
                     last_x = last_x.max(stream.hi);
                 }
                 if y + 1 < stream.height {
-                    if x > 0 { below_left[lane] = u32::MAX; }
+                    if x > 0 {
+                        below_left[lane] = u32::MAX;
+                    }
                     below[lane] = u32::MAX;
-                    if x + 1 < stream.width { below_right[lane] = u32::MAX; }
+                    if x + 1 < stream.width {
+                        below_right[lane] = u32::MAX;
+                    }
                 }
             }
             if diffuse {
-                if x + 1 < width { add_layer_error(simd, &mut err_curr[x + 1], error, 0.4375, &right); }
+                if x + 1 < width {
+                    add_layer_error(simd, &mut err_curr[x + 1], error, 0.4375, &right);
+                }
                 if y + 1 < height {
-                    if x > 0 { add_layer_error(simd, &mut err_next[x - 1], error, 0.1875, &below_left); }
+                    if x > 0 {
+                        add_layer_error(simd, &mut err_next[x - 1], error, 0.1875, &below_left);
+                    }
                     add_layer_error(simd, &mut err_next[x], error, 0.3125, &below);
-                    if x + 1 < width { add_layer_error(simd, &mut err_next[x + 1], error, 0.0625, &below_right); }
+                    if x + 1 < width {
+                        add_layer_error(simd, &mut err_next[x + 1], error, 0.0625, &below_right);
+                    }
                 }
             }
             x += 1;
         }
 
         for (lane, stream) in streams.iter_mut().enumerate() {
-            let Some(stream) = stream else { continue; };
-            if stream.lo > stream.hi { continue; }
+            let Some(stream) = stream else {
+                continue;
+            };
+            if stream.lo > stream.hi {
+                continue;
+            }
             stream.out.push_run(stream.lo as u32, 0);
             emit_row(&mut stream.out, &stream.row[stream.lo..=stream.hi]);
-            stream.out.push_run((stream.width - 1 - stream.hi) as u32, 0);
+            stream
+                .out
+                .push_run((stream.width - 1 - stream.hi) as u32, 0);
             if y + 1 < stream.height {
                 let mut errors = [0.0; LAYER_DITHER_BATCH];
                 (stream.curr_lo, stream.curr_hi) = nonzero_error_bounds(
-                    stream.lo.saturating_sub(1), (stream.hi + 1).min(stream.width - 1), |x| {
+                    stream.lo.saturating_sub(1),
+                    (stream.hi + 1).min(stream.width - 1),
+                    |x| {
                         simd.partial_store_f32s(&mut errors, err_next[x]);
                         errors[lane]
                     },
@@ -574,7 +680,12 @@ fn dither_independent_layers_with_simd<S: pulp::Simd>(
             let mut keep = [u32::MAX; LAYER_DITHER_BATCH];
             for (lane, stream) in streams.iter().enumerate() {
                 if let Some(stream) = stream {
-                    if stream.lo <= stream.hi && x >= stream.lo && x <= (stream.hi + 1).min(stream.width - 1) { keep[lane] = 0; }
+                    if stream.lo <= stream.hi
+                        && x >= stream.lo
+                        && x <= (stream.hi + 1).min(stream.width - 1)
+                    {
+                        keep[lane] = 0;
+                    }
                 }
             }
             let mask = simd.transmute_m32s_u32s(simd.partial_load_u32s(&keep));
@@ -582,7 +693,9 @@ fn dither_independent_layers_with_simd<S: pulp::Simd>(
         }
     }
     for (lane, stream) in streams.into_iter().enumerate() {
-        if let Some(stream) = stream { outputs[lane] = stream.out.finish(); }
+        if let Some(stream) = stream {
+            outputs[lane] = stream.out.finish();
+        }
     }
     outputs
 }
@@ -600,7 +713,7 @@ fn dither_rle_layer_full_frame(
     }
 
     let mut out = RleAccum::new();
-    
+
     // Auxiliary sliding row error buffers: only O(width) RAM overhead
     let mut err_curr = vec![0.0f32; width];
     let mut err_next = vec![0.0f32; width];
@@ -663,7 +776,7 @@ fn dither_rle_layer_full_frame(
 
                 err_curr[x + 1] += quant_error * 0.4375; // Right (7/16)
                 err_next[x - 1] += quant_error * 0.1875; // Bottom-Left (3/16)
-                err_next[x] += quant_error * 0.3125;     // Bottom (5/16)
+                err_next[x] += quant_error * 0.3125; // Bottom (5/16)
                 err_next[x + 1] += quant_error * 0.0625; // Bottom-Right (1/16)
             }
         } else {
@@ -692,7 +805,7 @@ fn dither_rle_layer_full_frame(
 
             if y + 1 < height {
                 err_next[x - 1] += quant_error * 0.1875; // Bottom-Left (3/16)
-                err_next[x] += quant_error * 0.3125;     // Bottom (5/16)
+                err_next[x] += quant_error * 0.3125; // Bottom (5/16)
             }
         }
 
@@ -731,7 +844,7 @@ pub fn dither_mask_in_bounds(
 
     for y in 0..row_height {
         let row_offset = y * row_width;
-        
+
         // Peel the first iteration (x = 0) and last iteration (x = row_width - 1)
         // to eliminate coordinate boundary checks in the hot inner loop.
         if row_width > 0 {
@@ -769,7 +882,7 @@ pub fn dither_mask_in_bounds(
 
                 err_curr[x + 1] += quant_error * 0.4375; // Right (7/16)
                 err_next[x - 1] += quant_error * 0.1875; // Bottom-Left (3/16)
-                err_next[x] += quant_error * 0.3125;     // Bottom (5/16)
+                err_next[x] += quant_error * 0.3125; // Bottom (5/16)
                 err_next[x + 1] += quant_error * 0.0625; // Bottom-Right (1/16)
             }
         } else {
@@ -800,7 +913,7 @@ pub fn dither_mask_in_bounds(
 
             if y + 1 < row_height {
                 err_next[x - 1] += quant_error * 0.1875; // Bottom-Left (3/16)
-                err_next[x] += quant_error * 0.3125;     // Bottom (5/16)
+                err_next[x] += quant_error * 0.3125; // Bottom (5/16)
             }
         }
 
@@ -847,7 +960,10 @@ mod tests {
 
         // Let's create an input layer with a gradient:
         // runs: 16 runs of value 128 (gray)
-        let runs = vec![RleRun { value: 128, length: 16 }];
+        let runs = vec![RleRun {
+            value: 128,
+            length: 16,
+        }];
         let dithered = dither_rle_layer_with_lut_and_gamma(&runs, &palette, 4, 4);
 
         // Decode dithered to see that all pixels are in target_bytes palette!
@@ -923,7 +1039,10 @@ mod tests {
         let runs = runs_of(pixels);
         let bounded = dither_rle_layer_with_lut_and_gamma(&runs, &palette, width, height);
         let reference = dither_rle_layer_full_frame(&runs, &palette, width, height);
-        assert_eq!(bounded, reference, "{name}: bounded walk changed the output");
+        assert_eq!(
+            bounded, reference,
+            "{name}: bounded walk changed the output"
+        );
         assert_eq!(
             bounded.iter().map(|r| r.length as usize).sum::<usize>(),
             width * height,
@@ -1055,7 +1174,10 @@ mod tests {
             *v = (*v).max(i as u8);
         }
         let palette = DitherPaletteV3::new(&lut, 2.2, 3);
-        assert!(!zero_is_inert(&palette), "a curing LUT must not be treated as inert");
+        assert!(
+            !zero_is_inert(&palette),
+            "a curing LUT must not be treated as inert"
+        );
 
         let (w, h) = (64usize, 8usize);
         let mut px = vec![0u8; w * h];
@@ -1086,7 +1208,10 @@ mod tests {
         let palette = DitherPaletteV3::new(&lut, 2.2, 3);
 
         let (width, height) = (64usize, 8usize);
-        let input = vec![RleRun { length: (width * height) as u32, value: 0 }];
+        let input = vec![RleRun {
+            length: (width * height) as u32,
+            value: 0,
+        }];
         let out = dither_rle_layer_with_lut_and_gamma(&input, &palette, width, height);
 
         assert!(
@@ -1107,9 +1232,19 @@ mod tests {
                 for lane in 0..LAYER_DITHER_BATCH {
                     let expected = if lane < count {
                         let layer = &layers[lane];
-                        dither_rle_layer_with_lut_and_gamma(layer.runs, palette, layer.width, layer.height)
-                    } else { Vec::new() };
-                    assert_eq!(output[lane], expected, "backend={backend:?} count={count} lane={lane}");
+                        dither_rle_layer_with_lut_and_gamma(
+                            layer.runs,
+                            palette,
+                            layer.width,
+                            layer.height,
+                        )
+                    } else {
+                        Vec::new()
+                    };
+                    assert_eq!(
+                        output[lane], expected,
+                        "backend={backend:?} count={count} lane={lane}"
+                    );
                 }
             }
         }
@@ -1121,17 +1256,26 @@ mod tests {
             dither_rle_layer_full_frame(layer.runs, palette, layer.width, layer.height)
         });
         for (lane, layer) in layers.iter().enumerate() {
-            assert_eq!(dither_rle_layer_with_lut_and_gamma(layer.runs, palette, layer.width, layer.height),
-                expected[lane], "scalar lane={lane}");
+            assert_eq!(
+                dither_rle_layer_with_lut_and_gamma(layer.runs, palette, layer.width, layer.height),
+                expected[lane],
+                "scalar lane={lane}"
+            );
         }
         for backend in crate::pulp_simd::Backend::supported_for_tests() {
             for count in 0..=4 {
                 let output = dither_rle_layers(&layers[..count], palette, backend);
                 for lane in 0..4 {
                     if lane < count {
-                        assert_eq!(output[lane], expected[lane], "backend={backend:?} count={count} lane={lane}");
+                        assert_eq!(
+                            output[lane], expected[lane],
+                            "backend={backend:?} count={count} lane={lane}"
+                        );
                     } else {
-                        assert!(output[lane].is_empty(), "backend={backend:?} count={count} lane={lane}");
+                        assert!(
+                            output[lane].is_empty(),
+                            "backend={backend:?} count={count} lane={lane}"
+                        );
                     }
                 }
             }
@@ -1157,7 +1301,9 @@ mod tests {
             runs_of(&pixels)
         });
         let layers = std::array::from_fn(|lane| DitherLayer {
-            runs: &runs[lane], width: dimensions[lane].0, height: dimensions[lane].1,
+            runs: &runs[lane],
+            width: dimensions[lane].0,
+            height: dimensions[lane].1,
         });
         assert_source_cursor_output(&layers, &palette);
     }
@@ -1166,18 +1312,82 @@ mod tests {
     fn source_cursor_matches_oracle_for_cross_row_runs_short_and_excess_input() {
         let dimensions = [(7, 9), (11, 6), (3, 13), (5, 5)];
         let runs = [
-            vec![RleRun { length: 0, value: 255 }, RleRun { length: 9, value: 0 },
-                RleRun { length: 24, value: 137 }, RleRun { length: 0, value: 219 },
-                RleRun { length: 17, value: 0 }, RleRun { length: 99, value: 219 },
-                RleRun { length: 11, value: 0 }, RleRun { length: 3, value: 5 }],
-            vec![RleRun { length: 4, value: 0 }, RleRun { length: 31, value: 91 },
-                RleRun { length: 0, value: 255 }, RleRun { length: 5, value: 0 }],
+            vec![
+                RleRun {
+                    length: 0,
+                    value: 255,
+                },
+                RleRun {
+                    length: 9,
+                    value: 0,
+                },
+                RleRun {
+                    length: 24,
+                    value: 137,
+                },
+                RleRun {
+                    length: 0,
+                    value: 219,
+                },
+                RleRun {
+                    length: 17,
+                    value: 0,
+                },
+                RleRun {
+                    length: 99,
+                    value: 219,
+                },
+                RleRun {
+                    length: 11,
+                    value: 0,
+                },
+                RleRun {
+                    length: 3,
+                    value: 5,
+                },
+            ],
+            vec![
+                RleRun {
+                    length: 4,
+                    value: 0,
+                },
+                RleRun {
+                    length: 31,
+                    value: 91,
+                },
+                RleRun {
+                    length: 0,
+                    value: 255,
+                },
+                RleRun {
+                    length: 5,
+                    value: 0,
+                },
+            ],
             Vec::new(),
-            vec![RleRun { length: 0, value: 230 }, RleRun { length: 0, value: 0 },
-                RleRun { length: 25, value: 0 }, RleRun { length: 9, value: 255 }],
+            vec![
+                RleRun {
+                    length: 0,
+                    value: 230,
+                },
+                RleRun {
+                    length: 0,
+                    value: 0,
+                },
+                RleRun {
+                    length: 25,
+                    value: 0,
+                },
+                RleRun {
+                    length: 9,
+                    value: 255,
+                },
+            ],
         ];
         let layers = std::array::from_fn(|lane| DitherLayer {
-            runs: &runs[lane], width: dimensions[lane].0, height: dimensions[lane].1,
+            runs: &runs[lane],
+            width: dimensions[lane].0,
+            height: dimensions[lane].1,
         });
         assert_source_cursor_output(&layers, &identity_palette(3));
         let lut = std::array::from_fn(|i| (i as u8).max(40));
@@ -1187,16 +1397,32 @@ mod tests {
     #[test]
     fn source_cursor_matches_oracle_for_boundary_nonfinite_and_subnormal_runs() {
         let dimensions = [(13, 9), (9, 11), (1, 17), (19, 7)];
-        for energy in [0.0, -0.0, f32::from_bits(1), f32::from_bits(0x80000001),
-            f32::from_bits(0x007fffff), f32::from_bits(0x807fffff),
-            f32::INFINITY, f32::NEG_INFINITY, f32::from_bits(0x7fc01234)]
-        {
+        for energy in [
+            0.0,
+            -0.0,
+            f32::from_bits(1),
+            f32::from_bits(0x80000001),
+            f32::from_bits(0x007fffff),
+            f32::from_bits(0x807fffff),
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::from_bits(0x7fc01234),
+        ] {
             let mut palette = identity_palette(3);
             palette.source_energy[1] = energy;
             palette.source_energy[2] = palette.target_energy[3];
-            let bin = (1..4096).find(|&bin| palette.bin_bytes[bin] != palette.bin_bytes[bin - 1]).unwrap();
+            let bin = (1..4096)
+                .find(|&bin| palette.bin_bytes[bin] != palette.bin_bytes[bin - 1])
+                .unwrap();
             let boundary = MIN_ENERGY + bin as f32 / ENERGY_SCALE;
-            for (index, bits) in [boundary.to_bits() - 1, boundary.to_bits(), boundary.to_bits() + 1].into_iter().enumerate() {
+            for (index, bits) in [
+                boundary.to_bits() - 1,
+                boundary.to_bits(),
+                boundary.to_bits() + 1,
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 palette.source_energy[index + 3] = f32::from_bits(bits);
             }
             let runs: [Vec<RleRun>; 4] = std::array::from_fn(|lane| {
@@ -1214,7 +1440,9 @@ mod tests {
                 runs_of(&pixels)
             });
             let layers = std::array::from_fn(|lane| DitherLayer {
-                runs: &runs[lane], width: dimensions[lane].0, height: dimensions[lane].1,
+                runs: &runs[lane],
+                width: dimensions[lane].0,
+                height: dimensions[lane].1,
             });
             assert_source_cursor_output(&layers, &palette);
         }
@@ -1236,7 +1464,9 @@ mod tests {
                 runs_of(&pixels)
             });
             let layers: [DitherLayer<'_>; 4] = std::array::from_fn(|lane| DitherLayer {
-                runs: &runs[lane], width: dimensions[lane].0, height: dimensions[lane].1,
+                runs: &runs[lane],
+                width: dimensions[lane].0,
+                height: dimensions[lane].1,
             });
             let lut = std::array::from_fn(|i| i as u8);
             for bits in 2..=7 {
@@ -1252,19 +1482,51 @@ mod tests {
         let lit = runs_of(&[0, 17, 0, 239, 0, 0, 127, 0, 0, 0, 0, 0]);
         let zero = runs_of(&[0; 12]);
         let layers = [
-            DitherLayer { runs: &lit, width: 3, height: 4 },
-            DitherLayer { runs: &zero, width: 3, height: 4 },
-            DitherLayer { runs: &[], width: 0, height: 7 },
-            DitherLayer { runs: &lit, width: 1, height: 12 },
+            DitherLayer {
+                runs: &lit,
+                width: 3,
+                height: 4,
+            },
+            DitherLayer {
+                runs: &zero,
+                width: 3,
+                height: 4,
+            },
+            DitherLayer {
+                runs: &[],
+                width: 0,
+                height: 7,
+            },
+            DitherLayer {
+                runs: &lit,
+                width: 1,
+                height: 12,
+            },
         ];
         assert_layer_batch_parity(&layers, &identity_palette(3));
         let lut = std::array::from_fn(|i| (i as u8).max(40));
         assert_layer_batch_parity(&layers, &DitherPaletteV3::new(&lut, 2.2, 3));
         let empty_layers = [
-            DitherLayer { runs: &[], width: 3, height: 4 },
-            DitherLayer { runs: &zero, width: 3, height: 4 },
-            DitherLayer { runs: &lit, width: 3, height: 0 },
-            DitherLayer { runs: &zero, width: 1, height: 12 },
+            DitherLayer {
+                runs: &[],
+                width: 3,
+                height: 4,
+            },
+            DitherLayer {
+                runs: &zero,
+                width: 3,
+                height: 4,
+            },
+            DitherLayer {
+                runs: &lit,
+                width: 3,
+                height: 0,
+            },
+            DitherLayer {
+                runs: &zero,
+                width: 1,
+                height: 12,
+            },
         ];
         assert_layer_batch_parity(&empty_layers, &identity_palette(3));
     }
@@ -1272,24 +1534,37 @@ mod tests {
     #[test]
     fn layer_simd_preserves_subnormals_and_quantization_boundaries() {
         let mut palette = identity_palette(3);
-        for (i, bits) in [1, 2, 7, 0x007fffff, 0x80000001, 0x80000000].into_iter().enumerate() {
+        for (i, bits) in [1, 2, 7, 0x007fffff, 0x80000001, 0x80000000]
+            .into_iter()
+            .enumerate()
+        {
             palette.source_energy[i + 1] = f32::from_bits(bits);
         }
         let mut source = 7;
         for bin in 1..4096 {
             if palette.bin_bytes[bin] != palette.bin_bytes[bin - 1] {
                 let boundary = MIN_ENERGY + bin as f32 / ENERGY_SCALE;
-                for bits in [boundary.to_bits() - 1, boundary.to_bits(), boundary.to_bits() + 1] {
+                for bits in [
+                    boundary.to_bits() - 1,
+                    boundary.to_bits(),
+                    boundary.to_bits() + 1,
+                ] {
                     palette.source_energy[source] = f32::from_bits(bits);
                     source += 1;
                 }
             }
         }
         let runs: [Vec<RleRun>; 4] = std::array::from_fn(|lane| {
-            let pixels: Vec<u8> = (0..67 * 9).map(|i| ((i * 13 + lane * 5) % source) as u8).collect();
+            let pixels: Vec<u8> = (0..67 * 9)
+                .map(|i| ((i * 13 + lane * 5) % source) as u8)
+                .collect();
             runs_of(&pixels)
         });
-        let layers: [DitherLayer<'_>; 4] = std::array::from_fn(|lane| DitherLayer { runs: &runs[lane], width: 67, height: 9 });
+        let layers: [DitherLayer<'_>; 4] = std::array::from_fn(|lane| DitherLayer {
+            runs: &runs[lane],
+            width: 67,
+            height: 9,
+        });
         assert_layer_batch_parity(&layers, &palette);
     }
 
@@ -1313,8 +1588,8 @@ mod tests {
         let mut palette = identity_palette(3);
         // Below the last palette transition, leaving enough positive error to
         // light the following blank row. Stopping at the input bounds is wrong.
-        palette.source_energy[1] = palette.target_energy[6]
-            + (palette.target_energy[7] - palette.target_energy[6]) * 0.45;
+        palette.source_energy[1] =
+            palette.target_energy[6] + (palette.target_energy[7] - palette.target_energy[6]) * 0.45;
         let mut pixels = vec![0; 64];
         pixels[2] = 1;
         let runs = runs_of(&pixels);
@@ -1323,24 +1598,49 @@ mod tests {
         decoder.skip_pixels(3);
         let mut following_row = [0];
         decoder.decode_next_row_span(1, 0, &mut following_row);
-        assert_ne!(following_row[0], 0, "fixture must retain meaningful blank-row bleed");
-        assert_eq!(dither_rle_layer_with_lut_and_gamma(&runs, &palette, 1, 64), reference);
-        let layers = std::array::from_fn::<_, 4, _>(|_| DitherLayer { runs: &runs, width: 1, height: 64 });
+        assert_ne!(
+            following_row[0], 0,
+            "fixture must retain meaningful blank-row bleed"
+        );
+        assert_eq!(
+            dither_rle_layer_with_lut_and_gamma(&runs, &palette, 1, 64),
+            reference
+        );
+        let layers = std::array::from_fn::<_, 4, _>(|_| DitherLayer {
+            runs: &runs,
+            width: 1,
+            height: 64,
+        });
         assert_layer_batch_parity(&layers, &palette);
     }
 
     #[test]
     fn contracted_carry_matches_oracle_for_blank_gaps_tails_and_skewed_streams() {
         let dimensions = [(1, 257), (129, 193), (65, 97), (257, 65)];
-        for energy in [0.0, 0.2, -0.125, f32::from_bits(1),
-            f32::from_bits(0x007fffff), -f32::from_bits(0x007fffff), f32::NAN]
-        {
+        for energy in [
+            0.0,
+            0.2,
+            -0.125,
+            f32::from_bits(1),
+            f32::from_bits(0x007fffff),
+            -f32::from_bits(0x007fffff),
+            f32::NAN,
+        ] {
             let mut palette = identity_palette(3);
             palette.source_energy[1] = energy;
             palette.source_energy[2] = palette.target_energy[3];
-            let bin = (1..4096).find(|&bin| palette.bin_bytes[bin] != palette.bin_bytes[bin - 1]).unwrap();
+            let bin = (1..4096)
+                .find(|&bin| palette.bin_bytes[bin] != palette.bin_bytes[bin - 1])
+                .unwrap();
             let boundary = MIN_ENERGY + bin as f32 / ENERGY_SCALE;
-            for (index, bits) in [boundary.to_bits() - 1, boundary.to_bits(), boundary.to_bits() + 1].into_iter().enumerate() {
+            for (index, bits) in [
+                boundary.to_bits() - 1,
+                boundary.to_bits(),
+                boundary.to_bits() + 1,
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 palette.source_energy[index + 3] = f32::from_bits(bits);
             }
             let runs: [Vec<RleRun>; 4] = std::array::from_fn(|lane| {
@@ -1353,17 +1653,31 @@ mod tests {
                     pixels[(height / 3) * width + x] = 1;
                 }
                 for index in 0..3 {
-                    pixels[(height / 2 + index) * width + (width - 1 - index.min(width - 1))] = index as u8 + 3;
+                    pixels[(height / 2 + index) * width + (width - 1 - index.min(width - 1))] =
+                        index as u8 + 3;
                 }
                 runs_of(&pixels)
             });
             let layers: [DitherLayer<'_>; 4] = std::array::from_fn(|lane| DitherLayer {
-                runs: &runs[lane], width: dimensions[lane].0, height: dimensions[lane].1,
+                runs: &runs[lane],
+                width: dimensions[lane].0,
+                height: dimensions[lane].1,
             });
             for layer in &layers {
-                let reference = dither_rle_layer_full_frame(layer.runs, &palette, layer.width, layer.height);
-                assert_eq!(dither_rle_layer_with_lut_and_gamma(layer.runs, &palette, layer.width, layer.height), reference,
-                    "energy={energy:?} dimensions={}x{}", layer.width, layer.height);
+                let reference =
+                    dither_rle_layer_full_frame(layer.runs, &palette, layer.width, layer.height);
+                assert_eq!(
+                    dither_rle_layer_with_lut_and_gamma(
+                        layer.runs,
+                        &palette,
+                        layer.width,
+                        layer.height
+                    ),
+                    reference,
+                    "energy={energy:?} dimensions={}x{}",
+                    layer.width,
+                    layer.height
+                );
             }
             assert_layer_batch_parity(&layers, &palette);
         }
@@ -1375,9 +1689,16 @@ mod tests {
         impl pulp::WithSimd for Arithmetic {
             type Output = Option<[u32; 4]>;
             fn with_simd<S: pulp::Simd>(self, simd: S) -> Self::Output {
-                if S::F32_LANES != 4 { return None; }
+                if S::F32_LANES != 4 {
+                    return None;
+                }
                 let initial = [0.125, -0.25, f32::from_bits(7), f32::from_bits(0x80000001)];
-                let errors = [0.12345679, -0.33333334, f32::from_bits(11), f32::from_bits(0x007fffff)];
+                let errors = [
+                    0.12345679,
+                    -0.33333334,
+                    f32::from_bits(11),
+                    f32::from_bits(0x007fffff),
+                ];
                 let error = simd.partial_load_f32s(&errors);
                 let mut destination = simd.partial_load_f32s(&initial);
                 for weight in [0.4375, 0.1875, 0.3125, 0.0625] {
@@ -1387,7 +1708,9 @@ mod tests {
                 simd.partial_store_f32s(&mut output, destination);
                 for lane in 0..4 {
                     let mut scalar = initial[lane];
-                    for weight in [0.4375, 0.1875, 0.3125, 0.0625] { scalar += errors[lane] * weight; }
+                    for weight in [0.4375, 0.1875, 0.3125, 0.0625] {
+                        scalar += errors[lane] * weight;
+                    }
                     assert_eq!(output[lane].to_bits(), scalar.to_bits());
                 }
                 Some(output.map(f32::to_bits))
@@ -1396,7 +1719,9 @@ mod tests {
         for backend in crate::pulp_simd::Backend::supported_for_tests() {
             let output = backend.for_layer_dither().dispatch(Arithmetic);
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-            if !matches!(backend, crate::pulp_simd::Backend::Scalar) { assert!(output.is_some()); }
+            if !matches!(backend, crate::pulp_simd::Backend::Scalar) {
+                assert!(output.is_some());
+            }
             let _ = output;
         }
     }

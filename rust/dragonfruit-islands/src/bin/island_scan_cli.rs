@@ -25,9 +25,24 @@ fn load_binary_stl(path: &Path) -> Vec<f32> {
     for _ in 0..n {
         off += 12;
         for _ in 0..3 {
-            flat.push(f32::from_le_bytes([data[off], data[off+1], data[off+2], data[off+3]]));
-            flat.push(f32::from_le_bytes([data[off+4], data[off+5], data[off+6], data[off+7]]));
-            flat.push(f32::from_le_bytes([data[off+8], data[off+9], data[off+10], data[off+11]]));
+            flat.push(f32::from_le_bytes([
+                data[off],
+                data[off + 1],
+                data[off + 2],
+                data[off + 3],
+            ]));
+            flat.push(f32::from_le_bytes([
+                data[off + 4],
+                data[off + 5],
+                data[off + 6],
+                data[off + 7],
+            ]));
+            flat.push(f32::from_le_bytes([
+                data[off + 8],
+                data[off + 9],
+                data[off + 10],
+                data[off + 11],
+            ]));
             off += 12;
         }
         off += 2;
@@ -36,21 +51,24 @@ fn load_binary_stl(path: &Path) -> Vec<f32> {
 }
 
 fn parse_f64(args: &[String], flag: &str, default: f64) -> f64 {
-    args.iter().position(|a| a == flag)
+    args.iter()
+        .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
 }
 
 fn parse_i32(args: &[String], flag: &str, default: i32) -> i32 {
-    args.iter().position(|a| a == flag)
+    args.iter()
+        .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
 }
 
 fn parse_str<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
-    args.iter().position(|a| a == flag)
+    args.iter()
+        .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str())
 }
@@ -100,18 +118,30 @@ fn main() {
     let (mut min_z, mut max_z) = (f32::MAX, f32::MIN);
     for tri in &triangles {
         for v in &[tri.a, tri.b, tri.c] {
-            min_x = min_x.min(v.x); max_x = max_x.max(v.x);
-            min_y = min_y.min(v.y); max_y = max_y.max(v.y);
-            min_z = min_z.min(v.z); max_z = max_z.max(v.z);
+            min_x = min_x.min(v.x);
+            max_x = max_x.max(v.x);
+            min_y = min_y.min(v.y);
+            max_y = max_y.max(v.y);
+            min_z = min_z.min(v.z);
+            max_z = max_z.max(v.z);
         }
     }
 
     if !json_output {
         eprintln!("  Triangles: {}", triangles.len());
-        eprintln!("  BBox: ({:.4}, {:.4}, {:.4}) - ({:.4}, {:.4}, {:.4})",
-            min_x, min_y, min_z, max_x, max_y, max_z);
-        eprintln!("  px_mm={} buffer={} conn={} overlap={} neighborhood={} layer_h={}",
-            px_mm, support_buffer_mm, connectivity, min_overlap_px, overlap_neighborhood_px, layer_height_mm);
+        eprintln!(
+            "  BBox: ({:.4}, {:.4}, {:.4}) - ({:.4}, {:.4}, {:.4})",
+            min_x, min_y, min_z, max_x, max_y, max_z
+        );
+        eprintln!(
+            "  px_mm={} buffer={} conn={} overlap={} neighborhood={} layer_h={}",
+            px_mm,
+            support_buffer_mm,
+            connectivity,
+            min_overlap_px,
+            overlap_neighborhood_px,
+            layer_height_mm
+        );
     }
 
     // Rasterize
@@ -119,29 +149,54 @@ fn main() {
     let (masks, grid_width, grid_height, num_layers, origin_x, origin_z) =
         rasterize_for_island_scan(
             &triangles,
-            min_x as f64, max_x as f64,
-            min_y as f64, max_y as f64,
-            min_z as f64, max_z as f64,
-            px_mm, layer_height_mm,
+            min_x as f64,
+            max_x as f64,
+            min_y as f64,
+            max_y as f64,
+            min_z as f64,
+            max_z as f64,
+            px_mm,
+            layer_height_mm,
         );
     let raster_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     let total_px: u64 = masks.iter().map(|m| m.pixel_count()).sum();
 
     if !json_output {
-        eprintln!("  Grid: {}x{}, Layers: {}", grid_width, grid_height, num_layers);
-        eprintln!("  Solid pixels: {} ({:.1}M)", total_px, total_px as f64 / 1e6);
+        eprintln!(
+            "  Grid: {}x{}, Layers: {}",
+            grid_width, grid_height, num_layers
+        );
+        eprintln!(
+            "  Solid pixels: {} ({:.1}M)",
+            total_px,
+            total_px as f64 / 1e6
+        );
         eprintln!("  Rasterize: {:.0}ms", raster_ms);
     }
 
     // Island scan
-    let conn = if connectivity == 8 { Connectivity::Eight } else { Connectivity::Four };
+    let conn = if connectivity == 8 {
+        Connectivity::Eight
+    } else {
+        Connectivity::Four
+    };
     let job = IslandScanJob {
-        px_mm, support_buffer_mm, connectivity: conn,
-        min_island_area_mm2, layer_height_mm,
-        grid: GridRef { origin_x, origin_z, width: grid_width, height: grid_height, px_mm },
+        px_mm,
+        support_buffer_mm,
+        connectivity: conn,
+        min_island_area_mm2,
+        layer_height_mm,
+        grid: GridRef {
+            origin_x,
+            origin_z,
+            width: grid_width,
+            height: grid_height,
+            px_mm,
+        },
         num_layers: num_layers as u32,
-        min_overlap_px, overlap_neighborhood_px,
+        min_overlap_px,
+        overlap_neighborhood_px,
         candidate_only: false,
     };
 
@@ -173,15 +228,21 @@ fn main() {
             "bbox_min_y": min_y, "bbox_max_y": max_y,
             "bbox_min_z": min_z, "bbox_max_z": max_z,
         });
-        let _ = fs::write(dump_path.join("params.json"), serde_json::to_string_pretty(&params).unwrap());
+        let _ = fs::write(
+            dump_path.join("params.json"),
+            serde_json::to_string_pretty(&params).unwrap(),
+        );
 
         // Positions binary
         let pos_bytes: Vec<u8> = flat.iter().flat_map(|f| f.to_le_bytes()).collect();
         let _ = fs::write(dump_path.join("positions.bin"), &pos_bytes);
 
         // Per-layer pixel counts
-        let layer_px: Vec<String> = masks.iter().enumerate()
-            .map(|(i, m)| format!("{}: {}", i, m.pixel_count())).collect();
+        let layer_px: Vec<String> = masks
+            .iter()
+            .enumerate()
+            .map(|(i, m)| format!("{}: {}", i, m.pixel_count()))
+            .collect();
         let _ = fs::write(dump_path.join("layer_pixels.txt"), layer_px.join("\n"));
 
         // Summary
@@ -194,7 +255,10 @@ fn main() {
 
         if !json_output {
             eprintln!("\n  Dump: {}", dump_path.display());
-            eprintln!("  Compare: npx tsx scripts/island-ipc-debug.ts {}", dump_path.display());
+            eprintln!(
+                "  Compare: npx tsx scripts/island-ipc-debug.ts {}",
+                dump_path.display()
+            );
         }
     }
 
@@ -227,11 +291,15 @@ fn main() {
         println!();
         println!("Islands: {}", result.islands.len());
         for island in result.islands.iter().take(20) {
-            println!("  #{}: L{}-{} area={:.3}mm² vol={:.4}mm³ {:?}",
-                island.id, island.first_layer, island.last_layer,
+            println!(
+                "  #{}: L{}-{} area={:.3}mm² vol={:.4}mm³ {:?}",
+                island.id,
+                island.first_layer,
+                island.last_layer,
                 island.max_area_mm2.unwrap_or(0.0),
                 island.volume_mm3.unwrap_or(0.0),
-                island.status);
+                island.status
+            );
         }
         if result.islands.len() > 20 {
             println!("  ... and {} more", result.islands.len() - 20);

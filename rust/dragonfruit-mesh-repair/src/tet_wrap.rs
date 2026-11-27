@@ -18,8 +18,8 @@
 //! surface passes through. Resolving those optimally is the next step; measuring this first shows
 //! what it is worth.
 
-use crate::core::mesh::{IndexedMesh, Vec3};
 use crate::core::bvh::{closest_point_on_triangle, Bvh};
+use crate::core::mesh::{IndexedMesh, Vec3};
 
 /// How close the surface must come to a cell's centre before the label stops being a decision.
 ///
@@ -334,7 +334,9 @@ pub fn tet_surface_with_progress(
     let _dropped = welded.triangles.len() - welded_triangles.len();
     let mut welded_triangles = welded_triangles;
     let _sheets = crate::repair::drop_zero_depth_sheets(&mut welded_triangles);
-    let Ok(tets) = dragonfruit_tetgen::tetrahedralize_plc(&points, &welded_triangles, &options.switches) else {
+    let Ok(tets) =
+        dragonfruit_tetgen::tetrahedralize_plc(&points, &welded_triangles, &options.switches)
+    else {
         return unchanged(started.elapsed().as_secs_f64() * 1000.0, false);
     };
     if tets.tets.is_empty() {
@@ -446,15 +448,23 @@ pub fn tet_surface_with_progress(
         let a = tets.points[key[0] as usize];
         let b = tets.points[key[1] as usize];
         let c = tets.points[key[2] as usize];
-        let u = [(b[0] - a[0]) as f32, (b[1] - a[1]) as f32, (b[2] - a[2]) as f32];
-        let v = [(c[0] - a[0]) as f32, (c[1] - a[1]) as f32, (c[2] - a[2]) as f32];
+        let u = [
+            (b[0] - a[0]) as f32,
+            (b[1] - a[1]) as f32,
+            (b[2] - a[2]) as f32,
+        ];
+        let v = [
+            (c[0] - a[0]) as f32,
+            (c[1] - a[1]) as f32,
+            (c[2] - a[2]) as f32,
+        ];
         let cross = [
             u[1] * v[2] - u[2] * v[1],
             u[2] * v[0] - u[0] * v[2],
             u[0] * v[1] - u[1] * v[0],
         ];
-        let area = 0.5
-            * ((cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]) as f64).sqrt();
+        let area =
+            0.5 * ((cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]) as f64).sqrt();
         let (left, right) = (owners[0] as u32, owners[1] as u32);
         neighbours[left as usize].push((right, area as f32));
         neighbours[right as usize].push((left, area as f32));
@@ -484,8 +494,16 @@ pub fn tet_surface_with_progress(
                 continue;
             }
             let distance = signed_distance[index] as f64;
-            let data_inside = if distance > 0.0 { distance / inradius } else { 0.0 };
-            let data_outside = if distance < 0.0 { -distance / inradius } else { 0.0 };
+            let data_inside = if distance > 0.0 {
+                distance / inradius
+            } else {
+                0.0
+            };
+            let data_outside = if distance < 0.0 {
+                -distance / inradius
+            } else {
+                0.0
+            };
             let scale = 1.0 / (inradius * inradius);
             let mut facing_in = 0.0f64;
             let mut facing_out = 0.0f64;
@@ -654,7 +672,10 @@ mod tests {
         let mesh = sphere_soup(1.0, 12, 16);
         let outcome = tet_surface(&mesh, &TetWrapOptions::default());
         let report = &outcome.report;
-        assert!(report.tetrahedra > 0, "the decomposition should not be empty");
+        assert!(
+            report.tetrahedra > 0,
+            "the decomposition should not be empty"
+        );
         // Every cell of a convex solid's decomposition is inside it: the convex hull of a sphere's
         // own points lies within the sphere, so there is no outside for a cell to be in. This
         // asserted a mix before, which was the labelling being wrong in a way the fixture could not
@@ -667,8 +688,7 @@ mod tests {
         // The cells the surface passes through are a shell, so they are a small share of a
         // decomposition that also fills the interior. If this ever became a large share the
         // labelling would be mostly guesswork and the count would say so.
-        let ambiguous_share =
-            report.ambiguous_tetrahedra as f64 / report.tetrahedra as f64;
+        let ambiguous_share = report.ambiguous_tetrahedra as f64 / report.tetrahedra as f64;
         assert!(
             ambiguous_share < 0.10,
             "the ambiguous shell is {:.1}% of the decomposition, which is too much to be a surface",
@@ -678,7 +698,10 @@ mod tests {
         // The point of the whole exercise: the extracted surface is closed, with no debris.
         let composed = crate::repair::triangle_components(&outcome.mesh);
         let components = composed.iter().copied().max().unwrap_or(0) + 1;
-        assert_eq!(components, 1, "the result must be one piece, got {components}");
+        assert_eq!(
+            components, 1,
+            "the result must be one piece, got {components}"
+        );
 
         // Its volume should approximate the sphere's. The boundary follows tetrahedron faces
         // rather than the sphere, so it is a little under, never over.
@@ -717,7 +740,11 @@ mod tests {
         let names: Vec<&str> = seen.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(names, vec!["tetrahedralize", "label", "extract"]);
         for (offset, (_, index)) in seen.iter().enumerate() {
-            assert_eq!(*index, offset + 1, "phases are numbered 1-based and in order");
+            assert_eq!(
+                *index,
+                offset + 1,
+                "phases are numbered 1-based and in order"
+            );
         }
     }
 
@@ -750,7 +777,10 @@ mod tests {
             [0.0, 0.0, 1.0],
         ];
         let t = [0u32, 1, 2, 3];
-        assert!(orientation6(&points, t) > 0.0, "fixture must be positively oriented");
+        assert!(
+            orientation6(&points, t) > 0.0,
+            "fixture must be positively oriented"
+        );
         let opposite = [3usize, 2, 1, 0];
         for (index, face) in outward_faces(t).iter().enumerate() {
             let a = points[face[0] as usize];
@@ -771,7 +801,10 @@ mod tests {
             ];
             let toward = [centroid[0] - p[0], centroid[1] - p[1], centroid[2] - p[2]];
             let dot = n[0] * toward[0] + n[1] * toward[1] + n[2] * toward[2];
-            assert!(dot > 0.0, "face {index} normal points into the tetrahedron, dot {dot}");
+            assert!(
+                dot > 0.0,
+                "face {index} normal points into the tetrahedron, dot {dot}"
+            );
         }
     }
 }

@@ -803,7 +803,8 @@ fn refine_face_with_segments(
     //     face across an edge was split at, and connecting them is the whole of what this face owes
     //     that neighbour. Refining a face to itself is cheap and keeps the ring conforming.
     if interior_chords.is_empty() {
-        if let Some(out) = triangulate_ring_pieces(&ring, &pts, &segment_pair_locals, &global_idx, &local_of)
+        if let Some(out) =
+            triangulate_ring_pieces(&ring, &pts, &segment_pair_locals, &global_idx, &local_of)
         {
             return Some(out);
         }
@@ -1193,7 +1194,10 @@ fn triangulate_convex_piece(
             if taken {
                 continue;
             }
-            if best.as_ref().map_or(true, |(best_area, _)| area > *best_area) {
+            if best
+                .as_ref()
+                .map_or(true, |(best_area, _)| area > *best_area)
+            {
                 best = Some((area, i));
             }
         }
@@ -1221,7 +1225,9 @@ fn triangulate_convex_piece(
 /// avoid. Rejecting that ear leaves the point to be cut into, which the largest-area rule then does
 /// first.
 fn point_in_triangle(p: (f64, f64), a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> bool {
-    signed_area_2d(a, b, p) >= 0.0 && signed_area_2d(b, c, p) >= 0.0 && signed_area_2d(c, a, p) >= 0.0
+    signed_area_2d(a, b, p) >= 0.0
+        && signed_area_2d(b, c, p) >= 0.0
+        && signed_area_2d(c, a, p) >= 0.0
 }
 
 /// Emit one local sub-triangle as a global face, oriented the way the face is.
@@ -1771,4 +1777,3 @@ mod tests {
         assert!(clip_segment_to_face(tri, v(2.0, 2.0, 0.0), v(3.0, 3.0, 0.0)).is_none());
     }
 }
-

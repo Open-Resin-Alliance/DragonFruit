@@ -91,8 +91,13 @@ fn main() {
             let mut parts = entry.splitn(3, ':');
             let id = parts.next().unwrap_or("").trim().to_string();
             let label = parts.next().unwrap_or(&id).trim().to_string();
-            let is_default = matches!(parts.next(), Some(flag) if flag.trim().eq_ignore_ascii_case("default"));
-            package::FormatVersionDecl { id, label, is_default }
+            let is_default =
+                matches!(parts.next(), Some(flag) if flag.trim().eq_ignore_ascii_case("default"));
+            package::FormatVersionDecl {
+                id,
+                label,
+                is_default,
+            }
         })
         .collect();
     let file_extension_from_version = arg("--file-extension-from-version").is_some();
@@ -313,8 +318,7 @@ fn read_material_settings(path: &str) -> package::MaterialSettingsDecl {
 }
 
 fn read_json_array(path: &str) -> Vec<serde_json::Value> {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|error| panic!("read {path}: {error}"));
+    let text = std::fs::read_to_string(path).unwrap_or_else(|error| panic!("read {path}: {error}"));
     let value: serde_json::Value =
         serde_json::from_str(&text).unwrap_or_else(|error| panic!("parse {path}: {error}"));
     match value {
@@ -322,4 +326,3 @@ fn read_json_array(path: &str) -> Vec<serde_json::Value> {
         _ => panic!("{path} must hold a JSON array"),
     }
 }
-

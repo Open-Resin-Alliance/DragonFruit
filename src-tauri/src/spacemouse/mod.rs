@@ -115,8 +115,12 @@ fn candidate_libraries() -> Vec<String> {
     // installer adds its dir to PATH (confirmed: "TDxNavLib.dll" loads by name).
     let mut v = vec!["TDxNavLib.dll".to_string()];
     if let Ok(pf) = std::env::var("ProgramFiles") {
-        v.push(format!(r"{pf}\3Dconnexion\3DxWare\3DxWinCore\Win64\TDxNavLib.dll"));
-        v.push(format!(r"{pf}\3Dconnexion\3DxWare\3DxWinCore64\TDxNavLib.dll"));
+        v.push(format!(
+            r"{pf}\3Dconnexion\3DxWare\3DxWinCore\Win64\TDxNavLib.dll"
+        ));
+        v.push(format!(
+            r"{pf}\3Dconnexion\3DxWare\3DxWinCore64\TDxNavLib.dll"
+        ));
     }
     v
 }
@@ -234,14 +238,34 @@ mod nav {
             Self {
                 affine: identity(),
                 seq: 0,
-                model_min: PointT { x: -10.0, y: -10.0, z: -10.0 },
-                model_max: PointT { x: 10.0, y: 10.0, z: 10.0 },
+                model_min: PointT {
+                    x: -10.0,
+                    y: -10.0,
+                    z: -10.0,
+                },
+                model_max: PointT {
+                    x: 10.0,
+                    y: 10.0,
+                    z: 10.0,
+                },
                 fov: 0.8,
                 focus_distance: 50.0,
                 perspective: true,
-                target: PointT { x: 0.0, y: 0.0, z: 0.0 },
-                ortho_min: PointT { x: -10.0, y: -10.0, z: -1000.0 },
-                ortho_max: PointT { x: 10.0, y: 10.0, z: 1000.0 },
+                target: PointT {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                ortho_min: PointT {
+                    x: -10.0,
+                    y: -10.0,
+                    z: -1000.0,
+                },
+                ortho_max: PointT {
+                    x: 10.0,
+                    y: 10.0,
+                    z: 1000.0,
+                },
                 extents_seq: 0,
                 motion: false,
                 focused: true,
@@ -287,7 +311,9 @@ mod nav {
             // this tells it how to decode our Z-up `view.affine`.
             b"coordinateSystem" => {
                 v.type_ = MATRIX_TYPE;
-                v.value.matrix = MatrixT { m: coordinate_system() };
+                v.value.matrix = MatrixT {
+                    m: coordinate_system(),
+                };
             }
             // Front-view orientation used to resolve the preset view commands.
             b"views.front" => {
@@ -374,7 +400,11 @@ mod nav {
                     nav_log!("[spacemouse] affine REJECTED (non-finite)");
                     return 0;
                 }
-                let (dx, dy, dz) = (m[12] - s.affine[12], m[13] - s.affine[13], m[14] - s.affine[14]);
+                let (dx, dy, dz) = (
+                    m[12] - s.affine[12],
+                    m[13] - s.affine[13],
+                    m[14] - s.affine[14],
+                );
                 s.affine = m;
                 s.seq = s.seq.wrapping_add(1);
                 let jump = (dx * dx + dy * dy + dz * dz).sqrt();
@@ -399,7 +429,10 @@ mod nav {
                     nav_log!(
                         "[spacemouse] extents REJECTED (finite={finite}) \
                          min=({:.3},{:.3}) max=({:.3},{:.3})",
-                        b.min.x, b.min.y, b.max.x, b.max.y,
+                        b.min.x,
+                        b.min.y,
+                        b.max.x,
+                        b.max.y,
                     );
                     return 0;
                 }
@@ -471,8 +504,16 @@ mod nav {
     fn build_accessors(param: ParamT) -> Box<[AccessorT]> {
         let entry = |name: &'static [u8], get: bool, set: bool| AccessorT {
             name: name.as_ptr() as PropertyT,
-            fn_get: if get { Some(nav_get as FnGetProperty) } else { None },
-            fn_set: if set { Some(nav_set as FnSetProperty) } else { None },
+            fn_get: if get {
+                Some(nav_get as FnGetProperty)
+            } else {
+                None
+            },
+            fn_set: if set {
+                Some(nav_set as FnSetProperty)
+            } else {
+                None
+            },
             param,
         };
         vec![
@@ -536,7 +577,9 @@ mod nav {
     unsafe fn write_bool(nl: &Navlib, handle: NlHandle, name: &[u8], val: bool) {
         let v = ValueT {
             type_: BOOL_TYPE,
-            value: ValueUnion { b: if val { 1 } else { 0 } },
+            value: ValueUnion {
+                b: if val { 1 } else { 0 },
+            },
         };
         let rc = (nl.nl_write_value)(handle, name.as_ptr() as PropertyT, &v);
         if rc != 0 {
@@ -702,9 +745,21 @@ mod nav {
         };
 
         // App-authoritative fields, always accepted.
-        s.model_min = PointT { x: cam.model_min[0], y: cam.model_min[1], z: cam.model_min[2] };
-        s.model_max = PointT { x: cam.model_max[0], y: cam.model_max[1], z: cam.model_max[2] };
-        s.target = PointT { x: cam.target[0], y: cam.target[1], z: cam.target[2] };
+        s.model_min = PointT {
+            x: cam.model_min[0],
+            y: cam.model_min[1],
+            z: cam.model_min[2],
+        };
+        s.model_max = PointT {
+            x: cam.model_max[0],
+            y: cam.model_max[1],
+            z: cam.model_max[2],
+        };
+        s.target = PointT {
+            x: cam.target[0],
+            y: cam.target[1],
+            z: cam.target[2],
+        };
         s.fov = cam.fov;
         s.focus_distance = cam.focus_distance;
         s.perspective = cam.perspective;
@@ -719,8 +774,16 @@ mod nav {
                 s.affine = cam.affine;
             }
             if s.claim_pose || s.extents_seq == cam.last_applied_extents_seq {
-                s.ortho_min = PointT { x: cam.ortho_min[0], y: cam.ortho_min[1], z: cam.ortho_min[2] };
-                s.ortho_max = PointT { x: cam.ortho_max[0], y: cam.ortho_max[1], z: cam.ortho_max[2] };
+                s.ortho_min = PointT {
+                    x: cam.ortho_min[0],
+                    y: cam.ortho_min[1],
+                    z: cam.ortho_min[2],
+                };
+                s.ortho_max = PointT {
+                    x: cam.ortho_max[0],
+                    y: cam.ortho_max[1],
+                    z: cam.ortho_max[2],
+                };
             }
             s.claim_pose = false;
         }

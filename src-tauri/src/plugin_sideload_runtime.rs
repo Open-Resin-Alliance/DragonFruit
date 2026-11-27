@@ -196,18 +196,22 @@ fn exchange(
             return Err("plugin did not answer within 30 s".to_string());
         }
         match plugin.frames.recv_timeout(remaining) {
-            Ok(Ok(Some(frame))) => match serde_json::from_slice::<sdk::PluginMessage>(&frame.payload) {
-                Ok(sdk::PluginMessage::NetworkResult { id, status, body }) if id == request_id => {
-                    return Ok((status, body));
+            Ok(Ok(Some(frame))) => {
+                match serde_json::from_slice::<sdk::PluginMessage>(&frame.payload) {
+                    Ok(sdk::PluginMessage::NetworkResult { id, status, body })
+                        if id == request_id =>
+                    {
+                        return Ok((status, body));
+                    }
+                    // A stale answer for a request that already timed out.
+                    Ok(sdk::PluginMessage::NetworkResult { .. }) => continue,
+                    Ok(sdk::PluginMessage::Error { code, message }) => {
+                        return Err(format!("plugin error {code}: {message}"));
+                    }
+                    Ok(other) => return Err(format!("unexpected plugin message: {other:?}")),
+                    Err(error) => return Err(format!("unreadable plugin message: {error}")),
                 }
-                // A stale answer for a request that already timed out.
-                Ok(sdk::PluginMessage::NetworkResult { .. }) => continue,
-                Ok(sdk::PluginMessage::Error { code, message }) => {
-                    return Err(format!("plugin error {code}: {message}"));
-                }
-                Ok(other) => return Err(format!("unexpected plugin message: {other:?}")),
-                Err(error) => return Err(format!("unreadable plugin message: {error}")),
-            },
+            }
             Ok(Ok(None)) => return Err("plugin closed the control channel".to_string()),
             Ok(Err(error)) => return Err(error),
             Err(RecvTimeoutError::Timeout) => {
@@ -226,7 +230,11 @@ fn send(plugin: &mut RunningPlugin, message: &sdk::HostMessage) -> Result<(), St
         .map_err(|error| format!("write failed: {error}"))
 }
 
-fn start(root: &Path, plugin_id: &str, manifest: &package::Manifest) -> Result<RunningPlugin, String> {
+fn start(
+    root: &Path,
+    plugin_id: &str,
+    manifest: &package::Manifest,
+) -> Result<RunningPlugin, String> {
     start_with_ring(root, plugin_id, manifest, None)
 }
 
@@ -308,7 +316,9 @@ fn validate_ready(ready: &sdk::PluginMessage, manifest: &package::Manifest) -> R
     }
     for capability in capabilities {
         if !manifest.capabilities.contains(capability) {
-            return Err(format!("plugin serves {capability:?}, which the manifest does not declare"));
+            return Err(format!(
+                "plugin serves {capability:?}, which the manifest does not declare"
+            ));
         }
     }
     for format in formats {
@@ -317,7 +327,10 @@ fn validate_ready(ready: &sdk::PluginMessage, manifest: &package::Manifest) -> R
             .iter()
             .any(|entry| entry.extensions.iter().any(|ext| ext == &format.ext));
         if !declared {
-            return Err(format!("plugin claims '{}', which the manifest does not declare", format.ext));
+            return Err(format!(
+                "plugin claims '{}', which the manifest does not declare",
+                format.ext
+            ));
         }
     }
     Ok(())
@@ -334,7 +347,11 @@ fn resolve_executable(payload_dir: &Path) -> Result<PathBuf, String> {
         )
     })?;
     for entry in entries.flatten() {
-        if entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
+        if entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+        {
             let path = entry.path();
             // A zip does not carry the unix execute bit. Without it a universal
             // package would install on macOS/Linux and then fail to spawn.
@@ -346,7 +363,10 @@ fn resolve_executable(payload_dir: &Path) -> Result<PathBuf, String> {
             return Ok(path);
         }
     }
-    Err(format!("'{}' holds no plugin binary", platform_dir.display()))
+    Err(format!(
+        "'{}' holds no plugin binary",
+        platform_dir.display()
+    ))
 }
 
 fn platform_name() -> &'static str {
@@ -484,9 +504,7 @@ pub fn import_with_plugin(
     bytes: &[u8],
 ) -> Result<Vec<u8>, String> {
     let session_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    let work_dir = root
-        .join(plugin_id)
-        .join(format!("import-{session_id}"));
+    let work_dir = root.join(plugin_id).join(format!("import-{session_id}"));
     std::fs::create_dir_all(&work_dir)
         .map_err(|error| format!("failed to prepare the import directory: {error}"))?;
 
@@ -515,17 +533,25 @@ pub fn import_with_plugin(
                     return Err("the importer did not answer within two minutes".to_string());
                 }
                 match plugin.frames.recv_timeout(remaining) {
-                    Ok(Ok(Some(frame))) => match serde_json::from_slice::<sdk::PluginMessage>(&frame.payload) {
-                        Ok(sdk::PluginMessage::ImportDone { .. }) => return Ok(()),
-                        // The deadline covers the whole import, so progress waits for the next frame.
-                        Ok(sdk::PluginMessage::Progress { .. }) => continue,
-                        Ok(sdk::PluginMessage::Error { code, message }) => {
-                            return Err(format!("import error {code}: {message}"));
+                    Ok(Ok(Some(frame))) => {
+                        match serde_json::from_slice::<sdk::PluginMessage>(&frame.payload) {
+                            Ok(sdk::PluginMessage::ImportDone { .. }) => return Ok(()),
+                            // The deadline covers the whole import, so progress waits for the next frame.
+                            Ok(sdk::PluginMessage::Progress { .. }) => continue,
+                            Ok(sdk::PluginMessage::Error { code, message }) => {
+                                return Err(format!("import error {code}: {message}"));
+                            }
+                            Ok(other) => {
+                                return Err(format!("unexpected import message: {other:?}"))
+                            }
+                            Err(error) => {
+                                return Err(format!("unreadable import message: {error}"))
+                            }
                         }
-                        Ok(other) => return Err(format!("unexpected import message: {other:?}")),
-                        Err(error) => return Err(format!("unreadable import message: {error}")),
-                    },
-                    Ok(Ok(None)) => return Err("the importer closed the control channel".to_string()),
+                    }
+                    Ok(Ok(None)) => {
+                        return Err("the importer closed the control channel".to_string())
+                    }
                     Ok(Err(error)) => return Err(error),
                     Err(RecvTimeoutError::Timeout) => {
                         return Err("the importer did not answer within two minutes".to_string());
@@ -539,8 +565,9 @@ pub fn import_with_plugin(
         stop(&mut plugin);
         result?;
 
-        let container = std::fs::read(&output_path)
-            .map_err(|error| format!("the importer reported success but wrote no scene: {error}"))?;
+        let container = std::fs::read(&output_path).map_err(|error| {
+            format!("the importer reported success but wrote no scene: {error}")
+        })?;
         if !container.starts_with(SCENE_CONTAINER_MAGIC) {
             return Err("the importer wrote something other than a scene container".to_string());
         }
@@ -601,7 +628,12 @@ impl EncodeSession {
         // ring is not created at all, so nothing maps memory the package did not ask
         // for. Ring mode sizes four slots for the largest layer.
         let (mut plugin, mapping, layout, ring_path) = if transport == package::Transport::Pipe {
-            (start_with_ring(root, plugin_id, manifest, None)?, None, None, None)
+            (
+                start_with_ring(root, plugin_id, manifest, None)?,
+                None,
+                None,
+                None,
+            )
         } else {
             let layout = sdk::RingLayout::new(4, slot_bytes.max(4096));
             let ring_path = plugin_dir.join(format!("session-{session_id}.ring"));
@@ -742,11 +774,7 @@ impl EncodeSession {
         Ok(())
     }
 
-    fn pump(
-        &mut self,
-        deadline: Instant,
-        progress: &mut Vec<(u32, u32)>,
-    ) -> Result<(), String> {
+    fn pump(&mut self, deadline: Instant, progress: &mut Vec<(u32, u32)>) -> Result<(), String> {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err("the encoder did not finish within ten minutes".to_string());
@@ -885,8 +913,11 @@ mod tests {
     #[test]
     fn accepts_a_ready_that_matches_the_manifest() {
         let manifest = manifest(vec![package::Capability::NetworkOperations]);
-        validate_ready(&ready(vec![sdk::Capability::NetworkOperations], vec![]), &manifest)
-            .expect("matching ready");
+        validate_ready(
+            &ready(vec![sdk::Capability::NetworkOperations], vec![]),
+            &manifest,
+        )
+        .expect("matching ready");
     }
 
     #[test]
@@ -942,17 +973,14 @@ mod tests {
 
         initialize(root.clone());
 
-        let response = handle_network_request(
-            r#"{"pluginId":"example.echo","operation":"printer/status"}"#,
-        )
-        .expect("routed to the sideloaded plugin");
+        let response =
+            handle_network_request(r#"{"pluginId":"example.echo","operation":"printer/status"}"#)
+                .expect("routed to the sideloaded plugin");
         assert_eq!(response.status, 200, "body: {}", response.body);
         assert_eq!(response.body["state"], "printing");
 
-        let unknown = handle_network_request(
-            r#"{"pluginId":"example.echo","operation":"nope"}"#,
-        )
-        .expect("routed");
+        let unknown = handle_network_request(r#"{"pluginId":"example.echo","operation":"nope"}"#)
+            .expect("routed");
         assert_eq!(unknown.status, 404);
 
         assert!(
@@ -1027,7 +1055,10 @@ mod tests {
         )
         .expect("routed");
         assert_eq!(discover.body["done"], serde_json::json!(true));
-        assert_eq!(discover.body["devices"][0]["hostName"], serde_json::json!("echo"));
+        assert_eq!(
+            discover.body["devices"][0]["hostName"],
+            serde_json::json!("echo")
+        );
 
         let start = handle_network_request(r#"{"pluginId":"example.full","operation":"start"}"#)
             .expect("routed");
@@ -1050,7 +1081,10 @@ mod tests {
         )
         .expect("routed");
         assert_eq!(begin.status, 200, "body: {}", begin.body);
-        let upload_id = begin.body["uploadId"].as_str().expect("upload id").to_string();
+        let upload_id = begin.body["uploadId"]
+            .as_str()
+            .expect("upload id")
+            .to_string();
 
         let chunk = handle_network_request(
             &json!({
@@ -1199,7 +1233,10 @@ mod tests {
                     .unwrap_or(false)
             })
             .collect();
-        assert!(leftovers.is_empty(), "import directories left behind: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "import directories left behind: {leftovers:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1230,7 +1267,10 @@ mod tests {
 
         let png = preview_with_plugin(&root, "example.encoder", &manifest, &archive, 42)
             .expect("preview");
-        assert!(png.starts_with(b"\x89PNG"), "a PNG-shaped payload came back");
+        assert!(
+            png.starts_with(b"\x89PNG"),
+            "a PNG-shaped payload came back"
+        );
         assert!(
             String::from_utf8_lossy(&png).contains(":42"),
             "the layer number reached the plugin"
@@ -1278,14 +1318,29 @@ mod tests {
         .expect("encode");
 
         let written = std::fs::read(&output).expect("read output");
-        assert!(written.starts_with(b"ECHOENC1.exf"), "container header missing");
+        assert!(
+            written.starts_with(b"ECHOENC1.exf"),
+            "container header missing"
+        );
         assert!(
             written.ends_with(b"layers=2"),
             "expected both layers, got {}",
             String::from_utf8_lossy(&written[written.len().saturating_sub(24)..])
         );
-        assert_eq!(written.windows(11).filter(|window| *window == b"first-layer").count(), 1);
-        assert_eq!(written.windows(12).filter(|window| *window == b"second-layer").count(), 1);
+        assert_eq!(
+            written
+                .windows(11)
+                .filter(|window| *window == b"first-layer")
+                .count(),
+            1
+        );
+        assert_eq!(
+            written
+                .windows(12)
+                .filter(|window| *window == b"second-layer")
+                .count(),
+            1
+        );
         assert_eq!(progress.last().copied(), Some((2, 2)));
 
         // The session's mapping is cleaned up with it.
@@ -1295,7 +1350,10 @@ mod tests {
             .map(|entry| entry.path())
             .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("ring"))
             .collect();
-        assert!(leftovers.is_empty(), "ring files left behind: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "ring files left behind: {leftovers:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

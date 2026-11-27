@@ -100,10 +100,7 @@ impl DiffStats {
         }
         println!();
         if self.failed == 0 {
-            println!(
-                "\x1b[32mAll {} checks passed!\x1b[0m",
-                self.passed
-            );
+            println!("\x1b[32mAll {} checks passed!\x1b[0m", self.passed);
         } else {
             println!(
                 "\x1b[31m{} failed\x1b[0m, {} passed",
@@ -138,12 +135,7 @@ fn run_count(mask: &RleMaskJson) -> usize {
 // Layer-level comparisons
 // ---------------------------------------------------------------------------
 
-fn compare_masks(
-    stats: &mut DiffStats,
-    layer: u32,
-    golden_path: &Path,
-    actual_path: &Path,
-) {
+fn compare_masks(stats: &mut DiffStats, layer: u32, golden_path: &Path, actual_path: &Path) {
     let golden: RleMaskJson = match fs::read_to_string(golden_path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -172,12 +164,7 @@ fn compare_masks(
     }
 }
 
-fn compare_components(
-    stats: &mut DiffStats,
-    layer: u32,
-    golden_path: &Path,
-    actual_path: &Path,
-) {
+fn compare_components(stats: &mut DiffStats, layer: u32, golden_path: &Path, actual_path: &Path) {
     let golden: Vec<ComponentInfoJson> = match fs::read_to_string(golden_path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -288,10 +275,7 @@ fn compare_results(stats: &mut DiffStats, golden_path: &Path, actual_path: &Path
     };
 
     if golden.num_islands == actual.num_islands {
-        stats.pass(format!(
-            "Island count match: {}",
-            golden.num_islands
-        ));
+        stats.pass(format!("Island count match: {}", golden.num_islands));
     } else {
         stats.fail(format!(
             "Island count mismatch (TS: {}, Rust: {})",
@@ -406,8 +390,7 @@ fn main() {
     struct InputJson {
         num_layers: u32,
     }
-    let input: InputJson =
-        serde_json::from_str(&fs::read_to_string(&input_path).unwrap()).unwrap();
+    let input: InputJson = serde_json::from_str(&fs::read_to_string(&input_path).unwrap()).unwrap();
 
     // Compare per-layer data
     for l in 0..input.num_layers {
@@ -416,22 +399,34 @@ fn main() {
         compare_masks(
             &mut stats,
             l,
-            &golden_dir.join("layers").join(format!("{}-mask.rle.json", pad)),
-            &actual_dir.join("layers").join(format!("{}-mask.rle.json", pad)),
+            &golden_dir
+                .join("layers")
+                .join(format!("{}-mask.rle.json", pad)),
+            &actual_dir
+                .join("layers")
+                .join(format!("{}-mask.rle.json", pad)),
         );
 
         compare_components(
             &mut stats,
             l,
-            &golden_dir.join("layers").join(format!("{}-components.json", pad)),
-            &actual_dir.join("layers").join(format!("{}-components.json", pad)),
+            &golden_dir
+                .join("layers")
+                .join(format!("{}-components.json", pad)),
+            &actual_dir
+                .join("layers")
+                .join(format!("{}-components.json", pad)),
         );
 
         compare_island_labels(
             &mut stats,
             l,
-            &golden_dir.join("layers").join(format!("{}-island-labels.rle.json", pad)),
-            &actual_dir.join("layers").join(format!("{}-island-labels.rle.json", pad)),
+            &golden_dir
+                .join("layers")
+                .join(format!("{}-island-labels.rle.json", pad)),
+            &actual_dir
+                .join("layers")
+                .join(format!("{}-island-labels.rle.json", pad)),
         );
     }
 

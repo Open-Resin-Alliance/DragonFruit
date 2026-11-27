@@ -233,6 +233,24 @@ jobs:
           cargo test --locked --manifest-path rust/dragonfruit-plugin-sdk/Cargo.toml
           cargo test --locked --manifest-path rust/dragonfruit-plugin-package/Cargo.toml
 
+  rust-format:
+    name: Rust format
+    runs-on: ubuntu-latest
+    steps:
+      # No submodules: they are not ours to format.
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install the pinned Rust toolchain
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal --component rustfmt
+          echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
+
+      - name: Check that the Rust sources are formatted
+        # Locally: `npm run check:rust-format`, or `npm run check:rust-format:fix` to fix.
+        run: scripts/check-rust-format.sh
+
   cargo-locks:
     name: Cargo lockfiles
     runs-on: ubuntu-latest

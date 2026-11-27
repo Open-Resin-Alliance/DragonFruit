@@ -7,10 +7,10 @@
 //! ([`vertex_occlusion`]). Kept free of higher-level operations so it can be shared
 //! without pulling in repair/cut logic.
 
-pub mod vertex_occlusion;
-pub mod winding;
 pub mod bvh;
 pub mod halfedge;
+pub mod mesh;
 pub mod normals;
 pub mod refine;
-pub mod mesh;
+pub mod vertex_occlusion;
+pub mod winding;

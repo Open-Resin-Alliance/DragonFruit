@@ -53,7 +53,8 @@ pub fn noise_shells(mesh: &IndexedMesh) -> Vec<u32> {
         let shell = components[index] as usize;
         triangles_per_shell[shell] += 1;
         let [a, b, c] = mesh.tri_positions(index as u32);
-        volume_per_shell[shell] += (a.x as f64 * (b.y as f64 * c.z as f64 - b.z as f64 * c.y as f64)
+        volume_per_shell[shell] += (a.x as f64
+            * (b.y as f64 * c.z as f64 - b.z as f64 * c.y as f64)
             - a.y as f64 * (b.x as f64 * c.z as f64 - b.z as f64 * c.x as f64)
             + a.z as f64 * (b.x as f64 * c.y as f64 - b.y as f64 * c.x as f64))
             / 6.0;

@@ -178,9 +178,11 @@ pub async fn dispatch_network_request(
         });
     }
 
-    if let Some(response) =
-        generated_builtin_plugins::dispatch_generated_network_request(&plugin_id, request_json.clone())
-            .await?
+    if let Some(response) = generated_builtin_plugins::dispatch_generated_network_request(
+        &plugin_id,
+        request_json.clone(),
+    )
+    .await?
     {
         return Ok(response);
     }

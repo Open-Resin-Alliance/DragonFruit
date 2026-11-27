@@ -14,20 +14,20 @@ pub use dragonfruit_mesh_core as core;
 pub mod decimation_config;
 pub mod evaluate;
 pub mod holes;
-pub mod tet_wrap;
-pub mod topology_passes;
 pub mod hollowing;
 pub mod io;
+mod memo;
 pub mod repair;
-pub mod solid_remesh;
 pub mod report;
 pub mod shells;
-mod memo;
-pub(crate) mod smoothing;
 pub mod shrink_wrap;
+pub(crate) mod smoothing;
+pub mod solid_remesh;
 pub mod stl_budget;
 #[cfg(test)]
 mod test_fixtures;
+pub mod tet_wrap;
+pub mod topology_passes;
 
 pub use crate::analysis::{analyze, minimal_analysis, MeshAnalysis};
 pub use crate::core::mesh::{IndexedMesh, Vec3};

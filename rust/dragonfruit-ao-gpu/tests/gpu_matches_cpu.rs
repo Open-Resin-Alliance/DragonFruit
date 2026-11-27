@@ -81,7 +81,10 @@ fn the_gpu_bake_agrees_with_the_cpu_one() {
         "adapter {:?}: mean |diff| {mean:.6}, max {worst:.6}",
         dragonfruit_ao_gpu::adapter_name()
     );
-    assert!(mean < 1e-4, "the GPU field should track the CPU's: mean {mean}");
+    assert!(
+        mean < 1e-4,
+        "the GPU field should track the CPU's: mean {mean}"
+    );
     // A single vertex can differ where a grazing ray lands on one side of the
     // epsilon and not the other; the mesh-core measurements put that class of
     // divergence at up to 0.04 on a 2.8M-face model.

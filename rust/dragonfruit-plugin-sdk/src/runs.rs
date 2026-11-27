@@ -125,10 +125,7 @@ where
 /// [`write_runs`], which reuses a buffer.
 pub fn encode_runs(runs: &[Run]) -> Vec<u8> {
     let mut out = Vec::with_capacity(runs.len() * RUN_BYTES);
-    write_runs(
-        runs.iter().map(|run| (run.length, run.value)),
-        &mut out,
-    );
+    write_runs(runs.iter().map(|run| (run.length, run.value)), &mut out);
     out
 }
 
@@ -138,10 +135,22 @@ mod tests {
 
     fn sample() -> Vec<Run> {
         vec![
-            Run { length: 0, value: 0 },
-            Run { length: 4096, value: 255 },
-            Run { length: 7, value: 12 },
-            Run { length: 1, value: 1 },
+            Run {
+                length: 0,
+                value: 0,
+            },
+            Run {
+                length: 4096,
+                value: 255,
+            },
+            Run {
+                length: 7,
+                value: 12,
+            },
+            Run {
+                length: 1,
+                value: 1,
+            },
         ]
     }
 

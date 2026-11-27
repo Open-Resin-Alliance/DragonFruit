@@ -23,7 +23,11 @@ extern "C" {
     fn tg_io_delete(io: *mut c_void);
     fn tg_io_set_points(io: *mut c_void, xyz: *const f64, count: i32);
     fn tg_io_set_facets(io: *mut c_void, tris: *const i32, count: i32);
-    fn tg_tetrahedralize(switches: *const std::os::raw::c_char, input: *mut c_void, output: *mut c_void) -> i32;
+    fn tg_tetrahedralize(
+        switches: *const std::os::raw::c_char,
+        input: *mut c_void,
+        output: *mut c_void,
+    ) -> i32;
     fn tg_io_num_points(io: *mut c_void) -> i32;
     fn tg_io_get_points(io: *mut c_void, dst: *mut f64);
     fn tg_io_num_tetrahedra(io: *mut c_void) -> i32;
@@ -74,10 +78,7 @@ impl std::error::Error for TetGenError {}
 ///
 /// Rejects non-finite coordinates before calling, because a single NaN makes TetGen's predicates
 /// silently produce a tetrahedralisation of the wrong thing rather than failing.
-pub fn tetrahedralize_points(
-    points: &[[f64; 3]],
-    switches: &str,
-) -> Result<TetMesh, TetGenError> {
+pub fn tetrahedralize_points(points: &[[f64; 3]], switches: &str) -> Result<TetMesh, TetGenError> {
     run(points, None, switches)
 }
 
@@ -220,7 +221,11 @@ mod tests {
                 assert!((i as usize) < mesh.points.len(), "tet index out of range");
             }
             let unique: std::collections::HashSet<u32> = t.iter().copied().collect();
-            assert_eq!(unique.len(), 4, "a tetrahedron needs four distinct vertices");
+            assert_eq!(
+                unique.len(),
+                4,
+                "a tetrahedron needs four distinct vertices"
+            );
         }
     }
 
@@ -229,12 +234,22 @@ mod tests {
     #[test]
     fn a_cube_plc_tetrahedralises() {
         let corners = [
-            [0.0f64, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0],
-            [1.0, 1.0, 0.0], [1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [1.0, 1.0, 1.0],
+            [0.0f64, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0],
         ];
         let quads: [[u32; 4]; 6] = [
-            [0, 2, 4, 1], [0, 1, 5, 3], [0, 3, 6, 2],
-            [7, 5, 1, 4], [7, 4, 2, 6], [7, 6, 3, 5],
+            [0, 2, 4, 1],
+            [0, 1, 5, 3],
+            [0, 3, 6, 2],
+            [7, 5, 1, 4],
+            [7, 4, 2, 6],
+            [7, 6, 3, 5],
         ];
         let mut triangles = Vec::new();
         for q in quads {

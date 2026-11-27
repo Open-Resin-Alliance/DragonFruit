@@ -41,7 +41,11 @@ mod compression_level_tests {
         // the container in sliceExportOrchestrator.ts; a silent collapse to
         // "fastest" is what made the settings tab's On button inert.
         let level = |s: &str| format!("{:?}", png_compression_level(s));
-        assert_ne!(level("balanced"), level("fastest"), "balanced must not be fastest");
+        assert_ne!(
+            level("balanced"),
+            level("fastest"),
+            "balanced must not be fastest"
+        );
         assert_ne!(level("smallest"), level("balanced"));
         assert_ne!(level("optimal"), level("smallest"));
         // Anything unrecognised stays on the fast path rather than silently
@@ -910,7 +914,12 @@ mod tests {
             let ty: [u8; 4] = png[i + 4..i + 8].try_into().unwrap();
             let data = png[i + 8..i + 8 + len].to_vec();
             let crc = u32::from_be_bytes(png[i + 8 + len..i + 12 + len].try_into().unwrap());
-            assert_eq!(crc, chunk_crc32(&ty, &data), "bad CRC on {:?}", std::str::from_utf8(&ty));
+            assert_eq!(
+                crc,
+                chunk_crc32(&ty, &data),
+                "bad CRC on {:?}",
+                std::str::from_utf8(&ty)
+            );
             i += 12 + len;
             out.push((ty, data));
         }
@@ -919,7 +928,9 @@ mod tests {
     }
 
     fn chunk<'a>(cs: &'a [([u8; 4], Vec<u8>)], name: &[u8; 4]) -> Option<&'a [u8]> {
-        cs.iter().find(|(ty, _)| ty == name).map(|(_, d)| d.as_slice())
+        cs.iter()
+            .find(|(ty, _)| ty == name)
+            .map(|(_, d)| d.as_slice())
     }
 
     /// Inflate the IDAT stream and strip the per-row filter bytes, which these
@@ -942,7 +953,11 @@ mod tests {
         let n = Decompressor::new()
             .zlib_decompress(&idat, &mut raw)
             .expect("IDAT is not valid zlib");
-        assert_eq!(n, raw.len(), "inflated size does not match the declared IHDR");
+        assert_eq!(
+            n,
+            raw.len(),
+            "inflated size does not match the declared IHDR"
+        );
 
         let mut pixels = Vec::with_capacity(width as usize * height as usize * bytes_per_px);
         for row in raw.chunks_exact(stride) {
@@ -1007,7 +1022,11 @@ mod tests {
         let cs = chunks(&png);
 
         let ihdr = chunk(&cs, b"IHDR").expect("no IHDR");
-        assert_eq!(u32::from_be_bytes(ihdr[0..4].try_into().unwrap()), 4, "IHDR must carry the logical width");
+        assert_eq!(
+            u32::from_be_bytes(ihdr[0..4].try_into().unwrap()),
+            4,
+            "IHDR must carry the logical width"
+        );
         assert_eq!(ihdr[8], 8, "8 bits per channel");
         assert_eq!(ihdr[9], 0, "colour type 0 (grayscale)");
 

@@ -242,31 +242,50 @@ struct PerturbRlePostBatch {
 
 impl PerturbRlePostBatch {
     fn new() -> Self {
-        Self { tasks: std::array::from_fn(|_| None), permits: std::array::from_fn(|_| None), count: 0 }
+        Self {
+            tasks: std::array::from_fn(|_| None),
+            permits: std::array::from_fn(|_| None),
+            count: 0,
+        }
     }
 }
 
 fn pending_perturb_rle_input(
-    input: PerturbRlePostInput, runs: Vec<crate::rle::RleRun>, bounds: RleNonzeroBounds,
+    input: PerturbRlePostInput,
+    runs: Vec<crate::rle::RleRun>,
+    bounds: RleNonzeroBounds,
 ) -> PendingPerturbRleLayer {
     PendingPerturbRleLayer {
-        layer_idx: input.layer_idx, model: Arc::new(PerturbRleModelLayer { runs, bounds }), support_runs: input.support_runs,
+        layer_idx: input.layer_idx,
+        model: Arc::new(PerturbRleModelLayer { runs, bounds }),
+        support_runs: input.support_runs,
     }
 }
 
 /// Snapshot exactly the existing radius, even while collecting a batch.
 fn take_perturb_rle_post_task(
     pending: &mut VecDeque<PendingPerturbRleLayer>,
-    history: &mut VecDeque<Arc<PerturbRleModelLayer>>, radius: usize,
+    history: &mut VecDeque<Arc<PerturbRleModelLayer>>,
+    radius: usize,
 ) -> PerturbRlePostReadyTask {
-    let layer = pending.pop_front().expect("pending perturb 3DAA RLE layer should exist");
+    let layer = pending
+        .pop_front()
+        .expect("pending perturb 3DAA RLE layer should exist");
     let task = PerturbRlePostReadyTask {
-        layer_idx: layer.layer_idx, model: Arc::clone(&layer.model), support_runs: layer.support_runs,
+        layer_idx: layer.layer_idx,
+        model: Arc::clone(&layer.model),
+        support_runs: layer.support_runs,
         history: history.iter().cloned().collect(),
-        future: pending.iter().take(radius).map(|p| Arc::clone(&p.model)).collect(),
+        future: pending
+            .iter()
+            .take(radius)
+            .map(|p| Arc::clone(&p.model))
+            .collect(),
     };
     history.push_back(layer.model);
-    while history.len() > radius { history.pop_front(); }
+    while history.len() > radius {
+        history.pop_front();
+    }
     task
 }
 
@@ -276,13 +295,17 @@ fn try_extend_perturb_rle_post_batch(
     pending: &mut VecDeque<PendingPerturbRleLayer>,
     input_rx: &mpsc::Receiver<PerturbRlePostInput>,
     waiting: &mut Option<(PerturbRlePostInput, PostTaskPermit)>,
-    gate: &Arc<PostTaskGate>, radius: usize, flushing: bool,
+    gate: &Arc<PostTaskGate>,
+    radius: usize,
+    flushing: bool,
 ) -> Option<PostTaskPermit> {
     let (input, permit) = if let Some(waiting) = waiting.take() {
         waiting
     } else {
         let permit = gate.try_acquire()?;
-        if flushing { return (!pending.is_empty()).then_some(permit); }
+        if flushing {
+            return (!pending.is_empty()).then_some(permit);
+        }
         debug_assert_eq!(pending.len(), radius);
         let input = match input_rx.try_recv() {
             Ok(input) => input,
@@ -314,17 +337,27 @@ fn extend_perturb_rle_post_batch(
     pending: &mut VecDeque<PendingPerturbRleLayer>,
     input_rx: &mpsc::Receiver<PerturbRlePostInput>,
     waiting: &mut Option<(PerturbRlePostInput, PostTaskPermit)>,
-    gate: &Arc<PostTaskGate>, radius: usize, flushing: bool,
+    gate: &Arc<PostTaskGate>,
+    radius: usize,
+    flushing: bool,
     cancel_flag: Option<&AtomicBool>,
 ) -> Option<PostTaskPermit> {
     loop {
-        if cancel_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) { return None; }
+        if cancel_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return None;
+        }
         let (generation, needs_slot) = gate.batch_generation()?;
-        if let Some(permit) = try_extend_perturb_rle_post_batch(pending, input_rx, waiting, gate, radius, flushing) {
+        if let Some(permit) =
+            try_extend_perturb_rle_post_batch(pending, input_rx, waiting, gate, radius, flushing)
+        {
             return Some(permit);
         }
-        if flushing || cancel_flag.is_some_and(|flag| flag.load(Ordering::Relaxed))
-            || !gate.wait_for_batch_progress(generation, needs_slot) { return None; }
+        if flushing
+            || cancel_flag.is_some_and(|flag| flag.load(Ordering::Relaxed))
+            || !gate.wait_for_batch_progress(generation, needs_slot)
+        {
+            return None;
+        }
     }
 }
 
@@ -488,7 +521,11 @@ fn accumulate_z_blur<S: pulp::Simd, const UNIT_WEIGHT: bool, const BOUNDED_WEIGH
     } else if BOUNDED_WEIGHT {
         simd.add_u32s(accum, simd.mul_u32s(values, simd.splat_u32s(weight)))
     } else {
-        sat_add_u32(simd, accum, sat_mul_u32(simd, values, simd.splat_u32s(weight)))
+        sat_add_u32(
+            simd,
+            accum,
+            sat_mul_u32(simd, values, simd.splat_u32s(weight)),
+        )
     }
 }
 
@@ -527,7 +564,8 @@ fn blur_z_rle_row<S: pulp::Simd, const UNIT_WEIGHT: bool, const BOUNDED_WEIGHT: 
         let mut accum = simd.splat_u32s(0);
         for ((weight, _, _), row) in sources.iter().zip(source_rows.iter()) {
             let values = load_u8_as_u32(simd, &row[x..x + lanes]);
-            accum = accumulate_z_blur::<S, UNIT_WEIGHT, BOUNDED_WEIGHT>(simd, accum, values, *weight);
+            accum =
+                accumulate_z_blur::<S, UNIT_WEIGHT, BOUNDED_WEIGHT>(simd, accum, values, *weight);
         }
         let values = normalize_z_blur::<S, BOUNDED_WEIGHT>(simd, accum, divider);
         let values = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&values));
@@ -775,13 +813,20 @@ fn finalize_perturb_rle_post_batch(
     post: &PostStageCounters,
 ) -> [Option<PerturbRlePostOutput>; crate::dither::LAYER_DITHER_BATCH] {
     let mut runs = std::array::from_fn(|_| Vec::new());
-    let mut supports: [Option<Vec<crate::rle::RleRun>>; crate::dither::LAYER_DITHER_BATCH] = std::array::from_fn(|_| None);
+    let mut supports: [Option<Vec<crate::rle::RleRun>>; crate::dither::LAYER_DITHER_BATCH] =
+        std::array::from_fn(|_| None);
     let mut indices = [0; crate::dither::LAYER_DITHER_BATCH];
     for lane in 0..count {
         let task = tasks[lane].take().expect("charged post task should exist");
         let z_blur_start = std::time::Instant::now();
         runs[lane] = apply_z_weighted_blur_to_rle_layer(
-            &task.model, &task.history, &task.future, z_blur_radius, z_blur_weights, width, height,
+            &task.model,
+            &task.history,
+            &task.future,
+            z_blur_radius,
+            z_blur_weights,
+            width,
+            height,
         );
         add_elapsed(&post.post_blur_ns, z_blur_start);
         indices[lane] = task.layer_idx;
@@ -792,8 +837,12 @@ fn finalize_perturb_rle_post_batch(
 
     if let Some(palette) = dither_palette {
         let lut_start = std::time::Instant::now();
-        let layers = std::array::from_fn::<_, { crate::dither::LAYER_DITHER_BATCH }, _>(|lane| crate::dither::DitherLayer {
-            runs: &runs[lane], width, height,
+        let layers = std::array::from_fn::<_, { crate::dither::LAYER_DITHER_BATCH }, _>(|lane| {
+            crate::dither::DitherLayer {
+                runs: &runs[lane],
+                width,
+                height,
+            }
         });
         runs = crate::dither::dither_rle_layers(&layers[..count], palette, dither_backend);
         add_elapsed(&post.dither_ns, lut_start);
@@ -806,14 +855,20 @@ fn finalize_perturb_rle_post_batch(
     }
 
     std::array::from_fn(|lane| {
-        if lane >= count { return None; }
+        if lane >= count {
+            return None;
+        }
         let mut final_runs = std::mem::take(&mut runs[lane]);
         if let Some(support_runs) = supports[lane].take() {
             let support_merge_start = std::time::Instant::now();
             final_runs = merge_rle_max(final_runs, &support_runs);
             add_elapsed(&post.support_merge_ns, support_merge_start);
         }
-        Some(PerturbRlePostOutput { layer_idx: indices[lane], runs: Some(final_runs), encoded_bytes: None })
+        Some(PerturbRlePostOutput {
+            layer_idx: indices[lane],
+            runs: Some(final_runs),
+            encoded_bytes: None,
+        })
     })
 }
 
@@ -833,9 +888,7 @@ struct SupportMaskLayer {
 impl SupportMaskContext {
     fn from_job(job: &SliceJobV3, triangles_xyz: &[f32]) -> Option<Self> {
         if job.aa_on_supports {
-            eprintln!(
-                "[SupportAA] full-mask support context disabled: aa_on_supports=true"
-            );
+            eprintln!("[SupportAA] full-mask support context disabled: aa_on_supports=true");
             return None;
         }
 
@@ -1481,7 +1534,11 @@ fn finalize_z_dense_row<S: pulp::Simd, const BOUNDED_WEIGHT: bool>(
             *dst = value as u8;
         }
     }
-    for ((dst, &sum), &hit) in out_row[vector_end..].iter_mut().zip(tail).zip(&coverage[vector_end..]) {
+    for ((dst, &sum), &hit) in out_row[vector_end..]
+        .iter_mut()
+        .zip(tail)
+        .zip(&coverage[vector_end..])
+    {
         if hit != 0 {
             *dst = divider.divide(sum + divider.denominator / 2).min(255) as u8;
         }
@@ -1609,15 +1666,27 @@ fn apply_z_weighted_blur_to_processed_layer_with_simd<S: pulp::Simd>(
             let end = start + row.len();
             if unit_weights {
                 accumulate_z_dense_span::<S, true, true>(
-                    simd, &mut accum[start..end], &mut coverage[start..end], row, *weight,
+                    simd,
+                    &mut accum[start..end],
+                    &mut coverage[start..end],
+                    row,
+                    *weight,
                 );
             } else if bounded_weights {
                 accumulate_z_dense_span::<S, false, true>(
-                    simd, &mut accum[start..end], &mut coverage[start..end], row, *weight,
+                    simd,
+                    &mut accum[start..end],
+                    &mut coverage[start..end],
+                    row,
+                    *weight,
                 );
             } else {
                 accumulate_z_dense_span::<S, false, false>(
-                    simd, &mut accum[start..end], &mut coverage[start..end], row, *weight,
+                    simd,
+                    &mut accum[start..end],
+                    &mut coverage[start..end],
+                    row,
+                    *weight,
                 );
             }
         }
@@ -1629,9 +1698,21 @@ fn apply_z_weighted_blur_to_processed_layer_with_simd<S: pulp::Simd>(
         let out_start = (y - final_bounds.2) * final_row_width + row_min_x - final_bounds.0;
         let out_row = &mut out[out_start..out_start + end - start];
         if bounded_weights {
-            finalize_z_dense_row::<S, true>(simd, &accum[start..end], &coverage[start..end], divider, out_row);
+            finalize_z_dense_row::<S, true>(
+                simd,
+                &accum[start..end],
+                &coverage[start..end],
+                divider,
+                out_row,
+            );
         } else {
-            finalize_z_dense_row::<S, false>(simd, &accum[start..end], &coverage[start..end], divider, out_row);
+            finalize_z_dense_row::<S, false>(
+                simd,
+                &accum[start..end],
+                &coverage[start..end],
+                divider,
+                out_row,
+            );
         }
     }
 
@@ -2108,10 +2189,13 @@ fn forward_to_encode(
     cross_blend_touched_pixels.fetch_add(done.cross_blend_touched_pixels, Ordering::Relaxed);
     cross_blend_contributing_layers
         .fetch_add(done.cross_blend_contributing_layers, Ordering::Relaxed);
-    post.post_blur_ns.fetch_add(done.post_blur_ns, Ordering::Relaxed);
+    post.post_blur_ns
+        .fetch_add(done.post_blur_ns, Ordering::Relaxed);
     post.dither_ns.fetch_add(done.dither_ns, Ordering::Relaxed);
-    post.tail_remap_ns.fetch_add(done.tail_remap_ns, Ordering::Relaxed);
-    post.support_merge_ns.fetch_add(done.support_merge_ns, Ordering::Relaxed);
+    post.tail_remap_ns
+        .fetch_add(done.tail_remap_ns, Ordering::Relaxed);
+    post.support_merge_ns
+        .fetch_add(done.support_merge_ns, Ordering::Relaxed);
 
     // Topology window for future cross-blend priors (consumer-thread state).
     if keep_emitted_topologies {
@@ -2438,8 +2522,7 @@ fn rasterize_vertical_aa_streaming_v3(
     // `raster_job.triangles_xyz` is intentionally cleared above to avoid a
     // multi-GB duplicate. Build support masking from the real external mesh
     // buffer or classified model/support boundaries silently disappear.
-    let mut support_mask_context =
-        SupportMaskContext::from_job(raster_job, &raster_triangles_xyz);
+    let mut support_mask_context = SupportMaskContext::from_job(raster_job, &raster_triangles_xyz);
     let model_active_layer_window = resolve_model_active_layer_window(raster_job);
 
     // Pending queue for symmetric forward-compensation blending.
@@ -3572,8 +3655,7 @@ pub fn slice_with_progress_v3(
             let job_total_layers = job.total_layers;
             // A multi-tank job renders every layer once per tank, so progress is
             // measured in (layer, tank) units, plus one for the finalizing step.
-            let progress_slice_units =
-                job_total_layers.saturating_mul(job.tank_count.max(1));
+            let progress_slice_units = job_total_layers.saturating_mul(job.tank_count.max(1));
             let progress_total = progress_slice_units.saturating_add(1);
 
             let slicing_progress = on_progress.as_ref().map(|cb| {
@@ -4057,11 +4139,7 @@ pub fn slice_and_rasterize_rle_v3(
 pub fn slice_and_rasterize_rle_multi_tank_v3(
     job: &SliceJobV3,
     compute_area_stats: bool,
-    mut on_rle_tank_layer: impl FnMut(
-        u32,
-        u32,
-        Vec<crate::rle::RleRun>,
-    ) -> Result<(), SlicerV3Error>,
+    mut on_rle_tank_layer: impl FnMut(u32, u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
@@ -4100,7 +4178,8 @@ pub fn slice_and_rasterize_rle_multi_tank_v3(
         tank_job.triangles_xyz = triangles_xyz;
         // The partition keeps the job's order and supports only ever trail the
         // model triangles, so the per-tank split is a plain count.
-        tank_job.model_triangle_count = u32::try_from(tank.model_triangle_count).unwrap_or(u32::MAX);
+        tank_job.model_triangle_count =
+            u32::try_from(tank.model_triangle_count).unwrap_or(u32::MAX);
 
         let tank_index = tank.tank;
         let base_done = (tank_position as u32).saturating_mul(total_layers);
@@ -4140,7 +4219,9 @@ pub fn slice_and_rasterize_rle_multi_tank_v3(
             .saturating_add(tank_perf.z_blend_forward_ns);
         perf.cross_blend_ns = perf.cross_blend_ns.saturating_add(tank_perf.cross_blend_ns);
         perf.post_blur_ns = perf.post_blur_ns.saturating_add(tank_perf.post_blur_ns);
-        perf.support_merge_ns = perf.support_merge_ns.saturating_add(tank_perf.support_merge_ns);
+        perf.support_merge_ns = perf
+            .support_merge_ns
+            .saturating_add(tank_perf.support_merge_ns);
         perf.total_ns = perf.total_ns.saturating_add(tank_perf.total_ns);
     }
 
@@ -4159,7 +4240,9 @@ fn accumulate_block_stats(total: &mut LayerAreaStatsV3, part: &LayerAreaStatsV3)
         *total = part.clone();
         return;
     }
-    total.total_solid_pixels = total.total_solid_pixels.saturating_add(part.total_solid_pixels);
+    total.total_solid_pixels = total
+        .total_solid_pixels
+        .saturating_add(part.total_solid_pixels);
     total.total_solid_area_mm2 += part.total_solid_area_mm2;
     total.largest_area_mm2 = total.largest_area_mm2.max(part.largest_area_mm2);
     total.smallest_area_mm2 = total.smallest_area_mm2.min(part.smallest_area_mm2);
@@ -4182,9 +4265,7 @@ pub fn slice_and_rasterize_rle_blocks_v3(
     compute_area_stats: bool,
     encode_block_fn: Option<
         Arc<
-            dyn Fn(u32, u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error>
-                + Send
-                + Sync,
+            dyn Fn(u32, u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync,
         >,
     >,
     on_block: impl FnMut(u32, u32, crate::pipeline::RleBlockPayload) -> Result<(), SlicerV3Error>,
@@ -4441,7 +4522,12 @@ pub fn slice_and_rasterize_rle_blocks_v3(
             };
 
             let final_runs = if halo_left > 0 || halo_right > 0 {
-                crop_rle_columns(&final_runs, wid_w as u32, halo_left as u32, halo_right as u32)
+                crop_rle_columns(
+                    &final_runs,
+                    wid_w as u32,
+                    halo_left as u32,
+                    halo_right as u32,
+                )
             } else {
                 final_runs
             };
@@ -4496,7 +4582,10 @@ fn diag_read_rss_mb() -> f64 {
     let Ok(pid) = sysinfo::get_current_pid() else {
         return 0.0;
     };
-    let Ok(mut sys) = SYS.get_or_init(|| Mutex::new(sysinfo::System::new())).lock() else {
+    let Ok(mut sys) = SYS
+        .get_or_init(|| Mutex::new(sysinfo::System::new()))
+        .lock()
+    else {
         return 0.0;
     };
     sys.refresh_processes_specifics(
@@ -4574,14 +4663,22 @@ impl PostTaskGate {
             s = self.cv.wait(s).unwrap();
         }
         s.count += 1;
-        PostTaskPermit { gate: Arc::clone(self), accounting: None }
+        PostTaskPermit {
+            gate: Arc::clone(self),
+            accounting: None,
+        }
     }
 
     fn try_acquire(self: &Arc<Self>) -> Option<PostTaskPermit> {
         let mut s = self.state.lock().unwrap();
-        if s.count >= s.max { return None; }
+        if s.count >= s.max {
+            return None;
+        }
         s.count += 1;
-        Some(PostTaskPermit { gate: Arc::clone(self), accounting: None })
+        Some(PostTaskPermit {
+            gate: Arc::clone(self),
+            accounting: None,
+        })
     }
 
     fn batch_generation(&self) -> Option<(u64, bool)> {
@@ -4596,19 +4693,29 @@ impl PostTaskGate {
     fn wait_for_batch_progress(&self, generation: u64, needs_slot: bool) -> bool {
         let mut s = self.state.lock().unwrap();
         loop {
-            if s.post_bodies == 0 || s.max < crate::dither::LAYER_DITHER_BATCH || s.input_closed || s.stopped {
+            if s.post_bodies == 0
+                || s.max < crate::dither::LAYER_DITHER_BATCH
+                || s.input_closed
+                || s.stopped
+            {
                 return false;
             }
-            if s.generation != generation || (needs_slot && s.count < s.max) { return true; }
+            if s.generation != generation || (needs_slot && s.count < s.max) {
+                return true;
+            }
             #[cfg(test)]
-            if let Some(observer) = s.wait_observer.take() { let _ = observer.send(()); }
+            if let Some(observer) = s.wait_observer.take() {
+                let _ = observer.send(());
+            }
             s = self.cv.wait(s).unwrap();
         }
     }
 
     fn register_body(self: &Arc<Self>) -> PostTaskBody {
         self.state.lock().unwrap().post_bodies += 1;
-        PostTaskBody { gate: Arc::clone(self) }
+        PostTaskBody {
+            gate: Arc::clone(self),
+        }
     }
 
     fn notify_ready(&self) {
@@ -4652,7 +4759,9 @@ impl PostTaskGate {
         }
         let old_max = s.max;
         s.max = new_max;
-        if self.batching { s.generation = s.generation.wrapping_add(1); }
+        if self.batching {
+            s.generation = s.generation.wrapping_add(1);
+        }
         drop(s);
         // Log every real cap change so a future debugger can see when RAM
         // pressure resized the in-flight queue and by how much (issue #386).
@@ -4689,7 +4798,11 @@ struct PostInputProgress {
 
 impl Drop for PostInputProgress {
     fn drop(&mut self) {
-        if self.closes_input { self.gate.close_input(); } else { self.gate.notify_ready(); }
+        if self.closes_input {
+            self.gate.close_input();
+        } else {
+            self.gate.notify_ready();
+        }
     }
 }
 
@@ -4722,8 +4835,15 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
     slice_and_rasterize_perturb_3daa_rle_impl(
-        job, compute_area_stats, on_rle_layer, parallel_encode_fn, on_encoded_layer, on_progress, cancel_flag,
-        #[cfg(test)] None,
+        job,
+        compute_area_stats,
+        on_rle_layer,
+        parallel_encode_fn,
+        on_encoded_layer,
+        on_progress,
+        cancel_flag,
+        #[cfg(test)]
+        None,
     )
 }
 
@@ -4738,7 +4858,9 @@ fn slice_and_rasterize_perturb_3daa_rle_impl(
     job: &SliceJobV3,
     compute_area_stats: bool,
     mut on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
-    parallel_encode_fn: Option<Arc<dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>>,
+    parallel_encode_fn: Option<
+        Arc<dyn Fn(u32, &[crate::rle::RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>,
+    >,
     on_encoded_layer: Option<&mut dyn FnMut(u32, Vec<u8>) -> Result<(), SlicerV3Error>>,
     on_progress: Option<ProgressCallbackV3>,
     cancel_flag: Option<&AtomicBool>,
@@ -4847,7 +4969,9 @@ fn slice_and_rasterize_perturb_3daa_rle_impl(
     };
     let post_max_inflight = cap_override.map(|o| o.max(1)).unwrap_or(default_cap);
     let batch_layers = post_max_inflight >= crate::dither::LAYER_DITHER_BATCH
-        && dither_palette.as_deref().is_some_and(|palette| crate::dither::can_batch_layers(palette, dither_backend));
+        && dither_palette
+            .as_deref()
+            .is_some_and(|palette| crate::dither::can_batch_layers(palette, dither_backend));
     let post_gate = Arc::new(PostTaskGate::new(post_max_inflight, batch_layers));
     // #386 adaptive: worst model-layer window bytes observed so far (production,
     // survives 3DAA Stats removal). Drives the RAM-aware cap in `dispatch_ready`.
@@ -4872,7 +4996,10 @@ fn slice_and_rasterize_perturb_3daa_rle_impl(
     );
     let (rendered_layers, layer_area_stats, mut perf) = std::thread::scope(
         |scope| -> Result<(RenderedLayersV3, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
-            let input_progress = batch_layers.then(|| PostInputProgress { gate: Arc::clone(&post_gate), closes_input: true });
+            let input_progress = batch_layers.then(|| PostInputProgress {
+                gate: Arc::clone(&post_gate),
+                closes_input: true,
+            });
             let (post_tx, post_rx) = mpsc::sync_channel::<PerturbRlePostInput>(post_buffer);
             let (post_out_tx, post_out_rx) =
                 mpsc::sync_channel::<PerturbRlePostOutput>(post_buffer);
@@ -4898,7 +5025,8 @@ fn slice_and_rasterize_perturb_3daa_rle_impl(
                     |pending: &mut VecDeque<PendingPerturbRleLayer>,
                      history: &mut VecDeque<Arc<PerturbRleModelLayer>>,
                      waiting: &mut Option<(PerturbRlePostInput, PostTaskPermit)>,
-                     first_permit: Option<PostTaskPermit>, flushing: bool,
+                     first_permit: Option<PostTaskPermit>,
+                     flushing: bool,
                      input_rx: &mpsc::Receiver<PerturbRlePostInput>,
                      scope: &rayon::Scope<'_>| {
                         // Keep the original blocking first acquisition. Pop each
@@ -4906,39 +5034,70 @@ fn slice_and_rasterize_perturb_3daa_rle_impl(
                         // and radius-sized future/history snapshots while waiting.
                         let mut permit = first_permit.unwrap_or_else(|| post_gate_w.acquire());
                         let mut batch = PerturbRlePostBatch::new();
-                        let batch_limit = if batch_layers { crate::dither::LAYER_DITHER_BATCH } else { 1 };
+                        let batch_limit = if batch_layers {
+                            crate::dither::LAYER_DITHER_BATCH
+                        } else {
+                            1
+                        };
                         loop {
                             let task = take_perturb_rle_post_task(pending, history, z_blur_radius);
                             // Logical Arc-shared window accounting remains per layer.
                             let rr = std::mem::size_of::<crate::rle::RleRun>();
                             let model_run_bytes = task.model.runs.len() * rr;
                             let task_bytes = model_run_bytes
-                                + task.history.iter().map(|l| l.runs.len() * rr).sum::<usize>()
+                                + task
+                                    .history
+                                    .iter()
+                                    .map(|l| l.runs.len() * rr)
+                                    .sum::<usize>()
                                 + task.future.iter().map(|l| l.runs.len() * rr).sum::<usize>()
-                                + task.support_runs.as_ref().map(|r| r.len() * rr).unwrap_or(0);
+                                + task
+                                    .support_runs
+                                    .as_ref()
+                                    .map(|r| r.len() * rr)
+                                    .unwrap_or(0);
                             atomic_max(&diag_max_layer_run_bytes_w, model_run_bytes);
 
                             // Preserve #386's existing RAM formula, cap and hard floor.
                             if ram_budget_bytes > 0 {
                                 atomic_max(&post_worst_layer_bytes_w, model_run_bytes.max(1));
-                                let worst = post_worst_layer_bytes_w.load(Ordering::Relaxed).max(1) as u64;
+                                let worst =
+                                    post_worst_layer_bytes_w.load(Ordering::Relaxed).max(1) as u64;
                                 let window_layers = (z_blur_radius as u64) * 2 + 1;
-                                let ram_cap = (ram_budget_bytes / worst).saturating_sub(window_layers).max(2) as usize;
+                                let ram_cap = (ram_budget_bytes / worst)
+                                    .saturating_sub(window_layers)
+                                    .max(2) as usize;
                                 post_gate_w.retune(ram_cap.min(default_cap));
                             }
 
-                            let now = diag_inflight_bytes_w.fetch_add(task_bytes, Ordering::Relaxed) + task_bytes;
+                            let now = diag_inflight_bytes_w
+                                .fetch_add(task_bytes, Ordering::Relaxed)
+                                + task_bytes;
                             diag_inflight_tasks_w.fetch_add(1, Ordering::Relaxed);
                             atomic_max(&diag_peak_inflight_bytes_w, now);
-                            permit.accounting = Some((Arc::clone(&diag_inflight_tasks_w), Arc::clone(&diag_inflight_bytes_w), task_bytes));
+                            permit.accounting = Some((
+                                Arc::clone(&diag_inflight_tasks_w),
+                                Arc::clone(&diag_inflight_bytes_w),
+                                task_bytes,
+                            ));
                             let lane = batch.count;
                             batch.tasks[lane] = Some(task);
                             batch.permits[lane] = Some(permit);
                             batch.count += 1;
-                            if batch.count == batch_limit { break; }
+                            if batch.count == batch_limit {
+                                break;
+                            }
                             let Some(next_permit) = extend_perturb_rle_post_batch(
-                                pending, input_rx, waiting, &post_gate_w, z_blur_radius, flushing, cancel_flag,
-                            ) else { break; };
+                                pending,
+                                input_rx,
+                                waiting,
+                                &post_gate_w,
+                                z_blur_radius,
+                                flushing,
+                                cancel_flag,
+                            ) else {
+                                break;
+                            };
                             permit = next_permit;
                         }
 
@@ -4954,23 +5113,40 @@ fn slice_and_rasterize_perturb_3daa_rle_impl(
                             // post-body work and must never keep a partial group held.
                             let body = batch_layers.then(|| post_gate_w.register_body());
                             scope.spawn(move |_| {
-                                let mut outputs = if batch.count == crate::dither::LAYER_DITHER_BATCH {
-                                    finalize_perturb_rle_post_batch(
-                                        &mut batch.tasks, batch.count, z_blur_radius, &z_blur_weights,
-                                        tail_cure_lut.as_ref(), active_dither.as_deref(), dither_backend,
-                                        width, height, &post_counters_worker,
-                                    )
-                                } else {
-                                    let task = batch.tasks[0].take().expect("single post task should exist");
-                                    let output = finalize_perturb_rle_post_layer(
-                                        task, z_blur_radius, &z_blur_weights, tail_cure_lut.as_ref(),
-                                        active_dither.as_deref(), width, height, &post_counters_worker,
-                                    );
-                                    [Some(output), None, None, None]
-                                };
+                                let mut outputs =
+                                    if batch.count == crate::dither::LAYER_DITHER_BATCH {
+                                        finalize_perturb_rle_post_batch(
+                                            &mut batch.tasks,
+                                            batch.count,
+                                            z_blur_radius,
+                                            &z_blur_weights,
+                                            tail_cure_lut.as_ref(),
+                                            active_dither.as_deref(),
+                                            dither_backend,
+                                            width,
+                                            height,
+                                            &post_counters_worker,
+                                        )
+                                    } else {
+                                        let task = batch.tasks[0]
+                                            .take()
+                                            .expect("single post task should exist");
+                                        let output = finalize_perturb_rle_post_layer(
+                                            task,
+                                            z_blur_radius,
+                                            &z_blur_weights,
+                                            tail_cure_lut.as_ref(),
+                                            active_dither.as_deref(),
+                                            width,
+                                            height,
+                                            &post_counters_worker,
+                                        );
+                                        [Some(output), None, None, None]
+                                    };
                                 drop(body);
                                 for lane in 0..batch.count {
-                                    let mut output = outputs[lane].take().expect("post output should exist");
+                                    let mut output =
+                                        outputs[lane].take().expect("post output should exist");
                                     let rr = std::mem::size_of::<crate::rle::RleRun>();
                                     if let Some(ref out_runs) = output.runs {
                                         atomic_max(&diag_max_out_run_bytes_t, out_runs.len() * rr);
@@ -4981,14 +5157,25 @@ fn slice_and_rasterize_perturb_3daa_rle_impl(
                                     let mut encoded_bytes = None;
                                     let runs = output.runs.take().expect("runs must exist");
                                     if let Some(ref encode_fn) = parallel_encode_fn {
-                                        if let Ok(bytes) = encode_fn(output.layer_idx, &runs) { encoded_bytes = Some(bytes); }
+                                        if let Ok(bytes) = encode_fn(output.layer_idx, &runs) {
+                                            encoded_bytes = Some(bytes);
+                                        }
                                     }
-                                    let final_runs = if parallel_encode_fn.is_some() { drop(runs); None } else { Some(runs) };
+                                    let final_runs = if parallel_encode_fn.is_some() {
+                                        drop(runs);
+                                        None
+                                    } else {
+                                        Some(runs)
+                                    };
                                     let final_output = PerturbRlePostOutput {
-                                        layer_idx: output.layer_idx, runs: final_runs, encoded_bytes,
+                                        layer_idx: output.layer_idx,
+                                        runs: final_runs,
+                                        encoded_bytes,
                                     };
                                     let sent = post_out_tx.send(final_output).is_ok();
-                                    if !sent { break; }
+                                    if !sent {
+                                        break;
+                                    }
                                 }
                                 // RAII releases all unsent layers on sink failure/panic.
                             });
@@ -5026,23 +5213,48 @@ fn slice_and_rasterize_perturb_3daa_rle_impl(
                     // Low-cap consumer tests deterministically enforce the
                     // blocking-dispatch placement, rather than relying on races.
                     #[cfg(test)]
-                    assert!(rayon::current_thread_index().is_none(), "post dispatcher must not block a Rayon worker");
+                    assert!(
+                        rayon::current_thread_index().is_none(),
+                        "post dispatcher must not block a Rayon worker"
+                    );
                     let mut waiting = None;
                     loop {
                         let (input, permit) = if let Some((input, permit)) = waiting.take() {
                             (input, Some(permit))
                         } else {
-                            let Ok(input) = post_rx.recv() else { break; };
+                            let Ok(input) = post_rx.recv() else {
+                                break;
+                            };
                             (input, None)
                         };
                         let (model_runs, model_bounds) = input.model_receiver.recv().unwrap();
-                        pending.push_back(pending_perturb_rle_input(input, model_runs, model_bounds));
+                        pending.push_back(pending_perturb_rle_input(
+                            input,
+                            model_runs,
+                            model_bounds,
+                        ));
                         if pending.len() > z_blur_radius {
-                            dispatch_ready(&mut pending, &mut history, &mut waiting, permit, false, &post_rx, post_scope);
+                            dispatch_ready(
+                                &mut pending,
+                                &mut history,
+                                &mut waiting,
+                                permit,
+                                false,
+                                &post_rx,
+                                post_scope,
+                            );
                         }
                     }
                     while !pending.is_empty() {
-                        dispatch_ready(&mut pending, &mut history, &mut waiting, None, true, &post_rx, post_scope);
+                        dispatch_ready(
+                            &mut pending,
+                            &mut history,
+                            &mut waiting,
+                            None,
+                            true,
+                            &post_rx,
+                            post_scope,
+                        );
                     }
                 });
 
@@ -5131,7 +5343,10 @@ fn slice_and_rasterize_perturb_3daa_rle_impl(
                     Option<(usize, usize, usize, usize)>,
                 )>(1);
                 let post_counters_worker = Arc::clone(&post_counters);
-                let xy_progress = batch_layers.then(|| PostInputProgress { gate: Arc::clone(&post_gate), closes_input: false });
+                let xy_progress = batch_layers.then(|| PostInputProgress {
+                    gate: Arc::clone(&post_gate),
+                    closes_input: false,
+                });
                 rayon::spawn(move || {
                     let _xy_progress = xy_progress;
                     let tx = tx;
@@ -5168,7 +5383,9 @@ fn slice_and_rasterize_perturb_3daa_rle_impl(
                     drain_available(&mut on_rle_layer, &mut on_encoded_layer)?;
                     match post_tx.try_send(input.take().expect("post input should exist")) {
                         Ok(()) => {
-                            if batch_layers { post_gate.notify_ready(); }
+                            if batch_layers {
+                                post_gate.notify_ready();
+                            }
                             break;
                         }
                         Err(mpsc::TrySendError::Full(returned_input)) => {
@@ -5197,7 +5414,9 @@ fn slice_and_rasterize_perturb_3daa_rle_impl(
             );
             drop(wrapped);
             drop(drain_available);
-            if batch_layers && render_result.is_err() { post_gate.stop_batching(); }
+            if batch_layers && render_result.is_err() {
+                post_gate.stop_batching();
+            }
             drop(post_tx);
             drop(input_progress);
 
@@ -5693,8 +5912,7 @@ pub fn slice_with_progress_v3_to_path(
             let job_total_layers = job.total_layers;
             // A multi-tank job renders every layer once per tank, so progress is
             // measured in (layer, tank) units, plus one for the finalizing step.
-            let progress_slice_units =
-                job_total_layers.saturating_mul(job.tank_count.max(1));
+            let progress_slice_units = job_total_layers.saturating_mul(job.tank_count.max(1));
             let progress_total = progress_slice_units.saturating_add(1);
 
             let slicing_progress = on_progress.as_ref().map(|cb| {
@@ -6030,12 +6248,12 @@ fn _empty_perf() -> SlicingPerfV3 {
 #[cfg(test)]
 mod tests {
     use super::ssaa_downsample_min_alpha_u8;
-    use crate::rle::expand_rle_to_mask;
-    use crate::types::SliceJobV3;
     use super::{
         Backend, BoundedBinaryMask, BoundedGrayMask, DenseZBlur, PendingLayer,
         PerturbRleModelLayer, PostProcessedLayer, RleZBlur, ZBlurHistoryLayer,
     };
+    use crate::rle::expand_rle_to_mask;
+    use crate::types::SliceJobV3;
     use std::collections::VecDeque;
     use std::sync::Arc;
 
@@ -6058,7 +6276,12 @@ mod tests {
         job
     }
 
-    fn layer_simd_consumer_masks(job: &SliceJobV3, cap: usize, backend: Backend, encoded: bool) -> Vec<Vec<u8>> {
+    fn layer_simd_consumer_masks(
+        job: &SliceJobV3,
+        cap: usize,
+        backend: Backend,
+        encoded: bool,
+    ) -> Vec<Vec<u8>> {
         let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorded = Arc::clone(&progress);
         let on_progress: crate::types::ProgressCallbackV3 = Arc::new(move |update| {
@@ -6067,27 +6290,52 @@ mod tests {
         let mut masks = vec![None; job.total_layers as usize];
         let pixels = job.width_px as usize * job.height_px as usize;
         if encoded {
-            let encoder = Arc::new(move |_index, runs: &[crate::rle::RleRun]| Ok(expand_rle_to_mask(runs, pixels)));
+            let encoder = Arc::new(move |_index, runs: &[crate::rle::RleRun]| {
+                Ok(expand_rle_to_mask(runs, pixels))
+            });
             let mut sink = |index: u32, bytes| {
                 assert!(masks[index as usize].replace(bytes).is_none());
                 Ok(())
             };
             super::slice_and_rasterize_perturb_3daa_rle_impl(
-                job, false, |_, _| panic!("encoded routing must not call the RLE sink"),
-                Some(encoder), Some(&mut sink), Some(on_progress), None,
+                job,
+                false,
+                |_, _| panic!("encoded routing must not call the RLE sink"),
+                Some(encoder),
+                Some(&mut sink),
+                Some(on_progress),
+                None,
                 Some(super::PerturbPostTestOptions { cap, backend }),
-            ).unwrap();
+            )
+            .unwrap();
         } else {
             super::slice_and_rasterize_perturb_3daa_rle_impl(
-                job, false, |index, runs| {
-                    assert!(masks[index as usize].replace(expand_rle_to_mask(&runs, pixels)).is_none());
+                job,
+                false,
+                |index, runs| {
+                    assert!(masks[index as usize]
+                        .replace(expand_rle_to_mask(&runs, pixels))
+                        .is_none());
                     Ok(())
-                }, None, None, Some(on_progress), None,
+                },
+                None,
+                None,
+                Some(on_progress),
+                None,
                 Some(super::PerturbPostTestOptions { cap, backend }),
-            ).unwrap();
+            )
+            .unwrap();
         }
-        assert_eq!(*progress.lock().unwrap(), (1..=job.total_layers).map(|done| (done, job.total_layers)).collect::<Vec<_>>());
-        masks.into_iter().map(|mask| mask.expect("every layer must reach its consumer")).collect()
+        assert_eq!(
+            *progress.lock().unwrap(),
+            (1..=job.total_layers)
+                .map(|done| (done, job.total_layers))
+                .collect::<Vec<_>>()
+        );
+        masks
+            .into_iter()
+            .map(|mask| mask.expect("every layer must reach its consumer"))
+            .collect()
     }
 
     #[test]
@@ -6097,7 +6345,11 @@ mod tests {
         for backend in Backend::supported_for_tests() {
             for cap in 1..=5 {
                 for encoded in [false, true] {
-                    assert_eq!(layer_simd_consumer_masks(&job, cap, backend, encoded), expected, "cap={cap} backend={backend:?} encoded={encoded}");
+                    assert_eq!(
+                        layer_simd_consumer_masks(&job, cap, backend, encoded),
+                        expected,
+                        "cap={cap} backend={backend:?} encoded={encoded}"
+                    );
                 }
             }
         }
@@ -6120,15 +6372,35 @@ mod tests {
             let mut masks = vec![None; job.total_layers as usize];
             let pixels = job.width_px as usize * job.height_px as usize;
             super::slice_and_rasterize_perturb_3daa_rle_impl(
-                &job, false, |index, runs| {
+                &job,
+                false,
+                |index, runs| {
                     std::thread::sleep(std::time::Duration::from_millis(1));
-                    assert!(masks[index as usize].replace(expand_rle_to_mask(&runs, pixels)).is_none());
+                    assert!(masks[index as usize]
+                        .replace(expand_rle_to_mask(&runs, pixels))
+                        .is_none());
                     Ok(())
-                }, None, None, Some(callback), None,
-                Some(super::PerturbPostTestOptions { cap, backend: Backend::detected() }),
-            ).unwrap();
-            assert_eq!(*progress.lock().unwrap(), (1..=job.total_layers).map(|done| (done, job.total_layers)).collect::<Vec<_>>());
-            assert_eq!(masks.into_iter().map(Option::unwrap).collect::<Vec<_>>(), expected);
+                },
+                None,
+                None,
+                Some(callback),
+                None,
+                Some(super::PerturbPostTestOptions {
+                    cap,
+                    backend: Backend::detected(),
+                }),
+            )
+            .unwrap();
+            assert_eq!(
+                *progress.lock().unwrap(),
+                (1..=job.total_layers)
+                    .map(|done| (done, job.total_layers))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                masks.into_iter().map(Option::unwrap).collect::<Vec<_>>(),
+                expected
+            );
         }
     }
 
@@ -6139,23 +6411,46 @@ mod tests {
             let cancel = std::sync::atomic::AtomicBool::new(false);
             let mut arrivals = 0;
             let result = super::slice_and_rasterize_perturb_3daa_rle_impl(
-                &job, false, |_, _| {
+                &job,
+                false,
+                |_, _| {
                     arrivals += 1;
                     cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                     Err(super::SlicerV3Error::Cancelled)
-                }, None, None, None, Some(&cancel),
-                Some(super::PerturbPostTestOptions { cap, backend: Backend::detected() }),
+                },
+                None,
+                None,
+                None,
+                Some(&cancel),
+                Some(super::PerturbPostTestOptions {
+                    cap,
+                    backend: Backend::detected(),
+                }),
             );
             assert!(matches!(result, Err(super::SlicerV3Error::Cancelled)));
             assert_eq!(arrivals, 1);
             let encoder = Arc::new(|_, _runs: &[crate::rle::RleRun]| Ok(vec![1u8]));
-            let mut sink = |_, _| Err(super::SlicerV3Error::LayerPreview("consumer rejected layer".into()));
+            let mut sink = |_, _| {
+                Err(super::SlicerV3Error::LayerPreview(
+                    "consumer rejected layer".into(),
+                ))
+            };
             let result = super::slice_and_rasterize_perturb_3daa_rle_impl(
-                &job, false, |_, _| panic!("encoded routing must not call the RLE sink"),
-                Some(encoder), Some(&mut sink), None, None,
-                Some(super::PerturbPostTestOptions { cap, backend: Backend::detected() }),
+                &job,
+                false,
+                |_, _| panic!("encoded routing must not call the RLE sink"),
+                Some(encoder),
+                Some(&mut sink),
+                None,
+                None,
+                Some(super::PerturbPostTestOptions {
+                    cap,
+                    backend: Backend::detected(),
+                }),
             );
-            assert!(matches!(result, Err(super::SlicerV3Error::LayerPreview(message)) if message == "consumer rejected layer"));
+            assert!(
+                matches!(result, Err(super::SlicerV3Error::LayerPreview(message)) if message == "consumer rejected layer")
+            );
         }
     }
 
@@ -6166,8 +6461,21 @@ mod tests {
             let (tx, rx) = std::sync::mpsc::sync_channel(7);
             for index in 0..7 {
                 let (model_tx, model_receiver) = std::sync::mpsc::sync_channel(1);
-                model_tx.send((vec![crate::rle::RleRun { value: index as u8 + 1, length: 15 }], Some((0, 4, 0, 2)))).unwrap();
-                tx.send(super::PerturbRlePostInput { layer_idx: index, model_receiver, support_runs: None }).unwrap();
+                model_tx
+                    .send((
+                        vec![crate::rle::RleRun {
+                            value: index as u8 + 1,
+                            length: 15,
+                        }],
+                        Some((0, 4, 0, 2)),
+                    ))
+                    .unwrap();
+                tx.send(super::PerturbRlePostInput {
+                    layer_idx: index,
+                    model_receiver,
+                    support_runs: None,
+                })
+                .unwrap();
             }
             drop(tx);
             let mut pending = VecDeque::new();
@@ -6183,26 +6491,72 @@ mod tests {
             loop {
                 let task = super::take_perturb_rle_post_task(&mut pending, &mut history, 2);
                 assert!(task.history.len() <= 2 && task.future.len() == 2);
-                for (offset, neighbor) in task.future.iter().enumerate() { assert_eq!(neighbor.runs[0].value, task.layer_idx as u8 + offset as u8 + 2); }
-                for (offset, neighbor) in task.history.iter().rev().enumerate() { assert_eq!(neighbor.runs[0].value, task.layer_idx as u8 - offset as u8); }
+                for (offset, neighbor) in task.future.iter().enumerate() {
+                    assert_eq!(
+                        neighbor.runs[0].value,
+                        task.layer_idx as u8 + offset as u8 + 2
+                    );
+                }
+                for (offset, neighbor) in task.history.iter().rev().enumerate() {
+                    assert_eq!(neighbor.runs[0].value, task.layer_idx as u8 - offset as u8);
+                }
                 batch.tasks[batch.count] = Some(task);
                 batch.permits[batch.count] = Some(permit);
                 batch.count += 1;
                 assert_eq!(pending.len(), 2);
-                if batch.count == 4 { break; }
-                let Some(next) = super::try_extend_perturb_rle_post_batch(&mut pending, &rx, &mut waiting, &gate, 2, false) else { break; };
+                if batch.count == 4 {
+                    break;
+                }
+                let Some(next) = super::try_extend_perturb_rle_post_batch(
+                    &mut pending,
+                    &rx,
+                    &mut waiting,
+                    &gate,
+                    2,
+                    false,
+                ) else {
+                    break;
+                };
                 permit = next;
             }
             assert_eq!(batch.count, cap);
             assert_eq!(gate.state.lock().unwrap().count, cap);
-            let palette = crate::dither::DitherPaletteV3::new(&std::array::from_fn(|i| i as u8), 2.2, 3);
-            let expected: Vec<_> = batch.tasks[..batch.count].iter().map(|task| {
-                let task = task.as_ref().unwrap();
-                let gray = super::apply_z_weighted_blur_to_rle_layer(&task.model, &task.history, &task.future, 2, &[1; 5], 5, 3);
-                crate::dither::dither_rle_layer_with_lut_and_gamma(&gray, &palette, 5, 3)
-            }).collect();
-            let outputs = super::finalize_perturb_rle_post_batch(&mut batch.tasks, batch.count, 2, &[1; 5], None, Some(&palette), Backend::detected(), 5, 3, &super::PostStageCounters::default());
-            for (lane, expected) in expected.into_iter().enumerate() { assert_eq!(outputs[lane].as_ref().unwrap().runs.as_ref().unwrap(), &expected); }
+            let palette =
+                crate::dither::DitherPaletteV3::new(&std::array::from_fn(|i| i as u8), 2.2, 3);
+            let expected: Vec<_> = batch.tasks[..batch.count]
+                .iter()
+                .map(|task| {
+                    let task = task.as_ref().unwrap();
+                    let gray = super::apply_z_weighted_blur_to_rle_layer(
+                        &task.model,
+                        &task.history,
+                        &task.future,
+                        2,
+                        &[1; 5],
+                        5,
+                        3,
+                    );
+                    crate::dither::dither_rle_layer_with_lut_and_gamma(&gray, &palette, 5, 3)
+                })
+                .collect();
+            let outputs = super::finalize_perturb_rle_post_batch(
+                &mut batch.tasks,
+                batch.count,
+                2,
+                &[1; 5],
+                None,
+                Some(&palette),
+                Backend::detected(),
+                5,
+                3,
+                &super::PostStageCounters::default(),
+            );
+            for (lane, expected) in expected.into_iter().enumerate() {
+                assert_eq!(
+                    outputs[lane].as_ref().unwrap().runs.as_ref().unwrap(),
+                    &expected
+                );
+            }
             drop(outputs);
             drop(batch);
             assert_eq!(gate.state.lock().unwrap().count, 0);
@@ -6215,10 +6569,23 @@ mod tests {
         let first = gate.acquire();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let (_model_tx, model_receiver) = std::sync::mpsc::sync_channel(1);
-        tx.send(super::PerturbRlePostInput { layer_idx: 1, model_receiver, support_runs: None }).unwrap();
+        tx.send(super::PerturbRlePostInput {
+            layer_idx: 1,
+            model_receiver,
+            support_runs: None,
+        })
+        .unwrap();
         let mut pending = VecDeque::new();
         let mut waiting = None;
-        assert!(super::try_extend_perturb_rle_post_batch(&mut pending, &rx, &mut waiting, &gate, 0, false).is_none());
+        assert!(super::try_extend_perturb_rle_post_batch(
+            &mut pending,
+            &rx,
+            &mut waiting,
+            &gate,
+            0,
+            false
+        )
+        .is_none());
         assert!(pending.is_empty() && waiting.is_some());
         assert_eq!(gate.state.lock().unwrap().count, 2);
         gate.retune(1);
@@ -6245,8 +6612,19 @@ mod tests {
 
     fn queue_aware_ready_input(index: u32) -> super::PerturbRlePostInput {
         let (tx, model_receiver) = std::sync::mpsc::sync_channel(1);
-        tx.send((vec![crate::rle::RleRun { value: index as u8 + 1, length: 15 }], Some((0, 4, 0, 2)))).unwrap();
-        super::PerturbRlePostInput { layer_idx: index, model_receiver, support_runs: None }
+        tx.send((
+            vec![crate::rle::RleRun {
+                value: index as u8 + 1,
+                length: 15,
+            }],
+            Some((0, 4, 0, 2)),
+        ))
+        .unwrap();
+        super::PerturbRlePostInput {
+            layer_idx: index,
+            model_receiver,
+            support_runs: None,
+        }
     }
 
     #[test]
@@ -6262,37 +6640,80 @@ mod tests {
             let worker = scope.spawn(move || {
                 let input = queue_aware_ready_input(0);
                 let (runs, bounds) = input.model_receiver.recv().unwrap();
-                let mut pending = VecDeque::from([super::pending_perturb_rle_input(input, runs, bounds)]);
+                let mut pending =
+                    VecDeque::from([super::pending_perturb_rle_input(input, runs, bounds)]);
                 let mut history = VecDeque::new();
                 let mut waiting = None;
                 let mut batch = super::PerturbRlePostBatch::new();
                 let mut permit = first;
                 loop {
-                    batch.tasks[batch.count] = Some(super::take_perturb_rle_post_task(&mut pending, &mut history, 0));
+                    batch.tasks[batch.count] = Some(super::take_perturb_rle_post_task(
+                        &mut pending,
+                        &mut history,
+                        0,
+                    ));
                     batch.permits[batch.count] = Some(permit);
                     batch.count += 1;
-                    if batch.count == 4 { break; }
-                    permit = super::extend_perturb_rle_post_batch(&mut pending, &rx, &mut waiting, &worker_gate, 0, false, None)
-                        .expect("useful body keeps the partial group held");
+                    if batch.count == 4 {
+                        break;
+                    }
+                    permit = super::extend_perturb_rle_post_batch(
+                        &mut pending,
+                        &rx,
+                        &mut waiting,
+                        &worker_gate,
+                        0,
+                        false,
+                        None,
+                    )
+                    .expect("useful body keeps the partial group held");
                 }
                 assert!(pending.is_empty() && history.is_empty() && waiting.is_none());
                 batch
             });
             first_wait.recv().unwrap();
-            assert_eq!(gate.state.lock().unwrap().count, 2, "first partial remains charged while input is absent");
+            assert_eq!(
+                gate.state.lock().unwrap().count,
+                2,
+                "first partial remains charged while input is absent"
+            );
             let xy_wait = queue_aware_wait_signal(&gate);
             let (model_tx, model_receiver) = std::sync::mpsc::sync_channel(1);
-            tx.send(super::PerturbRlePostInput { layer_idx: 1, model_receiver, support_runs: None }).unwrap();
+            tx.send(super::PerturbRlePostInput {
+                layer_idx: 1,
+                model_receiver,
+                support_runs: None,
+            })
+            .unwrap();
             gate.notify_ready();
             xy_wait.recv().unwrap();
-            assert_eq!(gate.state.lock().unwrap().count, 3, "only one unfinished XY input owns an extra permit");
-            model_tx.send((vec![crate::rle::RleRun { value: 2, length: 15 }], Some((0, 4, 0, 2)))).unwrap();
+            assert_eq!(
+                gate.state.lock().unwrap().count,
+                3,
+                "only one unfinished XY input owns an extra permit"
+            );
+            model_tx
+                .send((
+                    vec![crate::rle::RleRun {
+                        value: 2,
+                        length: 15,
+                    }],
+                    Some((0, 4, 0, 2)),
+                ))
+                .unwrap();
             tx.send(queue_aware_ready_input(2)).unwrap();
             tx.send(queue_aware_ready_input(3)).unwrap();
             gate.notify_ready();
             let batch = worker.join().unwrap();
             assert_eq!(batch.count, 4);
-            assert_eq!(batch.tasks.iter().map(|task| task.as_ref().unwrap().layer_idx).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+            assert_eq!(
+                batch
+                    .tasks
+                    .iter()
+                    .map(|task| task.as_ref().unwrap().layer_idx)
+                    .collect::<Vec<_>>(),
+                vec![0, 1, 2, 3]
+            );
             assert_eq!(gate.state.lock().unwrap().count, 5);
             drop(batch);
         });
@@ -6305,18 +6726,41 @@ mod tests {
         let gate = Arc::new(super::PostTaskGate::new(4, true));
         let _partial = gate.acquire();
         let (_tx, rx) = std::sync::mpsc::sync_channel(1);
-        assert!(super::extend_perturb_rle_post_batch(&mut VecDeque::new(), &rx, &mut None, &gate, 0, false, None).is_none());
+        assert!(super::extend_perturb_rle_post_batch(
+            &mut VecDeque::new(),
+            &rx,
+            &mut None,
+            &gate,
+            0,
+            false,
+            None
+        )
+        .is_none());
         let _encode_permit = gate.acquire();
         let body = gate.register_body();
         let asleep = queue_aware_wait_signal(&gate);
         std::thread::scope(|scope| {
             let worker_gate = &gate;
-            let worker = scope.spawn(move || super::extend_perturb_rle_post_batch(&mut VecDeque::new(), &rx, &mut None, worker_gate, 0, false, None));
+            let worker = scope.spawn(move || {
+                super::extend_perturb_rle_post_batch(
+                    &mut VecDeque::new(),
+                    &rx,
+                    &mut None,
+                    worker_gate,
+                    0,
+                    false,
+                    None,
+                )
+            });
             asleep.recv().unwrap();
             drop(body);
             assert!(worker.join().unwrap().is_none());
         });
-        assert_eq!(gate.state.lock().unwrap().count, 2, "encode/output retention is not useful post-body work");
+        assert_eq!(
+            gate.state.lock().unwrap().count,
+            2,
+            "encode/output retention is not useful post-body work"
+        );
     }
 
     #[test]
@@ -6333,7 +6777,17 @@ mod tests {
             std::thread::scope(|scope| {
                 let worker_gate = &gate;
                 let worker_cancel = &cancel;
-                let worker = scope.spawn(move || super::extend_perturb_rle_post_batch(&mut VecDeque::new(), &rx, &mut None, worker_gate, 0, false, Some(worker_cancel)));
+                let worker = scope.spawn(move || {
+                    super::extend_perturb_rle_post_batch(
+                        &mut VecDeque::new(),
+                        &rx,
+                        &mut None,
+                        worker_gate,
+                        0,
+                        false,
+                        Some(worker_cancel),
+                    )
+                });
                 asleep.recv().unwrap();
                 match event {
                     0 => gate.retune(3),
@@ -6346,7 +6800,8 @@ mod tests {
                         assert!(std::panic::catch_unwind(move || {
                             let _body = body;
                             panic!("post body failed");
-                        }).is_err());
+                        })
+                        .is_err());
                     }
                     _ => {
                         cancel.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -6367,13 +6822,34 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let (generation, needs_slot) = gate.batch_generation().unwrap();
         assert!(!needs_slot);
-        assert!(super::try_extend_perturb_rle_post_batch(&mut VecDeque::new(), &rx, &mut None, &gate, 0, false).is_none());
-        assert_eq!(gate.state.lock().unwrap().generation, generation, "an empty probe must not notify itself into a spin");
+        assert!(super::try_extend_perturb_rle_post_batch(
+            &mut VecDeque::new(),
+            &rx,
+            &mut None,
+            &gate,
+            0,
+            false
+        )
+        .is_none());
+        assert_eq!(
+            gate.state.lock().unwrap().generation,
+            generation,
+            "an empty probe must not notify itself into a spin"
+        );
         tx.send(queue_aware_ready_input(1)).unwrap();
         gate.notify_ready();
         assert!(gate.wait_for_batch_progress(generation, needs_slot));
         let mut pending = VecDeque::new();
-        let next = super::extend_perturb_rle_post_batch(&mut pending, &rx, &mut None, &gate, 0, false, None).unwrap();
+        let next = super::extend_perturb_rle_post_batch(
+            &mut pending,
+            &rx,
+            &mut None,
+            &gate,
+            0,
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(pending[0].layer_idx, 1);
         let third = gate.acquire();
         let fourth = gate.acquire();
@@ -6391,20 +6867,41 @@ mod tests {
         let _body = gate.register_body();
         let (input_tx, input_rx) = std::sync::mpsc::sync_channel(1);
         let (model_tx, model_receiver) = std::sync::mpsc::sync_channel(1);
-        input_tx.send(super::PerturbRlePostInput { layer_idx: 1, model_receiver, support_runs: None }).unwrap();
+        input_tx
+            .send(super::PerturbRlePostInput {
+                layer_idx: 1,
+                model_receiver,
+                support_runs: None,
+            })
+            .unwrap();
         let asleep = queue_aware_wait_signal(&gate);
         std::thread::scope(|scope| {
             let worker_gate = &gate;
-            let worker = scope.spawn(move || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                super::extend_perturb_rle_post_batch(&mut VecDeque::new(), &input_rx, &mut None, worker_gate, 0, false, None)
-            })).is_err());
+            let worker = scope.spawn(move || {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    super::extend_perturb_rle_post_batch(
+                        &mut VecDeque::new(),
+                        &input_rx,
+                        &mut None,
+                        worker_gate,
+                        0,
+                        false,
+                        None,
+                    )
+                }))
+                .is_err()
+            });
             asleep.recv().unwrap();
-            let progress = super::PostInputProgress { gate: Arc::clone(&gate), closes_input: false };
+            let progress = super::PostInputProgress {
+                gate: Arc::clone(&gate),
+                closes_input: false,
+            };
             assert!(std::panic::catch_unwind(move || {
                 let _progress = progress;
                 let _tx = model_tx;
                 panic!("XY failed");
-            }).is_err());
+            })
+            .is_err());
             assert!(worker.join().unwrap());
         });
         assert_eq!(gate.state.lock().unwrap().count, 1);
@@ -6419,25 +6916,49 @@ mod tests {
                 job.z_blur_radius_layers = radius;
                 let expected = layer_simd_consumer_masks(&job, 1, Backend::Scalar, false);
                 for encoded in [false, true] {
-                    assert_eq!(layer_simd_consumer_masks(&job, 8, Backend::detected(), encoded), expected, "layers={layers} radius={radius} encoded={encoded}");
+                    assert_eq!(
+                        layer_simd_consumer_masks(&job, 8, Backend::detected(), encoded),
+                        expected,
+                        "layers={layers} radius={radius} encoded={encoded}"
+                    );
                 }
             }
         }
     }
 
     /// Appends the 12 triangles of an axis-aligned box to a flat triangle buffer.
-    fn push_box_xyz(xyz: &mut Vec<f32>, min_x: f32, min_y: f32, min_z: f32, max_x: f32, max_y: f32, max_z: f32) {
+    fn push_box_xyz(
+        xyz: &mut Vec<f32>,
+        min_x: f32,
+        min_y: f32,
+        min_z: f32,
+        max_x: f32,
+        max_y: f32,
+        max_z: f32,
+    ) {
         let corners = [
-            [min_x, min_y, min_z], [max_x, min_y, min_z], [max_x, max_y, min_z], [min_x, max_y, min_z],
-            [min_x, min_y, max_z], [max_x, min_y, max_z], [max_x, max_y, max_z], [min_x, max_y, max_z],
+            [min_x, min_y, min_z],
+            [max_x, min_y, min_z],
+            [max_x, max_y, min_z],
+            [min_x, max_y, min_z],
+            [min_x, min_y, max_z],
+            [max_x, min_y, max_z],
+            [max_x, max_y, max_z],
+            [min_x, max_y, max_z],
         ];
         let faces = [
-            [0, 2, 1], [0, 3, 2],
-            [4, 5, 6], [4, 6, 7],
-            [0, 1, 5], [0, 5, 4],
-            [1, 2, 6], [1, 6, 5],
-            [2, 3, 7], [2, 7, 6],
-            [3, 0, 4], [3, 4, 7],
+            [0, 2, 1],
+            [0, 3, 2],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 4],
+            [1, 2, 6],
+            [1, 6, 5],
+            [2, 3, 7],
+            [2, 7, 6],
+            [3, 0, 4],
+            [3, 4, 7],
         ];
         for face in faces {
             for index in face {
@@ -6507,16 +7028,11 @@ mod tests {
                 for x in (0..span_width).step_by(2) {
                     center_rows[2 * span_width + x] = 200;
                 }
-                let center_mask = BoundedGrayMask::from_rows(
-                    (2, span_width + 1, 2, 4),
-                    center_rows,
-                );
+                let center_mask =
+                    BoundedGrayMask::from_rows((2, span_width + 1, 2, 4), center_rows);
                 let mut prior_rows = vec![40; 2 * span_width];
                 prior_rows[span_width..].fill(120);
-                let prior_mask = BoundedGrayMask::from_rows(
-                    (0, span_width - 1, 1, 2),
-                    prior_rows,
-                );
+                let prior_mask = BoundedGrayMask::from_rows((0, span_width - 1, 1, 2), prior_rows);
                 let next_mask = BoundedGrayMask::from_rows(
                     (span_width + 3, width - 1, 4, 4),
                     vec![160; span_width],
@@ -6528,12 +7044,13 @@ mod tests {
                 let mut expected = vec![0; width * height];
                 expected[width..width + span_width].fill(10);
                 for x in 0..width {
-                    expected[2 * width + x] = match (x < span_width, (2..span_width + 2).contains(&x)) {
-                        (true, true) => 70,
-                        (true, false) => 30,
-                        (false, true) => 40,
-                        (false, false) => 0,
-                    };
+                    expected[2 * width + x] =
+                        match (x < span_width, (2..span_width + 2).contains(&x)) {
+                            (true, true) => 70,
+                            (true, false) => 30,
+                            (false, true) => 40,
+                            (false, false) => 0,
+                        };
                 }
                 for x in (0..span_width).step_by(2) {
                     expected[4 * width + 2 + x] = 100;
@@ -6562,7 +7079,9 @@ mod tests {
 
                 let mut center = z_blur_test_layer(center_mask.clone());
                 center.active_bounds = Some(final_bounds);
-                let history = VecDeque::from([ZBlurHistoryLayer { mask: prior_mask.clone() }]);
+                let history = VecDeque::from([ZBlurHistoryLayer {
+                    mask: prior_mask.clone(),
+                }]);
                 let future = VecDeque::from([z_blur_test_layer(next_mask.clone())]);
                 backend.dispatch(DenseZBlur {
                     center: &mut center,
@@ -6599,8 +7118,12 @@ mod tests {
                         .map(|idx| {
                             let sum = (source_pixels[0][idx] as u32)
                                 .saturating_mul(weights[0])
-                                .saturating_add((source_pixels[1][idx] as u32).saturating_mul(weights[1]))
-                                .saturating_add((source_pixels[2][idx] as u32).saturating_mul(weights[1]));
+                                .saturating_add(
+                                    (source_pixels[1][idx] as u32).saturating_mul(weights[1]),
+                                )
+                                .saturating_add(
+                                    (source_pixels[2][idx] as u32).saturating_mul(weights[1]),
+                                );
                             ((sum + denom / 2) / denom).min(255) as u8
                         })
                         .collect();
@@ -6662,7 +7185,9 @@ mod tests {
                     [1, 0, u32::MAX],
                 ] {
                     let denom = weights[0] + weights[1];
-                    let expected: Vec<u8> = pixels.iter().zip(&prior_pixels)
+                    let expected: Vec<u8> = pixels
+                        .iter()
+                        .zip(&prior_pixels)
                         .map(|(&center, &prior)| {
                             let sum = center as u32 * weights[0] + prior as u32 * weights[1];
                             ((sum + denom / 2) / denom).min(255) as u8
@@ -6701,9 +7226,15 @@ mod tests {
     #[test]
     fn z_blur_weighted_accumulation_and_unit_bounds_cover_overflow_edges() {
         let max_unit_sources = ((2 * u32::MAX as u64 + 1) / 511) as usize;
-        assert!(super::bounded_z_blur_sum_fits(u32::try_from(max_unit_sources).ok()));
-        assert!(!super::bounded_z_blur_sum_fits(u32::try_from(max_unit_sources + 1).ok()));
-        assert!(!super::bounded_z_blur_sum_fits(u32::try_from(usize::MAX).ok()));
+        assert!(super::bounded_z_blur_sum_fits(
+            u32::try_from(max_unit_sources).ok()
+        ));
+        assert!(!super::bounded_z_blur_sum_fits(
+            u32::try_from(max_unit_sources + 1).ok()
+        ));
+        assert!(!super::bounded_z_blur_sum_fits(
+            u32::try_from(usize::MAX).ok()
+        ));
         assert!(!super::bounded_z_blur_sum_fits(None));
         assert!(super::bounded_z_blur_sum_fits(Some(0)));
         // This sum still admits every byte product, but not rounding at 255.
@@ -6719,9 +7250,9 @@ mod tests {
 
             fn with_simd<S: pulp::Simd>(self, simd: S) {
                 let mut values = simd.splat_u32s(0);
-                let input = pulp::bytemuck::cast_slice_mut::<S::u32s, u32>(
-                    std::slice::from_mut(&mut values),
-                );
+                let input = pulp::bytemuck::cast_slice_mut::<S::u32s, u32>(std::slice::from_mut(
+                    &mut values,
+                ));
                 for (idx, value) in input.iter_mut().enumerate() {
                     *value = [0, 1, 2, 127, 255][(idx + self.offset) % 5];
                 }
@@ -6733,10 +7264,15 @@ mod tests {
                     values,
                     self.weight,
                 );
-                let input = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&values));
+                let input =
+                    pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&values));
                 let sums = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&accum));
                 for (&value, &sum) in input.iter().zip(sums) {
-                    assert_eq!(sum, self.initial.saturating_add(value.saturating_mul(self.weight)));
+                    assert_eq!(
+                        sum,
+                        self.initial
+                            .saturating_add(value.saturating_mul(self.weight))
+                    );
                 }
             }
         }
@@ -6745,7 +7281,11 @@ mod tests {
             for initial in [0, u32::MAX - 1] {
                 for weight in [0, 1, u32::MAX / 255, u32::MAX / 255 + 1, u32::MAX] {
                     for offset in 0..5 {
-                        backend.dispatch(WeightedAccumulation { initial, weight, offset });
+                        backend.dispatch(WeightedAccumulation {
+                            initial,
+                            weight,
+                            offset,
+                        });
                     }
                 }
             }
@@ -6774,7 +7314,8 @@ mod tests {
                 ] {
                     let expected = std::panic::catch_unwind(|| {
                         let denom = weights.iter().copied().sum::<u32>().max(1);
-                        let sum = 255u32.saturating_mul(weights[0])
+                        let sum = 255u32
+                            .saturating_mul(weights[0])
                             .saturating_add(255u32.saturating_mul(weights[1]));
                         vec![((sum + denom / 2) / denom).min(255) as u8; width]
                     });
@@ -6808,7 +7349,10 @@ mod tests {
                     assert_eq!(result.is_err(), panics);
                     if !panics {
                         assert_eq!(center.active_bounds, Some(bounds));
-                        assert_eq!(center.mask.into_full_frame(width, height), *expected.as_ref().unwrap());
+                        assert_eq!(
+                            center.mask.into_full_frame(width, height),
+                            *expected.as_ref().unwrap()
+                        );
                     }
                 }
             }
@@ -6836,7 +7380,10 @@ mod tests {
                     }
                     let rle_history: Vec<_> = if include_empty_neighbor {
                         vec![Arc::new(PerturbRleModelLayer {
-                            runs: vec![crate::rle::RleRun { length: (width * height) as u32, value: 0 }],
+                            runs: vec![crate::rle::RleRun {
+                                length: (width * height) as u32,
+                                value: 0,
+                            }],
                             bounds: None,
                         })]
                     } else {
@@ -6855,7 +7402,9 @@ mod tests {
 
                     let mut center = z_blur_test_layer(mask.clone());
                     let history = if include_empty_neighbor {
-                        VecDeque::from([ZBlurHistoryLayer { mask: BoundedGrayMask::empty() }])
+                        VecDeque::from([ZBlurHistoryLayer {
+                            mask: BoundedGrayMask::empty(),
+                        }])
                     } else {
                         VecDeque::new()
                     };
@@ -6873,7 +7422,6 @@ mod tests {
             }
         }
     }
-
 
     fn push_box_triangles(
         out: &mut Vec<f32>,
@@ -7443,7 +7991,8 @@ mod tests {
             ..Default::default()
         };
 
-        let mut streams: std::collections::HashMap<u32, Vec<crate::rle::RleRun>> = Default::default();
+        let mut streams: std::collections::HashMap<u32, Vec<crate::rle::RleRun>> =
+            Default::default();
         let (stats, _perf) = super::slice_and_rasterize_rle_multi_tank_v3(
             &job,
             false,
@@ -7462,9 +8011,8 @@ mod tests {
         let height = 100usize;
         let tank_one = expand_rle_to_mask(&streams[&0], width * height);
         let tank_two = expand_rle_to_mask(&streams[&1], width * height);
-        let first_solid = |mask: &[u8]| -> Option<usize> {
-            mask.iter().position(|value| *value > 0)
-        };
+        let first_solid =
+            |mask: &[u8]| -> Option<usize> { mask.iter().position(|value| *value > 0) };
 
         let tank_one_pixel = first_solid(&tank_one).expect("tank 1 has film");
         let tank_two_pixel = first_solid(&tank_two).expect("tank 2 has film");
@@ -7495,15 +8043,11 @@ mod tests {
             tank_count: 1,
             ..Default::default()
         };
-        let result = super::slice_and_rasterize_rle_multi_tank_v3(
-            &job,
-            false,
-            |_, _, _| Ok(()),
-            None,
-            None,
-        );
-        assert!(matches!(result, Err(super::SlicerV3Error::UnsupportedOutput(_))));
+        let result =
+            super::slice_and_rasterize_rle_multi_tank_v3(&job, false, |_, _, _| Ok(()), None, None);
+        assert!(matches!(
+            result,
+            Err(super::SlicerV3Error::UnsupportedOutput(_))
+        ));
     }
-
-
 }

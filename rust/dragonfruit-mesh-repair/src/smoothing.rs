@@ -21,7 +21,12 @@ pub(crate) struct TaubinPassStats {
 /// Smooth a mesh in place: `iterations` Taubin pairs, with no vertex moving further than `max_step`
 /// in one pass. `edge_scale` is the size of the features the surface is made of — a voxel for a
 /// cavity, a median edge for a rebuild — and sets how small a face the guards refuse to collapse.
-pub(crate) fn taubin_smooth(mesh: &mut IndexedMesh, iterations: usize, edge_scale: f32, max_step: f32) {
+pub(crate) fn taubin_smooth(
+    mesh: &mut IndexedMesh,
+    iterations: usize,
+    edge_scale: f32,
+    max_step: f32,
+) {
     if iterations == 0 || mesh.positions.len() < 4 || mesh.triangles.is_empty() {
         return;
     }
@@ -209,40 +214,38 @@ fn candidate_vertex_update_is_safe(
     true
 }
 
-    #[test]
-    fn cavity_smoothing_rejects_vertex_moves_that_flip_adjacent_triangles() {
-        let positions = vec![
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(1.0, 0.0, 0.0),
-            Vec3::new(0.0, 1.0, 0.0),
-            Vec3::new(-1.0, 0.0, 0.0),
-            Vec3::new(0.0, -1.0, 0.0),
-        ];
-        let triangles = vec![[0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 1]];
-        let vertex_faces = vec![
-            vec![0, 1, 2, 3],
-            vec![0, 3],
-            vec![0, 1],
-            vec![1, 2],
-            vec![2, 3],
-        ];
+#[test]
+fn cavity_smoothing_rejects_vertex_moves_that_flip_adjacent_triangles() {
+    let positions = vec![
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(-1.0, 0.0, 0.0),
+        Vec3::new(0.0, -1.0, 0.0),
+    ];
+    let triangles = vec![[0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 1]];
+    let vertex_faces = vec![
+        vec![0, 1, 2, 3],
+        vec![0, 3],
+        vec![0, 1],
+        vec![1, 2],
+        vec![2, 3],
+    ];
 
-        assert!(candidate_vertex_update_is_safe(
-            0,
-            Vec3::new(0.1, 0.1, 0.0),
-            &positions,
-            &triangles,
-            &vertex_faces,
-            1e-8,
-        ));
-        assert!(!candidate_vertex_update_is_safe(
-            0,
-            Vec3::new(1.6, 1.6, 0.0),
-            &positions,
-            &triangles,
-            &vertex_faces,
-            1e-8,
-        ));
-    }
-
-
+    assert!(candidate_vertex_update_is_safe(
+        0,
+        Vec3::new(0.1, 0.1, 0.0),
+        &positions,
+        &triangles,
+        &vertex_faces,
+        1e-8,
+    ));
+    assert!(!candidate_vertex_update_is_safe(
+        0,
+        Vec3::new(1.6, 1.6, 0.0),
+        &positions,
+        &triangles,
+        &vertex_faces,
+        1e-8,
+    ));
+}

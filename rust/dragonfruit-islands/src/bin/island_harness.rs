@@ -209,7 +209,9 @@ fn run_stage_rle(fixture_dir: &Path, output_dir: &Path, input: &InputJson) {
 
     for l in 0..input.num_layers {
         let pad = format!("{:03}", l);
-        let mask_path = fixture_dir.join("layers").join(format!("{}-mask.rle.json", pad));
+        let mask_path = fixture_dir
+            .join("layers")
+            .join(format!("{}-mask.rle.json", pad));
         if !mask_path.exists() {
             continue;
         }
@@ -221,7 +223,9 @@ fn run_stage_rle(fixture_dir: &Path, output_dir: &Path, input: &InputJson) {
         // Re-encode to verify roundtrip
         let re_encoded = rle_mask_to_json(&mask);
         fs::write(
-            output_dir.join("layers").join(format!("{}-mask.rle.json", pad)),
+            output_dir
+                .join("layers")
+                .join(format!("{}-mask.rle.json", pad)),
             serde_json::to_string_pretty(&re_encoded).unwrap(),
         )
         .unwrap();
@@ -235,12 +239,16 @@ fn run_stage_rle(fixture_dir: &Path, output_dir: &Path, input: &InputJson) {
         let (labels, components) = rle_label_components(&mask, conn);
 
         fs::write(
-            output_dir.join("layers").join(format!("{}-candidates.rle.json", pad)),
+            output_dir
+                .join("layers")
+                .join(format!("{}-candidates.rle.json", pad)),
             serde_json::to_string_pretty(&rle_labels_to_json(&labels)).unwrap(),
         )
         .unwrap();
         fs::write(
-            output_dir.join("layers").join(format!("{}-components.json", pad)),
+            output_dir
+                .join("layers")
+                .join(format!("{}-components.json", pad)),
             serde_json::to_string_pretty(&components).unwrap(),
         )
         .unwrap();
@@ -261,7 +269,9 @@ fn run_stage_scan(fixture_dir: &Path, output_dir: &Path, input: &InputJson) {
 
     for l in 0..input.num_layers {
         let pad = format!("{:03}", l);
-        let mask_path = fixture_dir.join("layers").join(format!("{}-mask.rle.json", pad));
+        let mask_path = fixture_dir
+            .join("layers")
+            .join(format!("{}-mask.rle.json", pad));
         if !mask_path.exists() {
             continue;
         }
@@ -279,12 +289,16 @@ fn run_stage_scan(fixture_dir: &Path, output_dir: &Path, input: &InputJson) {
         );
 
         fs::write(
-            output_dir.join("layers").join(format!("{}-candidates.rle.json", pad)),
+            output_dir
+                .join("layers")
+                .join(format!("{}-candidates.rle.json", pad)),
             serde_json::to_string_pretty(&rle_labels_to_json(&result.labels)).unwrap(),
         )
         .unwrap();
         fs::write(
-            output_dir.join("layers").join(format!("{}-components.json", pad)),
+            output_dir
+                .join("layers")
+                .join(format!("{}-components.json", pad)),
             serde_json::to_string_pretty(&result.components).unwrap(),
         )
         .unwrap();
@@ -308,7 +322,9 @@ fn run_stage_tracker(fixture_dir: &Path, output_dir: &Path, input: &InputJson) {
     let mut masks = Vec::new();
     for l in 0..input.num_layers {
         let pad = format!("{:03}", l);
-        let mask_path = fixture_dir.join("layers").join(format!("{}-mask.rle.json", pad));
+        let mask_path = fixture_dir
+            .join("layers")
+            .join(format!("{}-mask.rle.json", pad));
         let mask_json: RleMaskJson =
             serde_json::from_str(&fs::read_to_string(&mask_path).unwrap()).unwrap();
         masks.push(json_to_rle_mask(&mask_json));
@@ -318,7 +334,13 @@ fn run_stage_tracker(fixture_dir: &Path, output_dir: &Path, input: &InputJson) {
     let mut layer_results = Vec::new();
     for (i, mask) in masks.iter().enumerate() {
         let prev = if i > 0 { Some(&masks[i - 1]) } else { None };
-        layer_results.push(scan_layer(mask, prev, input.px_mm, input.support_buffer_mm, conn));
+        layer_results.push(scan_layer(
+            mask,
+            prev,
+            input.px_mm,
+            input.support_buffer_mm,
+            conn,
+        ));
     }
 
     // Phase 2: Island tracking
@@ -336,12 +358,20 @@ fn run_stage_tracker(fixture_dir: &Path, output_dir: &Path, input: &InputJson) {
             None
         };
 
-        let island_labels =
-            tracker.process_layer(l as u32, &lr.labels, &lr.components, prev_labels, &lr.solid_mask, false);
+        let island_labels = tracker.process_layer(
+            l as u32,
+            &lr.labels,
+            &lr.components,
+            prev_labels,
+            &lr.solid_mask,
+            false,
+        );
 
         let pad = format!("{:03}", l);
         fs::write(
-            output_dir.join("layers").join(format!("{}-island-labels.rle.json", pad)),
+            output_dir
+                .join("layers")
+                .join(format!("{}-island-labels.rle.json", pad)),
             serde_json::to_string_pretty(&rle_labels_to_json(&island_labels)).unwrap(),
         )
         .unwrap();
@@ -352,7 +382,9 @@ fn run_stage_tracker(fixture_dir: &Path, output_dir: &Path, input: &InputJson) {
         let islands = tracker.get_islands();
         let islands_json: Vec<IslandJson> = islands.iter().map(|i| island_to_json(i)).collect();
         fs::write(
-            output_dir.join("tracker-state").join(format!("{}-islands.json", pad)),
+            output_dir
+                .join("tracker-state")
+                .join(format!("{}-islands.json", pad)),
             serde_json::to_string_pretty(&islands_json).unwrap(),
         )
         .unwrap();
@@ -385,7 +417,9 @@ fn run_stage_full(fixture_dir: &Path, output_dir: &Path, input: &InputJson) {
     let mut masks = Vec::new();
     for l in 0..input.num_layers {
         let pad = format!("{:03}", l);
-        let mask_path = fixture_dir.join("layers").join(format!("{}-mask.rle.json", pad));
+        let mask_path = fixture_dir
+            .join("layers")
+            .join(format!("{}-mask.rle.json", pad));
         let mask_json: RleMaskJson =
             serde_json::from_str(&fs::read_to_string(&mask_path).unwrap()).unwrap();
         masks.push(json_to_rle_mask(&mask_json));
@@ -416,7 +450,9 @@ fn run_stage_full(fixture_dir: &Path, output_dir: &Path, input: &InputJson) {
     for (l, labels) in result.island_labels_per_layer.iter().enumerate() {
         let pad = format!("{:03}", l);
         fs::write(
-            output_dir.join("layers").join(format!("{}-island-labels.rle.json", pad)),
+            output_dir
+                .join("layers")
+                .join(format!("{}-island-labels.rle.json", pad)),
             serde_json::to_string_pretty(&rle_labels_to_json(labels)).unwrap(),
         )
         .unwrap();
@@ -478,13 +514,15 @@ fn main() {
 
     // Read input.json
     let input_path = fixture_dir.join("input.json");
-    let input: InputJson =
-        serde_json::from_str(&fs::read_to_string(&input_path).unwrap()).unwrap();
+    let input: InputJson = serde_json::from_str(&fs::read_to_string(&input_path).unwrap()).unwrap();
 
     println!("Fixture: {}", fixture_dir.display());
     println!("Output:  {}", output_dir.display());
     println!("Stage:   {}", stage);
-    println!("Grid:    {}x{}, {} layers", input.width, input.height, input.num_layers);
+    println!(
+        "Grid:    {}x{}, {} layers",
+        input.width, input.height, input.num_layers
+    );
 
     match stage.as_str() {
         "rle" => run_stage_rle(&fixture_dir, &output_dir, &input),

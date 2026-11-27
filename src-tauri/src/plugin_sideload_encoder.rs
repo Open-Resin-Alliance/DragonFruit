@@ -90,13 +90,15 @@ impl SideloadedRleSink {
             ));
         };
         self.wire.clear();
-        sdk::write_runs(runs.iter().map(|run| (run.length, run.value)), &mut self.wire);
+        sdk::write_runs(
+            runs.iter().map(|run| (run.length, run.value)),
+            &mut self.wire,
+        );
         session
             .send_layer(sdk::SlotKind::Rle, tank, layer_index, &self.wire)
             .map_err(SlicerV3Error::ExternalEncoder)?;
         Ok(())
     }
-
 }
 
 impl RleStreamEncoder for SideloadedRleSink {
@@ -247,14 +249,14 @@ impl FormatEncoder for SideloadedEncoder {
         if self.layer_kind != package::LayerKind::RawMask {
             return Ok(None);
         }
-        let mask_bytes = (job.source_width_px as u64)
-            .saturating_mul(job.source_height_px as u64);
+        let mask_bytes = (job.source_width_px as u64).saturating_mul(job.source_height_px as u64);
         if mask_bytes == 0 || mask_bytes > RAW_MASK_SLOT_CAP_BYTES {
             return Err(SlicerV3Error::ExternalEncoder(format!(
                 "a {mask_bytes}-byte raw mask layer does not fit the ring (cap {RAW_MASK_SLOT_CAP_BYTES})"
             )));
         }
-        let job_json = serde_json::to_value(job).map_err(|error| SlicerV3Error::Json(error.to_string()))?;
+        let job_json =
+            serde_json::to_value(job).map_err(|error| SlicerV3Error::Json(error.to_string()))?;
         let session = plugin_sideload_runtime::EncodeSession::start(
             &self.root,
             &self.manifest.id,
@@ -265,7 +267,9 @@ impl FormatEncoder for SideloadedEncoder {
             mask_bytes as u32,
         )
         .map_err(SlicerV3Error::ExternalEncoder)?;
-        Ok(Some(Box::new(SideloadedMaskSink { session: Some(session) })))
+        Ok(Some(Box::new(SideloadedMaskSink {
+            session: Some(session),
+        })))
     }
 
     fn encode_container_to_path_with_progress(
@@ -281,7 +285,8 @@ impl FormatEncoder for SideloadedEncoder {
                 "a sideloaded encoder is fed PNG layers".to_string(),
             ));
         };
-        let mut job_json = serde_json::to_value(job).map_err(|error| SlicerV3Error::Json(error.to_string()))?;
+        let mut job_json =
+            serde_json::to_value(job).map_err(|error| SlicerV3Error::Json(error.to_string()))?;
         // The engine computes these only when `requires_area_stats` says so; hand
         // them over in the job, which is the only channel the batch path has.
         if self.requires_area_stats && !_layer_area_stats.is_empty() {
@@ -398,7 +403,10 @@ mod tests {
             false,
             false,
         );
-        assert!(!encoder.requires_png_layers(), "an RLE format must not ask for PNGs");
+        assert!(
+            !encoder.requires_png_layers(),
+            "an RLE format must not ask for PNGs"
+        );
 
         let output = root.join("job.exf");
         let mut sink = encoder
@@ -406,18 +414,43 @@ mod tests {
             .expect("create session")
             .expect("a streaming sink");
 
-        let first = vec![RleRun { length: 4096, value: 0 }, RleRun { length: 12, value: 255 }];
-        let second = vec![RleRun { length: 4108, value: 0 }];
+        let first = vec![
+            RleRun {
+                length: 4096,
+                value: 0,
+            },
+            RleRun {
+                length: 12,
+                value: 255,
+            },
+        ];
+        let second = vec![RleRun {
+            length: 4108,
+            value: 0,
+        }];
         sink.consume_rle_layer(0, first).expect("layer 0");
         sink.consume_rle_layer(1, second).expect("layer 1");
         sink.finalize_to_path(&output).expect("finalize");
 
         let written = std::fs::read(&output).expect("read container");
         assert!(written.starts_with(b"ECHOENC1.exf"));
-        assert!(written.windows(3).any(|window| window == b"rle"), "kind not recorded");
+        assert!(
+            written.windows(3).any(|window| window == b"rle"),
+            "kind not recorded"
+        );
         // Two runs for the first layer, one for the second.
-        assert!(written.windows(4).any(|window| window == 2u32.to_le_bytes()), "run count 2");
-        assert!(written.windows(4).any(|window| window == 1u32.to_le_bytes()), "run count 1");
+        assert!(
+            written
+                .windows(4)
+                .any(|window| window == 2u32.to_le_bytes()),
+            "run count 2"
+        );
+        assert!(
+            written
+                .windows(4)
+                .any(|window| window == 1u32.to_le_bytes()),
+            "run count 1"
+        );
         assert!(written.ends_with(b"layers=2"));
 
         let _ = std::fs::remove_dir_all(&root);
@@ -512,10 +545,22 @@ mod tests {
             .create_rle_stream_encoder(&job(2))
             .expect("session")
             .expect("streaming sink");
-        sink.consume_rle_layer(0, vec![RleRun { length: 4096, value: 0 }])
-            .expect("layer 0");
-        sink.consume_rle_layer(1, vec![RleRun { length: 4096, value: 0 }])
-            .expect("layer 1");
+        sink.consume_rle_layer(
+            0,
+            vec![RleRun {
+                length: 4096,
+                value: 0,
+            }],
+        )
+        .expect("layer 0");
+        sink.consume_rle_layer(
+            1,
+            vec![RleRun {
+                length: 4096,
+                value: 0,
+            }],
+        )
+        .expect("layer 1");
         sink.finalize_to_path(&output).expect("finish");
         assert!(std::fs::read(&output).expect("read").ends_with(b"layers=2"));
 
@@ -587,10 +632,22 @@ mod tests {
             .create_rle_stream_encoder(&job_with_metadata(2, r#"{"echo":{"sceneBase64":"AAAA"}}"#))
             .expect("session")
             .expect("streaming sink");
-        sink.consume_rle_layer(0, vec![RleRun { length: 4096, value: 0 }])
-            .expect("layer 0");
-        sink.consume_rle_layer(1, vec![RleRun { length: 4096, value: 0 }])
-            .expect("layer 1");
+        sink.consume_rle_layer(
+            0,
+            vec![RleRun {
+                length: 4096,
+                value: 0,
+            }],
+        )
+        .expect("layer 0");
+        sink.consume_rle_layer(
+            1,
+            vec![RleRun {
+                length: 4096,
+                value: 0,
+            }],
+        )
+        .expect("layer 1");
         sink.finalize_to_path(&output).expect("finish");
 
         let bytes = std::fs::read(&output).expect("read");
@@ -652,12 +709,17 @@ mod tests {
             .create_raw_mask_stream_encoder(&job_sized(4, 4, 2))
             .expect("session")
             .expect("mask sink");
-        sink.consume_raw_mask_layer(0, vec![0u8; 16]).expect("layer 0");
-        sink.consume_raw_mask_layer(1, vec![7u8; 16]).expect("layer 1");
+        sink.consume_raw_mask_layer(0, vec![0u8; 16])
+            .expect("layer 0");
+        sink.consume_raw_mask_layer(1, vec![7u8; 16])
+            .expect("layer 1");
         sink.finalize_to_path(&output).expect("finish");
 
         let bytes = std::fs::read(&output).expect("read");
-        assert!(bytes.windows(4).any(|window| window == b"mask"), "the plugin recorded the slot kind");
+        assert!(
+            bytes.windows(4).any(|window| window == b"mask"),
+            "the plugin recorded the slot kind"
+        );
         assert!(bytes.ends_with(b"layers=2"));
 
         let _ = std::fs::remove_dir_all(&root);
@@ -758,8 +820,22 @@ mod tests {
             .create_rle_stream_encoder(&job(2))
             .expect("session")
             .expect("streaming sink");
-        sink.consume_rle_layer(0, vec![RleRun { length: 4096, value: 0 }]).expect("layer 0");
-        sink.consume_rle_layer(1, vec![RleRun { length: 4096, value: 1 }]).expect("layer 1");
+        sink.consume_rle_layer(
+            0,
+            vec![RleRun {
+                length: 4096,
+                value: 0,
+            }],
+        )
+        .expect("layer 0");
+        sink.consume_rle_layer(
+            1,
+            vec![RleRun {
+                length: 4096,
+                value: 1,
+            }],
+        )
+        .expect("layer 1");
         sink.finalize_to_path(&output).expect("finish");
 
         let bytes = std::fs::read(&output).expect("read");
@@ -771,7 +847,10 @@ mod tests {
             .map(|entry| entry.file_name().to_string_lossy().to_string())
             .filter(|name| name.ends_with(".ring"))
             .collect();
-        assert!(rings.is_empty(), "pipe mode must not create ring files: {rings:?}");
+        assert!(
+            rings.is_empty(),
+            "pipe mode must not create ring files: {rings:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

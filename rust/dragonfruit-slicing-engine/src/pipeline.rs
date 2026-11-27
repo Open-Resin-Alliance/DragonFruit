@@ -231,7 +231,9 @@ struct PerturbSupportSplitJobs {
 
 impl PerturbSupportSplitJobs {
     fn for_job(job: &SliceJobV3, split: Option<usize>) -> Option<Self> {
-        if split.is_none() || job.aa_on_supports || !crate::zaa::use_raster_perturbation(job)
+        if split.is_none()
+            || job.aa_on_supports
+            || !crate::zaa::use_raster_perturbation(job)
             || job.effective_xy_aa_steps() <= 1
         {
             return None;
@@ -270,7 +272,11 @@ fn rasterize_layer_rle_with_support_split(
     let model_job = split_jobs.map_or(job, |jobs| &jobs.model);
     if split_jobs.is_some() && !layer_candidates.iter().any(|&i| i >= model_triangle_count) {
         let (runs, stats) = rasterize_layer_rle(
-            model_job, triangles, layer_candidates, layer, compute_area_stats,
+            model_job,
+            triangles,
+            layer_candidates,
+            layer,
+            compute_area_stats,
         );
         return (runs, None, stats);
     }
@@ -285,8 +291,13 @@ fn rasterize_layer_rle_with_support_split(
     }
 
     if support_layer_indices.is_empty() {
-        let (runs, stats) =
-            rasterize_layer_rle(model_job, triangles, layer_candidates, layer, compute_area_stats);
+        let (runs, stats) = rasterize_layer_rle(
+            model_job,
+            triangles,
+            layer_candidates,
+            layer,
+            compute_area_stats,
+        );
         return (runs, None, stats);
     }
 

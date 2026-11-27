@@ -325,7 +325,8 @@ fn build_band(
         })
         .collect();
 
-    let mut band: ahash::AHashMap<(i32, i32, i32), f32> = ahash::AHashMap::with_capacity(computed.len());
+    let mut band: ahash::AHashMap<(i32, i32, i32), f32> =
+        ahash::AHashMap::with_capacity(computed.len());
     for (key, value) in computed {
         band.insert(key, value);
     }
@@ -338,7 +339,11 @@ fn build_band(
 /// Every emitted triangle is oriented toward the positive side of the field, taken from the
 /// centroid of the tetrahedron's positive corners. That is what makes the result consistently
 /// outward without a 16-case table.
-fn marching_tetrahedra(band: &ahash::AHashMap<(i32, i32, i32), f32>, voxel: f32, iso: f32) -> Vec<[Vec3; 3]> {
+fn marching_tetrahedra(
+    band: &ahash::AHashMap<(i32, i32, i32), f32>,
+    voxel: f32,
+    iso: f32,
+) -> Vec<[Vec3; 3]> {
     use rayon::prelude::*;
 
     // Each cell is independent — its triangles depend only on its own eight corners — so this is a
@@ -382,88 +387,91 @@ fn polygonize_cell(
             None => return,
         }
     }
-        for tet in TETS {
-            let p = [
-                corner_p[tet[0]],
-                corner_p[tet[1]],
-                corner_p[tet[2]],
-                corner_p[tet[3]],
-            ];
-            let d = [
-                corner_d[tet[0]],
-                corner_d[tet[1]],
-                corner_d[tet[2]],
-                corner_d[tet[3]],
-            ];
-            let positive = d.iter().filter(|v| **v >= iso).count();
-            if positive == 0 || positive == 4 {
-                continue;
-            }
-            let mut crossings: Vec<Vec3> = Vec::with_capacity(4);
-            for (ea, eb) in [(0usize, 1usize), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)] {
-                if (d[ea] < iso) != (d[eb] < iso) {
-                    // Interpolate from the lexicographically smaller corner. The same lattice edge
-                    // is reached by several tetrahedra and from either end, and computing t from a
-                    // different end gives a point that differs in the last bits — which the weld
-                    // then fails to merge, leaving the surface open. One canonical end makes the
-                    // point bit-identical everywhere it appears.
-                    let forward =
-                        (p[ea].x, p[ea].y, p[ea].z) <= (p[eb].x, p[eb].y, p[eb].z);
-                    let (pa, pb, da, db) = if forward {
-                        (p[ea], p[eb], d[ea], d[eb])
-                    } else {
-                        (p[eb], p[ea], d[eb], d[ea])
-                    };
-                    let t = (iso - da) / (db - da);
-                    crossings.push(pa.add(pb.sub(pa).scale(t)));
-                }
-            }
-            if crossings.len() < 3 {
-                continue;
-            }
-            // Centroid of the positive side, to orient each triangle away from it.
-            let mut sum = Vec3::ZERO;
-            for (ci, v) in d.iter().enumerate() {
-                if *v >= iso {
-                    sum = sum.add(p[ci]);
-                }
-            }
-            let toward = sum.scale(1.0 / positive as f32);
-            let emit = |a: Vec3, b: Vec3, c: Vec3, out: &mut Vec<[Vec3; 3]>| {
-                let mid = a.add(b).add(c).scale(1.0 / 3.0);
-                let n = b.sub(a).cross(c.sub(a));
-                if n.dot(toward.sub(mid)) >= 0.0 {
-                    out.push([a, b, c]);
+    for tet in TETS {
+        let p = [
+            corner_p[tet[0]],
+            corner_p[tet[1]],
+            corner_p[tet[2]],
+            corner_p[tet[3]],
+        ];
+        let d = [
+            corner_d[tet[0]],
+            corner_d[tet[1]],
+            corner_d[tet[2]],
+            corner_d[tet[3]],
+        ];
+        let positive = d.iter().filter(|v| **v >= iso).count();
+        if positive == 0 || positive == 4 {
+            continue;
+        }
+        let mut crossings: Vec<Vec3> = Vec::with_capacity(4);
+        for (ea, eb) in [(0usize, 1usize), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)] {
+            if (d[ea] < iso) != (d[eb] < iso) {
+                // Interpolate from the lexicographically smaller corner. The same lattice edge
+                // is reached by several tetrahedra and from either end, and computing t from a
+                // different end gives a point that differs in the last bits — which the weld
+                // then fails to merge, leaving the surface open. One canonical end makes the
+                // point bit-identical everywhere it appears.
+                let forward = (p[ea].x, p[ea].y, p[ea].z) <= (p[eb].x, p[eb].y, p[eb].z);
+                let (pa, pb, da, db) = if forward {
+                    (p[ea], p[eb], d[ea], d[eb])
                 } else {
-                    out.push([a, c, b]);
-                }
-            };
-            if crossings.len() == 3 {
-                emit(crossings[0], crossings[1], crossings[2], out);
-            } else {
-                // Four crossings make a quad. Order them around their own centroid so the two
-                // triangles do not cross each other.
-                let centre = crossings
-                    .iter()
-                    .fold(Vec3::ZERO, |s, p| s.add(*p))
-                    .scale(0.25);
-                let n = crossings[1].sub(crossings[0]).cross(crossings[2].sub(crossings[0]));
-                let nn = n.scale(1.0 / n.length().max(1e-20));
-                let u = crossings[0].sub(centre);
-                let uu = u.scale(1.0 / u.length().max(1e-20));
-                let vv = nn.cross(uu);
-                let mut q = crossings.clone();
-                q.sort_by(|a, b| {
-                    let ang = |p: Vec3| {
-                        let r = p.sub(centre);
-                        r.dot(vv).atan2(r.dot(uu))
-                    };
-                    ang(*a).partial_cmp(&ang(*b)).unwrap_or(std::cmp::Ordering::Equal)
-                });
-                emit(q[0], q[1], q[2], out);
-                emit(q[0], q[2], q[3], out);
+                    (p[eb], p[ea], d[eb], d[ea])
+                };
+                let t = (iso - da) / (db - da);
+                crossings.push(pa.add(pb.sub(pa).scale(t)));
             }
         }
+        if crossings.len() < 3 {
+            continue;
+        }
+        // Centroid of the positive side, to orient each triangle away from it.
+        let mut sum = Vec3::ZERO;
+        for (ci, v) in d.iter().enumerate() {
+            if *v >= iso {
+                sum = sum.add(p[ci]);
+            }
+        }
+        let toward = sum.scale(1.0 / positive as f32);
+        let emit = |a: Vec3, b: Vec3, c: Vec3, out: &mut Vec<[Vec3; 3]>| {
+            let mid = a.add(b).add(c).scale(1.0 / 3.0);
+            let n = b.sub(a).cross(c.sub(a));
+            if n.dot(toward.sub(mid)) >= 0.0 {
+                out.push([a, b, c]);
+            } else {
+                out.push([a, c, b]);
+            }
+        };
+        if crossings.len() == 3 {
+            emit(crossings[0], crossings[1], crossings[2], out);
+        } else {
+            // Four crossings make a quad. Order them around their own centroid so the two
+            // triangles do not cross each other.
+            let centre = crossings
+                .iter()
+                .fold(Vec3::ZERO, |s, p| s.add(*p))
+                .scale(0.25);
+            let n = crossings[1]
+                .sub(crossings[0])
+                .cross(crossings[2].sub(crossings[0]));
+            let nn = n.scale(1.0 / n.length().max(1e-20));
+            let u = crossings[0].sub(centre);
+            let uu = u.scale(1.0 / u.length().max(1e-20));
+            let vv = nn.cross(uu);
+            let mut q = crossings.clone();
+            q.sort_by(|a, b| {
+                let ang = |p: Vec3| {
+                    let r = p.sub(centre);
+                    r.dot(vv).atan2(r.dot(uu))
+                };
+                ang(*a)
+                    .partial_cmp(&ang(*b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            emit(q[0], q[1], q[2], out);
+            emit(q[0], q[2], q[3], out);
+        }
+    }
 }
 
 /// Merge the soup into shared vertices. The interpolation for a shared lattice edge is computed
@@ -542,7 +550,6 @@ fn taubin(mesh: &mut IndexedMesh, iterations: usize) {
         }
     }
 }
-
 
 /// Drop detached pieces that are a small part of the whole, and return how many went.
 ///
@@ -816,7 +823,10 @@ mod tests {
         positions.push(Vec3::new(50.0, 1.0, 0.0));
         triangles.push([base, base + 1, base + 2]);
 
-        let mut mesh = IndexedMesh { positions, triangles };
+        let mut mesh = IndexedMesh {
+            positions,
+            triangles,
+        };
         let before = mesh.triangles.len();
         let removed = prune_detached_pieces(&mut mesh);
         assert_eq!(removed, 1, "the scrap is the one triangle");
@@ -836,12 +846,18 @@ mod tests {
             Vec3::new(offset.x, offset.y + size, offset.z + size),
         ];
         let t = vec![
-            [0u32, 2, 1], [0, 3, 2],
-            [4, 5, 6], [4, 6, 7],
-            [0, 1, 5], [0, 5, 4],
-            [3, 7, 6], [3, 6, 2],
-            [0, 4, 7], [0, 7, 3],
-            [1, 2, 6], [1, 6, 5],
+            [0u32, 2, 1],
+            [0, 3, 2],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 4],
+            [3, 7, 6],
+            [3, 6, 2],
+            [0, 4, 7],
+            [0, 7, 3],
+            [1, 2, 6],
+            [1, 6, 5],
         ];
         IndexedMesh {
             positions: p.to_vec(),
@@ -920,7 +936,10 @@ mod tests {
         let mesh = cube(Vec3::new(0.0, 0.0, 0.0), 10.0);
         let out = shrink_wrap(&mesh, &ShrinkWrapOptions::default());
         let d = defects(&out.mesh);
-        eprintln!("[wrap] independent bfs residual {}", bfs_residual(&out.mesh));
+        eprintln!(
+            "[wrap] independent bfs residual {}",
+            bfs_residual(&out.mesh)
+        );
         let a = crate::analysis::analyze(&out.mesh);
         assert_eq!(
             d.bad_edges, 0,
@@ -1023,7 +1042,11 @@ mod tests {
                 .iter()
                 .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
         );
-        assert_eq!(component_count(&mesh), 2, "two separate solids to begin with");
+        assert_eq!(
+            component_count(&mesh),
+            2,
+            "two separate solids to begin with"
+        );
 
         let unfilled = shrink_wrap(
             &mesh,
@@ -1118,7 +1141,11 @@ mod tests {
             ],
         );
         for (offset, (_, index)) in seen.iter().enumerate() {
-            assert_eq!(*index, offset + 1, "phases are numbered 1-based and in order");
+            assert_eq!(
+                *index,
+                offset + 1,
+                "phases are numbered 1-based and in order"
+            );
         }
         assert!(!out.report.cancelled);
         assert!(!out.mesh.triangles.is_empty());

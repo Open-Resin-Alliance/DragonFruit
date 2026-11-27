@@ -39,18 +39,18 @@ struct Params {
     bbox_max_z: f64,
 }
 
-fn default_4() -> u8 { 4 }
-fn default_1() -> i32 { 1 }
+fn default_4() -> u8 {
+    4
+}
+fn default_1() -> i32 {
+    1
+}
 
 fn bytes_to_f32_vec(bytes: &[u8]) -> Vec<f32> {
     let count = bytes.len() / 4;
     let mut floats = vec![0.0f32; count];
     unsafe {
-        std::ptr::copy_nonoverlapping(
-            bytes.as_ptr(),
-            floats.as_mut_ptr() as *mut u8,
-            bytes.len(),
-        );
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), floats.as_mut_ptr() as *mut u8, bytes.len());
     }
     floats
 }
@@ -68,14 +68,12 @@ fn main() {
     println!("Dump dir: {}\n", dump_dir.display());
 
     // Read params
-    let params_json = fs::read_to_string(dump_dir.join("params.json"))
-        .expect("Failed to read params.json");
-    let params: Params = serde_json::from_str(&params_json)
-        .expect("Failed to parse params.json");
+    let params_json =
+        fs::read_to_string(dump_dir.join("params.json")).expect("Failed to read params.json");
+    let params: Params = serde_json::from_str(&params_json).expect("Failed to parse params.json");
 
     // Read positions
-    let pos_bytes = fs::read(dump_dir.join("positions.bin"))
-        .expect("Failed to read positions.bin");
+    let pos_bytes = fs::read(dump_dir.join("positions.bin")).expect("Failed to read positions.bin");
     let triangles_xyz = bytes_to_f32_vec(&pos_bytes);
     let triangles = parse_triangles(&triangles_xyz);
 
@@ -85,11 +83,20 @@ fn main() {
     println!("  connectivity: {}", params.connectivity);
     println!("  min_island_area_mm2: {}", params.min_island_area_mm2);
     println!("  min_overlap_px: {}", params.min_overlap_px);
-    println!("  overlap_neighborhood_px: {}", params.overlap_neighborhood_px);
+    println!(
+        "  overlap_neighborhood_px: {}",
+        params.overlap_neighborhood_px
+    );
     println!("  layer_height_mm: {}", params.layer_height_mm);
-    println!("  bbox: ({:.4}, {:.4}, {:.4}) - ({:.4}, {:.4}, {:.4})",
-        params.bbox_min_x, params.bbox_min_y, params.bbox_min_z,
-        params.bbox_max_x, params.bbox_max_y, params.bbox_max_z);
+    println!(
+        "  bbox: ({:.4}, {:.4}, {:.4}) - ({:.4}, {:.4}, {:.4})",
+        params.bbox_min_x,
+        params.bbox_min_y,
+        params.bbox_min_z,
+        params.bbox_max_x,
+        params.bbox_max_y,
+        params.bbox_max_z
+    );
     println!("  triangles: {}", triangles.len());
     println!();
 
@@ -99,9 +106,12 @@ fn main() {
     let (masks, grid_width, grid_height, num_layers, origin_x, origin_z) =
         rasterize_for_island_scan(
             &triangles,
-            params.bbox_min_x, params.bbox_max_x,
-            params.bbox_min_y, params.bbox_max_y,
-            params.bbox_min_z, params.bbox_max_z,
+            params.bbox_min_x,
+            params.bbox_max_x,
+            params.bbox_min_y,
+            params.bbox_max_y,
+            params.bbox_min_z,
+            params.bbox_max_z,
             params.px_mm,
             params.layer_height_mm,
         );
@@ -118,14 +128,20 @@ fn main() {
     let mut empty_layers = Vec::new();
     for (i, m) in masks.iter().enumerate() {
         let px = m.pixel_count();
-        if px == 0 { empty_layers.push(i); }
+        if px == 0 {
+            empty_layers.push(i);
+        }
         if i < 3 || i >= num_layers - 3 {
             println!("  Layer {:>4}: {} px", i, px);
         }
     }
     if !empty_layers.is_empty() {
-        println!("  Empty layers: {} (first: {}, last: {})",
-            empty_layers.len(), empty_layers[0], empty_layers.last().unwrap());
+        println!(
+            "  Empty layers: {} (first: {}, last: {})",
+            empty_layers.len(),
+            empty_layers[0],
+            empty_layers.last().unwrap()
+        );
     }
     println!();
 
@@ -171,18 +187,28 @@ fn main() {
     // Write summary
     let summary = format!(
         "triangles: {}\ngrid: {}x{}\nlayers: {}\nsolid_px: {}\nislands: {}\nparams: {}\n",
-        triangles.len(), grid_width, grid_height, num_layers, total_px,
-        result.islands.len(), params_json.trim(),
+        triangles.len(),
+        grid_width,
+        grid_height,
+        num_layers,
+        total_px,
+        result.islands.len(),
+        params_json.trim(),
     );
     let _ = fs::write(out_dir.join("summary.txt"), &summary);
 
     // Write per-layer pixel counts
-    let layer_px: Vec<String> = masks.iter().enumerate()
+    let layer_px: Vec<String> = masks
+        .iter()
+        .enumerate()
         .map(|(i, m)| format!("{}: {}", i, m.pixel_count()))
         .collect();
     let _ = fs::write(out_dir.join("layer_pixels.txt"), layer_px.join("\n"));
 
     println!("Debug output: {}", out_dir.display());
     println!("\nTo compare with TS, run:");
-    println!("  npx tsx scripts/island-ipc-debug.ts {}", dump_dir.display());
+    println!(
+        "  npx tsx scripts/island-ipc-debug.ts {}",
+        dump_dir.display()
+    );
 }

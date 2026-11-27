@@ -595,7 +595,8 @@ fn repair_one_defect_class(
     match class {
         DefectClass::NonManifoldEdges => {
             let walls = crate::topology_passes::remove_coincident_faces(mesh);
-            let split = crate::topology_passes::split_non_manifold_edges(mesh, options.split_offset(mesh));
+            let split =
+                crate::topology_passes::split_non_manifold_edges(mesh, options.split_offset(mesh));
             let filled = crate::holes::holes_all(mesh, usize::MAX);
             crate::topology_passes::split_pinched_vertices(mesh);
             let refilled = crate::holes::holes_all(mesh, usize::MAX);
@@ -677,9 +678,13 @@ impl PartsRepair {
         for part in &self.parts {
             let base = positions.len() as u32;
             positions.extend_from_slice(&part.outcome.mesh.positions);
-            triangles.extend(part.outcome.mesh.triangles.iter().map(|t| {
-                [t[0] + base, t[1] + base, t[2] + base]
-            }));
+            triangles.extend(
+                part.outcome
+                    .mesh
+                    .triangles
+                    .iter()
+                    .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
+            );
         }
         IndexedMesh {
             positions,
@@ -778,7 +783,11 @@ pub fn repair_separate_parts(
     mut progress: Option<&mut dyn FnMut(usize, &str)>,
 ) -> Option<PartsRepair> {
     let components = triangle_components(mesh);
-    let n_comps = components.iter().copied().max().map_or(0, |m| m as usize + 1);
+    let n_comps = components
+        .iter()
+        .copied()
+        .max()
+        .map_or(0, |m| m as usize + 1);
     if n_comps < 2 {
         return None;
     }
@@ -954,7 +963,8 @@ pub fn repair_auto_with_progress(
 /// full if it is not kept — it only means a rebuild is preferred to a local repair that might have
 /// been good enough.
 fn winding_beyond_the_local_pipeline(mesh: &IndexedMesh) -> bool {
-    crate::analysis::analyze_lightweight(mesh).inconsistent_winding_edges > LOCAL_PIPELINE_WINDING_LIMIT
+    crate::analysis::analyze_lightweight(mesh).inconsistent_winding_edges
+        > LOCAL_PIPELINE_WINDING_LIMIT
 }
 
 /// Above this many inconsistent winding edges, the local pipeline will not settle a mesh. See
@@ -980,7 +990,11 @@ const LOCAL_PIPELINE_WINDING_LIMIT: usize = 1_000;
 /// measured on the plate, 656,922 triangles in and 149,768 out.
 fn several_objects_share(mesh: &IndexedMesh) -> Option<f64> {
     let components = triangle_components(mesh);
-    let n_comps = components.iter().copied().max().map_or(0, |m| m as usize + 1);
+    let n_comps = components
+        .iter()
+        .copied()
+        .max()
+        .map_or(0, |m| m as usize + 1);
     if n_comps < 3 {
         return None;
     }
@@ -988,7 +1002,8 @@ fn several_objects_share(mesh: &IndexedMesh) -> Option<f64> {
     for c in components.iter() {
         counts[*c as usize] += 1;
     }
-    let share = counts.iter().copied().max().unwrap_or(0) as f64 / mesh.triangles.len().max(1) as f64;
+    let share =
+        counts.iter().copied().max().unwrap_or(0) as f64 / mesh.triangles.len().max(1) as f64;
     (share < 0.5).then_some(share)
 }
 
@@ -1303,7 +1318,10 @@ fn repair_passes(
             "refused: the weld would have left a non-manifold junction this pipeline cannot resolve"
                 .to_string()
         } else {
-            format!("{welded} vertex/vertices welded at {} mm", options.weld_step)
+            format!(
+                "{welded} vertex/vertices welded at {} mm",
+                options.weld_step
+            )
         }),
         t
     );
@@ -1403,10 +1421,10 @@ fn repair_passes(
             // verdict below is what decides whether the pass lands.
             crate::holes::holes_all(&mut mesh, usize::MAX);
         }
-        let volume_moved = (mesh.signed_volume() - volume_before).abs()
-            > volume_before.abs().max(1e-9) * 0.01;
-        let refused =
-            stats.refined_faces > 0 && (crate::evaluate::evaluate(&mesh).worse_than(&health) || volume_moved);
+        let volume_moved =
+            (mesh.signed_volume() - volume_before).abs() > volume_before.abs().max(1e-9) * 0.01;
+        let refused = stats.refined_faces > 0
+            && (crate::evaluate::evaluate(&mesh).worse_than(&health) || volume_moved);
         if refused {
             mesh = before;
         }
@@ -1537,8 +1555,8 @@ fn repair_passes(
         // One-sided. A union *drops* the volume when parts overlap, because the overlap is counted
         // once instead of twice, and that drop is the union doing its job. An absolute test
         // refused COOKIE_b4 merging 233 struts into 37 solids for exactly that reason.
-        let union_grew =
-            structure_after_union.signed_volume > structure_before_union.signed_volume + union_volume * 0.01;
+        let union_grew = structure_after_union.signed_volume
+            > structure_before_union.signed_volume + union_volume * 0.01;
         // A union rebuilds the surface it merges, so it can buy a part count with a different
         // mesh. These bounds are what that costs. Without them the harbinger file was accepted:
         // 3,083 parts down to 646, paid for with 47% more triangles and 10,664 new degenerate
@@ -1614,7 +1632,8 @@ fn repair_passes(
         let mut candidate = mesh.clone();
         let offset = options.split_offset(&candidate);
         let walls = crate::topology_passes::remove_coincident_faces(&mut candidate);
-        let split = walls + crate::topology_passes::split_non_manifold_edges(&mut candidate, offset);
+        let split =
+            walls + crate::topology_passes::split_non_manifold_edges(&mut candidate, offset);
         crate::topology_passes::remove_open_fragments(&mut candidate, 16);
         // The rims a split exposes are artifacts of the separation, not openings somebody
         // designed, so they are filled whatever their length. The caller's cap is for holes in
@@ -1728,13 +1747,13 @@ fn repair_passes(
         // (non-manifold 1364 to 0, winding 113 to 0, loops 50 to 6). Ten percent still refuses a
         // split that inflates the model rather than separating it.
         const SPLIT_VOLUME_TOLERANCE: f64 = 0.10;
-        let volume_moved =
-            (structure_after.signed_volume - baseline_volume).abs() > volume * SPLIT_VOLUME_TOLERANCE;
+        let volume_moved = (structure_after.signed_volume - baseline_volume).abs()
+            > volume * SPLIT_VOLUME_TOLERANCE;
         // The split's cost is a fixed number of separated surfaces, not a fraction of the part
         // count, so the allowance cannot be purely proportional: with 37 parts after the union, a
         // twentieth is one, and the split adds six. Eight or a twentieth, whichever is larger.
-        let allowed_parts =
-            structure_before.connected_components + (structure_before.connected_components / 20).max(8);
+        let allowed_parts = structure_before.connected_components
+            + (structure_before.connected_components / 20).max(8);
         let accepted = after.non_manifold_edges < before_split.non_manifold_edges
             && after.bad_edges < before_split.bad_edges
             && after.inconsistent_edges <= before_split.inconsistent_edges
@@ -1854,8 +1873,8 @@ fn repair_passes(
         // `Gusano_de_Dune_70%.stl`, which arrives with 3,059 boundary edges: the cut's own caps move
         // that number by more than a percent and the guard refused a cut that took the defect total
         // 8,379 to 6,908.
-        let watertight_before = crate::evaluate::evaluate(&before_cut).bad_edges
-            == health.non_manifold_edges;
+        let watertight_before =
+            crate::evaluate::evaluate(&before_cut).bad_edges == health.non_manifold_edges;
         for _ in 0..8 {
             let n = cut_unsatisfiable_edges(&mut mesh, usize::MAX);
             if n == 0 {
@@ -1886,12 +1905,10 @@ fn repair_passes(
         // replaces — a spread defect can be cut into a worse mesh (measured on an earlier branch:
         // one file's winding 113 to 919), and a guard on the outcome is the honest version of a
         // guard on a count.
-        let volume_moved = (mesh.signed_volume() - volume_before).abs()
-            > volume_before.abs().max(1e-9) * 0.01;
+        let volume_moved =
+            (mesh.signed_volume() - volume_before).abs() > volume_before.abs().max(1e-9) * 0.01;
         let after_health = crate::evaluate::evaluate(&mesh);
-        if cut == 0
-            || (watertight_before && volume_moved)
-            || after_health.total() >= health.total()
+        if cut == 0 || (watertight_before && volume_moved) || after_health.total() >= health.total()
         {
             mesh = before_cut;
             cut = 0;
@@ -1939,7 +1956,8 @@ fn repair_passes(
     // what the loop does afterwards keeps its distance from the loader's weld by construction — the split
     // displaces by four of them. Guarded like everything else.
     let loader_epsilon = crate::io::DEFAULT_MERGE_EPSILON * mesh.bbox().diag().max(1e-6);
-    let (welded_to_loader, _collapsed_loader, refused_loader) = stitch_vertices(&mut mesh, loader_epsilon);
+    let (welded_to_loader, _collapsed_loader, refused_loader) =
+        stitch_vertices(&mut mesh, loader_epsilon);
     let mut rounds = 0usize;
     let mut repaired = welded_to_loader;
     let mut notes = Vec::new();
@@ -1998,7 +2016,8 @@ fn repair_passes(
             // invention out, and let the total below judge the pair. The envelope is the cheap
             // backstop for the one case the surface test cannot see, a surface that is itself on the
             // box it arrived in.
-            let projected = project_added_onto_surface(&mut candidate, &mesh, surface, envelope.slack);
+            let projected =
+                project_added_onto_surface(&mut candidate, &mesh, surface, envelope.slack);
             let clamped = envelope.clamp(&mut candidate);
             let after = crate::evaluate::evaluate(&candidate).total();
             if after < best {
@@ -2537,13 +2556,7 @@ pub fn drop_zero_depth_sheets(triangles: &mut Vec<[u32; 3]>) -> usize {
         // Opposite winding is the same three vertices in an opposite cyclic order, which a rotation
         // of one triangle cannot produce. Tiny groups, so comparing each against the first is enough.
         let first = triangles[indices[0]];
-        let rotated = |t: [u32; 3]| {
-            [
-                [t[0], t[1], t[2]],
-                [t[1], t[2], t[0]],
-                [t[2], t[0], t[1]],
-            ]
-        };
+        let rotated = |t: [u32; 3]| [[t[0], t[1], t[2]], [t[1], t[2], t[0]], [t[2], t[0], t[1]]];
         let first_order = rotated(first);
         for &i in &indices[1..] {
             let other = triangles[i];
@@ -2872,7 +2885,11 @@ fn cull_duplicate_and_zero_area_faces(mesh: &mut IndexedMesh) -> (usize, bool) {
 ///
 /// `trivial_only` selects the pass; a refusal is returned so the caller can report it rather than
 /// pass it off as a fill.
-fn fill_holes_guarded(mesh: &mut IndexedMesh, max_edges: usize, trivial_only: bool) -> (usize, bool) {
+fn fill_holes_guarded(
+    mesh: &mut IndexedMesh,
+    max_edges: usize,
+    trivial_only: bool,
+) -> (usize, bool) {
     let before = mesh.clone();
     let filled = if trivial_only {
         crate::holes::holes_trivial(mesh)
@@ -3012,7 +3029,11 @@ fn weld_vertices_oriented(mesh: &mut IndexedMesh, step: f32) -> usize {
             } else {
                 (n.x * m.x + n.y * m.y + n.z * m.z) / (n_len * m_len)
             };
-            if agreement > 0.0 { Some(*idx) } else { None }
+            if agreement > 0.0 {
+                Some(*idx)
+            } else {
+                None
+            }
         });
         match slot {
             Some(idx) => remap.push(idx),
@@ -3712,7 +3733,6 @@ fn nesting_depth_is_odd(
     !samples.is_empty() && odd * 2 > samples.len()
 }
 
-
 /// Unions the model's parts and the supports' parts, each group among itself.
 ///
 /// Returns how many solids were unioned and the mesh that came out. The two groups never merge:
@@ -3834,14 +3854,14 @@ fn winding_is_unsatisfiable(mesh: &IndexedMesh) -> bool {
     !frustrated_edges(mesh).is_empty()
 }
 
- /// Fixes the winding edges that propagation leaves behind.
- ///
- /// `unify_winding` decides per patch, so a mesh whose disagreements form a cycle no assignment
- /// satisfies keeps every one of them: 4 edges on the V3 Cones and 355 on 3DBenchy, which is why
- /// neither reads as repaired. A patch decision cannot fix those, but a face decision can: flipping
- /// one face resolves the edge it sits on and toggles its other two, so the count can be driven down
- /// one face at a time.
- ///
+/// Fixes the winding edges that propagation leaves behind.
+///
+/// `unify_winding` decides per patch, so a mesh whose disagreements form a cycle no assignment
+/// satisfies keeps every one of them: 4 edges on the V3 Cones and 355 on 3DBenchy, which is why
+/// neither reads as repaired. A patch decision cannot fix those, but a face decision can: flipping
+/// one face resolves the edge it sits on and toggles its other two, so the count can be driven down
+/// one face at a time.
+///
 /// Greedy and strictly descending. One topology build up front; each flip toggles three directed
 /// entries and rescores only the faces incident to those edges, so the cost is proportional to
 /// the flips, not the mesh. Rebuilding the topology per flip hung 3DBenchy: 355 flips at a full
@@ -3901,8 +3921,8 @@ fn greedy_flip_winding_edges(mesh: &mut IndexedMesh) -> usize {
     let mut fixed = 0usize;
     while inconsistent > 0 {
         let Some((net, face, version)) = heap.pop() else {
-             break;
-         };
+            break;
+        };
         if version != versions[face] || net <= 0 {
             continue;
         }
@@ -3928,7 +3948,7 @@ fn greedy_flip_winding_edges(mesh: &mut IndexedMesh) -> usize {
                 }
             }
         }
-     }
+    }
     fixed
 }
 
@@ -4769,8 +4789,11 @@ fn cap_seam(mesh: &mut IndexedMesh, topo: &Topology, seam: &[EdgeKey], region: &
                     [s[0] + p.x as f64, s[1] + p.y as f64, s[2] + p.z as f64]
                 });
                 let n = lp.len() as f64;
-                mesh.positions
-                    .push(Vec3::new((c[0] / n) as f32, (c[1] / n) as f32, (c[2] / n) as f32));
+                mesh.positions.push(Vec3::new(
+                    (c[0] / n) as f32,
+                    (c[1] / n) as f32,
+                    (c[2] / n) as f32,
+                ));
                 let centre = (mesh.positions.len() - 1) as u32;
                 for i in 0..lp.len() {
                     mesh.triangles.push([lp[i], lp[(i + 1) % lp.len()], centre]);
@@ -4898,7 +4921,11 @@ fn retessellate_unsatisfiable(mesh: &mut IndexedMesh) -> usize {
     // The deletion opens a hole and the fill is meant to close it. Both classes are captured, because
     // a fill that fails leaves those faces missing and the mesh worse than it started: on corbu that
     // produced a cavity and the move was still accepted.
-    let boundary_before = topo.edges.values().filter(|info| info.faces.len() == 1).count();
+    let boundary_before = topo
+        .edges
+        .values()
+        .filter(|info| info.faces.len() == 1)
+        .count();
     let non_manifold_before = topo.non_manifold_edges().len();
 
     mesh.triangles = mesh
@@ -4916,7 +4943,11 @@ fn retessellate_unsatisfiable(mesh: &mut IndexedMesh) -> usize {
     let parts_after = triangle_components(mesh).iter().max().copied().unwrap_or(0) + 1;
     let volume_after = mesh.signed_volume();
     let winding_after = after.inconsistent_edges();
-    let boundary_after = after.edges.values().filter(|info| info.faces.len() == 1).count();
+    let boundary_after = after
+        .edges
+        .values()
+        .filter(|info| info.faces.len() == 1)
+        .count();
     let non_manifold_after = after.non_manifold_edges().len();
     let acceptable = parts_after <= parts_before
         && winding_after < conflicts.len()
@@ -5018,11 +5049,10 @@ pub(crate) fn repair_orientation(mesh: &mut IndexedMesh) -> usize {
         // set each is hundreds of millions of BVH ray casts, and it had not reached the
         // second stage after an hour.
         let nesting_matters = flip_by_volume || vol.abs() < 1e-6;
-        let nested = nesting_matters
-            && {
-                let samples = interior_sample_points(mesh, face_indices, sample_eps, 5);
-                nesting_depth_is_odd(&bvh, mesh, &components, comp_id, &samples)
-            };
+        let nested = nesting_matters && {
+            let samples = interior_sample_points(mesh, face_indices, sample_eps, 5);
+            nesting_depth_is_odd(&bvh, mesh, &components, comp_id, &samples)
+        };
 
         let should_flip = if nested {
             false
@@ -5693,7 +5723,10 @@ mod winding_search_tests {
             tri.swap(1, 2);
         }
         let before = Topology::build(&mesh).inconsistent_edges();
-        assert!(before > 0, "the turned-over block has to disagree somewhere");
+        assert!(
+            before > 0,
+            "the turned-over block has to disagree somewhere"
+        );
         assert!(search_winding_assignments(&mut mesh) > 0);
         assert_eq!(Topology::build(&mesh).inconsistent_edges(), 0);
     }
@@ -5885,7 +5918,10 @@ mod cones_shell_analysis {
                     )
                 })
                 .collect();
-            println!("  edge ({u},{v}) at {:?}: {detail:?}", sub.positions[u as usize]);
+            println!(
+                "  edge ({u},{v}) at {:?}: {detail:?}",
+                sub.positions[u as usize]
+            );
         }
         // Scale: what the pipeline's own tolerances say, and where these faces sit in the mesh.
         let mut areas: Vec<f64> = sub
@@ -5965,7 +6001,10 @@ mod orientability_tests {
             triangles.push([b0, b1, t1]);
             triangles.push([b0, t1, t0]);
         }
-        IndexedMesh { positions, triangles }
+        IndexedMesh {
+            positions,
+            triangles,
+        }
     }
 
     /// A closed box can be wound consistently.
@@ -6035,7 +6074,10 @@ mod residual_fill_tests {
             triangles.push([bl, br, tr]);
             triangles.push([bl, tr, tl]);
         }
-        let mesh = IndexedMesh { positions, triangles };
+        let mesh = IndexedMesh {
+            positions,
+            triangles,
+        };
         let cap = derive_fill_cap(&mesh);
         assert!(
             cap < n,
@@ -6140,7 +6182,10 @@ mod simplify_to_error_tests {
                 }
             }
         }
-        IndexedMesh { positions, triangles }
+        IndexedMesh {
+            positions,
+            triangles,
+        }
     }
 
     #[test]
@@ -6274,7 +6319,12 @@ mod auto_route_tests {
         assert!(
             !outcome.report.steps.iter().any(|s| s.name == "rebuild"),
             "and no rebuild is announced: {:?}",
-            outcome.report.steps.iter().map(|s| s.name.clone()).collect::<Vec<_>>()
+            outcome
+                .report
+                .steps
+                .iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
         );
     }
 
@@ -6296,7 +6346,9 @@ mod auto_route_tests {
             }
             let base = plate.positions.len() as u32;
             for t in m.triangles.iter() {
-                plate.triangles.push([t[0] + base, t[1] + base, t[2] + base]);
+                plate
+                    .triangles
+                    .push([t[0] + base, t[1] + base, t[2] + base]);
             }
             plate.positions.extend_from_slice(&m.positions);
         }
@@ -6318,14 +6370,14 @@ mod auto_route_tests {
                 [0.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0],
             ] {
-                model.positions.push(Vec3::new(
-                    corner[0] + 10.0 * k as f32,
-                    corner[1],
-                    corner[2],
-                ));
+                model
+                    .positions
+                    .push(Vec3::new(corner[0] + 10.0 * k as f32, corner[1], corner[2]));
             }
             for t in [[0u32, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]] {
-                model.triangles.push([t[0] + base, t[1] + base, t[2] + base]);
+                model
+                    .triangles
+                    .push([t[0] + base, t[1] + base, t[2] + base]);
             }
         }
         assert_eq!(

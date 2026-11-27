@@ -169,28 +169,47 @@ impl U32Divider {
     #[inline]
     pub(crate) fn new(denominator: u32) -> Self {
         debug_assert_ne!(denominator, 0);
-        let multiplier = if denominator == 1 { 0 } else { ((1u64 << 32) / u64::from(denominator)) as u32 };
-        Self { denominator, multiplier }
+        let multiplier = if denominator == 1 {
+            0
+        } else {
+            ((1u64 << 32) / u64::from(denominator)) as u32
+        };
+        Self {
+            denominator,
+            multiplier,
+        }
     }
 
     #[inline(always)]
     pub(crate) fn divide(self, numerator: u32) -> u32 {
-        if self.denominator == 1 { return numerator; }
+        if self.denominator == 1 {
+            return numerator;
+        }
         let quotient = ((u64::from(numerator) * u64::from(self.multiplier)) >> 32) as u32;
         quotient + u32::from(numerator - quotient * self.denominator >= self.denominator)
     }
 
     #[inline(always)]
     pub(crate) fn divide_simd<S: Simd>(self, simd: S, numerator: S::u32s) -> S::u32s {
-        if self.denominator == 1 { return numerator; }
-        divide_u32s(simd, numerator, simd.splat_u32s(self.denominator), simd.splat_u32s(self.multiplier))
+        if self.denominator == 1 {
+            return numerator;
+        }
+        divide_u32s(
+            simd,
+            numerator,
+            simd.splat_u32s(self.denominator),
+            simd.splat_u32s(self.multiplier),
+        )
     }
 }
 
 /// Per-lane denominators and their precomputed floor(2^32 / denominator).
 #[inline(always)]
 pub(crate) fn divide_u32s<S: Simd>(
-    simd: S, numerator: S::u32s, denominator: S::u32s, multiplier: S::u32s,
+    simd: S,
+    numerator: S::u32s,
+    denominator: S::u32s,
+    multiplier: S::u32s,
 ) -> S::u32s {
     // Replace n/d with the high half of n*floor(2^32/d), then correct the
     // remainder. The estimate never exceeds floor(n/d) and is at most one
@@ -200,10 +219,15 @@ pub(crate) fn divide_u32s<S: Simd>(
     let (_, quotient) = simd.widening_mul_u32s(numerator, multiplier);
     let remainder = simd.sub_u32s(numerator, simd.mul_u32s(quotient, denominator));
     let corrected = simd.select_u32s(
-        simd.less_than_u32s(remainder, denominator), quotient,
+        simd.less_than_u32s(remainder, denominator),
+        quotient,
         simd.add_u32s(quotient, simd.splat_u32s(1)),
     );
-    simd.select_u32s(simd.equal_u32s(denominator, simd.splat_u32s(1)), numerator, corrected)
+    simd.select_u32s(
+        simd.equal_u32s(denominator, simd.splat_u32s(1)),
+        numerator,
+        corrected,
+    )
 }
 
 /// Gaussian emission needs only min(n/d, 255), not a full 64-bit quotient.
@@ -218,19 +242,27 @@ impl U64ByteDivider {
     pub(crate) fn new(denominator: u64) -> Self {
         debug_assert_ne!(denominator, 0);
         // floor(2^64/d), without a 128-bit divide during setup. d=1 is identity.
-        let multiplier = if denominator == 1 { 0 } else {
+        let multiplier = if denominator == 1 {
+            0
+        } else {
             u64::MAX / denominator + u64::from(u64::MAX % denominator == denominator - 1)
         };
-        Self { denominator, multiplier }
+        Self {
+            denominator,
+            multiplier,
+        }
     }
 
     #[inline(always)]
     pub(crate) fn divide(self, numerator: u64) -> u8 {
-        if self.denominator == 1 { return numerator.min(255) as u8; }
+        if self.denominator == 1 {
+            return numerator.min(255) as u8;
+        }
         // As for U32Divider, multiply-high underestimates by at most one.
         // This replaces per-pixel hardware division with a reused exact constant.
         let quotient = ((u128::from(numerator) * u128::from(self.multiplier)) >> 64) as u64;
-        let quotient = quotient + u64::from(numerator - quotient * self.denominator >= self.denominator);
+        let quotient =
+            quotient + u64::from(numerator - quotient * self.denominator >= self.denominator);
         quotient.min(255) as u8
     }
 
@@ -240,7 +272,9 @@ impl U64ByteDivider {
             // The eight-step path took 11% longer in complete V3 Gaussian
             // workloads. Narrow vectors use the cached multiply-high constant;
             // accumulation stays SIMD, and no per-pixel divisor setup is added.
-            for value in pulp::bytemuck::cast_slice_mut::<S::u64s, u64>(std::slice::from_mut(&mut numerator)) {
+            for value in
+                pulp::bytemuck::cast_slice_mut::<S::u64s, u64>(std::slice::from_mut(&mut numerator))
+            {
                 *value = u64::from(self.divide(*value));
             }
             return numerator;
@@ -256,7 +290,10 @@ impl U64ByteDivider {
                 let scaled = simd.splat_u64s(self.denominator << bit);
                 let take = simd.greater_than_or_equal_u64s(numerator, scaled);
                 numerator = simd.select_u64s(take, simd.sub_u64s(numerator, scaled), numerator);
-                quotient = simd.add_u64s(quotient, simd.select_u64s(take, simd.splat_u64s(1 << bit), simd.splat_u64s(0)));
+                quotient = simd.add_u64s(
+                    quotient,
+                    simd.select_u64s(take, simd.splat_u64s(1 << bit), simd.splat_u64s(0)),
+                );
             }
         }
         quotient
@@ -266,14 +303,21 @@ impl U64ByteDivider {
 /// Gaussian border vectors can have a different denominator in each lane.
 #[inline(always)]
 pub(crate) fn divide_u64s_to_u8<S: Simd>(
-    simd: S, mut numerator: S::u64s, denominator: S::u64s,
+    simd: S,
+    mut numerator: S::u64s,
+    denominator: S::u64s,
 ) -> S::u64s {
     if S::U64_LANES < 8 {
         // Only mixed-denominator border tiles take this narrow-vector path.
         // Keep their original division rather than rebuild a reciprocal per
         // pixel; the uniform interior uses U64ByteDivider's cached constant.
-        let divisors = pulp::bytemuck::cast_slice::<S::u64s, u64>(std::slice::from_ref(&denominator));
-        for (value, &divisor) in pulp::bytemuck::cast_slice_mut::<S::u64s, u64>(std::slice::from_mut(&mut numerator)).iter_mut().zip(divisors) {
+        let divisors =
+            pulp::bytemuck::cast_slice::<S::u64s, u64>(std::slice::from_ref(&denominator));
+        for (value, &divisor) in
+            pulp::bytemuck::cast_slice_mut::<S::u64s, u64>(std::slice::from_mut(&mut numerator))
+                .iter_mut()
+                .zip(divisors)
+        {
             *value = (*value / divisor).min(255);
         }
         return numerator;
@@ -281,7 +325,9 @@ pub(crate) fn divide_u64s_to_u8<S: Simd>(
     // Same exact clipped quotient as U64ByteDivider. Form powers of two by
     // vector addition, not mul_u64s (scalar on V3), and reject wrapped scales.
     let mut scaled = [denominator; 8];
-    for bit in 1..8 { scaled[bit] = simd.add_u64s(scaled[bit - 1], scaled[bit - 1]); }
+    for bit in 1..8 {
+        scaled[bit] = simd.add_u64s(scaled[bit - 1], scaled[bit - 1]);
+    }
     let mut quotient = simd.splat_u64s(0);
     for bit in (0..8).rev() {
         let take = simd.and_m64s(
@@ -289,7 +335,10 @@ pub(crate) fn divide_u64s_to_u8<S: Simd>(
             simd.greater_than_or_equal_u64s(numerator, scaled[bit]),
         );
         numerator = simd.select_u64s(take, simd.sub_u64s(numerator, scaled[bit]), numerator);
-        quotient = simd.add_u64s(quotient, simd.select_u64s(take, simd.splat_u64s(1 << bit), simd.splat_u64s(0)));
+        quotient = simd.add_u64s(
+            quotient,
+            simd.select_u64s(take, simd.splat_u64s(1 << bit), simd.splat_u64s(0)),
+        );
     }
     quotient
 }
@@ -319,7 +368,9 @@ pub(crate) fn widening_mul_u32_to_u64<S: Simd>(
     unsafe {
         let lanes = out.as_mut_ptr().cast::<u64>();
         for i in 0..u32_lanes::<S>() {
-            lanes.add(i).write_unaligned(u64::from(low[i]) | (u64::from(high[i]) << 32));
+            lanes
+                .add(i)
+                .write_unaligned(u64::from(low[i]) | (u64::from(high[i]) << 32));
         }
         let [first, second] = out.assume_init();
         (first, second)
@@ -336,23 +387,57 @@ mod tests {
         impl WithSimd for Check {
             type Output = ();
             fn with_simd<S: Simd>(self, simd: S) {
-                let denominators = [1, 2, 3, 5, 7, 9, 25, 81, 255, 256, 511, 1_024,
-                    65_535, 65_536, u32::MAX / 255, u32::MAX];
+                let denominators = [
+                    1,
+                    2,
+                    3,
+                    5,
+                    7,
+                    9,
+                    25,
+                    81,
+                    255,
+                    256,
+                    511,
+                    1_024,
+                    65_535,
+                    65_536,
+                    u32::MAX / 255,
+                    u32::MAX,
+                ];
                 let count = u32_lanes::<S>();
                 for &denominator in &denominators {
                     let divider = U32Divider::new(denominator);
-                    for quotient in [0u64, 1, 2, 127, 254, 255, 256, 65_535, u64::from(u32::MAX / denominator)] {
+                    for quotient in [
+                        0u64,
+                        1,
+                        2,
+                        127,
+                        254,
+                        255,
+                        256,
+                        65_535,
+                        u64::from(u32::MAX / denominator),
+                    ] {
                         for delta in [-1i64, 0, 1] {
                             let boundary = quotient * u64::from(denominator);
                             let boundary = boundary as i64 + delta;
-                            if !(0..=i64::from(u32::MAX)).contains(&boundary) { continue; }
+                            if !(0..=i64::from(u32::MAX)).contains(&boundary) {
+                                continue;
+                            }
                             let numerators: [u32; 16] = std::array::from_fn(|i| {
                                 (boundary as u32).wrapping_add((i as u32).wrapping_mul(0x9e37_79b9))
                             });
-                            let result = divider.divide_simd(simd, simd.partial_load_u32s(&numerators[..count]));
-                            let result = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&result));
+                            let result = divider
+                                .divide_simd(simd, simd.partial_load_u32s(&numerators[..count]));
+                            let result = pulp::bytemuck::cast_slice::<S::u32s, u32>(
+                                std::slice::from_ref(&result),
+                            );
                             for i in 0..count {
-                                assert_eq!(divider.divide(numerators[i]), numerators[i] / denominator);
+                                assert_eq!(
+                                    divider.divide(numerators[i]),
+                                    numerators[i] / denominator
+                                );
                                 assert_eq!(result[i], numerators[i] / denominator);
                             }
                         }
@@ -361,23 +446,55 @@ mod tests {
                 for offset in 0..16 {
                     let ds: [u32; 16] = std::array::from_fn(|i| denominators[(i + offset) % 16]);
                     let ms: [u32; 16] = std::array::from_fn(|i| U32Divider::new(ds[i]).multiplier);
-                    let ns: [u32; 16] = std::array::from_fn(|i| u32::MAX.wrapping_sub((i as u32 + offset as u32).wrapping_mul(0x8765_4321)));
-                    let result = divide_u32s(simd, simd.partial_load_u32s(&ns[..count]),
-                        simd.partial_load_u32s(&ds[..count]), simd.partial_load_u32s(&ms[..count]));
-                    let result = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&result));
-                    for i in 0..count { assert_eq!(result[i], ns[i] / ds[i]); }
+                    let ns: [u32; 16] = std::array::from_fn(|i| {
+                        u32::MAX.wrapping_sub((i as u32 + offset as u32).wrapping_mul(0x8765_4321))
+                    });
+                    let result = divide_u32s(
+                        simd,
+                        simd.partial_load_u32s(&ns[..count]),
+                        simd.partial_load_u32s(&ds[..count]),
+                        simd.partial_load_u32s(&ms[..count]),
+                    );
+                    let result =
+                        pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&result));
+                    for i in 0..count {
+                        assert_eq!(result[i], ns[i] / ds[i]);
+                    }
                 }
                 let count = u64_lanes::<S>();
-                for denominator in [1u64, 2, 3, 81, 1 << 32, (1 << 53) + 1, u64::MAX / 255, u64::MAX / 2, u64::MAX] {
+                for denominator in [
+                    1u64,
+                    2,
+                    3,
+                    81,
+                    1 << 32,
+                    (1 << 53) + 1,
+                    u64::MAX / 255,
+                    u64::MAX / 2,
+                    u64::MAX,
+                ] {
                     let divider = U64ByteDivider::new(denominator);
                     for quotient in [0u64, 1, 127, 254, 255, 256, 511] {
-                        let Some(boundary) = denominator.checked_mul(quotient) else { continue; };
-                        let ns = [boundary.saturating_sub(1), boundary, boundary.saturating_add(1),
-                            u64::MAX, 0, denominator / 2, denominator, denominator.saturating_add(1)];
+                        let Some(boundary) = denominator.checked_mul(quotient) else {
+                            continue;
+                        };
+                        let ns = [
+                            boundary.saturating_sub(1),
+                            boundary,
+                            boundary.saturating_add(1),
+                            u64::MAX,
+                            0,
+                            denominator / 2,
+                            denominator,
+                            denominator.saturating_add(1),
+                        ];
                         for offset in 0..8 {
                             let input: [u64; 8] = std::array::from_fn(|i| ns[(i + offset) % 8]);
-                            let result = divider.divide_simd(simd, simd.partial_load_u64s(&input[..count]));
-                            let result = pulp::bytemuck::cast_slice::<S::u64s, u64>(std::slice::from_ref(&result));
+                            let result =
+                                divider.divide_simd(simd, simd.partial_load_u64s(&input[..count]));
+                            let result = pulp::bytemuck::cast_slice::<S::u64s, u64>(
+                                std::slice::from_ref(&result),
+                            );
                             for i in 0..count {
                                 let expected = (input[i] / denominator).min(255);
                                 assert_eq!(u64::from(divider.divide(input[i])), expected);
@@ -386,17 +503,39 @@ mod tests {
                         }
                     }
                 }
-                let ds64 = [1u64, 3, 81, 1 << 32, (1 << 53) + 1, u64::MAX / 255, u64::MAX / 2, u64::MAX];
+                let ds64 = [
+                    1u64,
+                    3,
+                    81,
+                    1 << 32,
+                    (1 << 53) + 1,
+                    u64::MAX / 255,
+                    u64::MAX / 2,
+                    u64::MAX,
+                ];
                 for offset in 0..8 {
                     let ds: [u64; 8] = std::array::from_fn(|i| ds64[(i + offset) % 8]);
-                    let ns: [u64; 8] = std::array::from_fn(|i| u64::MAX.wrapping_sub((i as u64 + offset as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)));
-                    let result = divide_u64s_to_u8(simd, simd.partial_load_u64s(&ns[..count]), simd.partial_load_u64s(&ds[..count]));
-                    let result = pulp::bytemuck::cast_slice::<S::u64s, u64>(std::slice::from_ref(&result));
-                    for i in 0..count { assert_eq!(result[i], (ns[i] / ds[i]).min(255)); }
+                    let ns: [u64; 8] = std::array::from_fn(|i| {
+                        u64::MAX.wrapping_sub(
+                            (i as u64 + offset as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15),
+                        )
+                    });
+                    let result = divide_u64s_to_u8(
+                        simd,
+                        simd.partial_load_u64s(&ns[..count]),
+                        simd.partial_load_u64s(&ds[..count]),
+                    );
+                    let result =
+                        pulp::bytemuck::cast_slice::<S::u64s, u64>(std::slice::from_ref(&result));
+                    for i in 0..count {
+                        assert_eq!(result[i], (ns[i] / ds[i]).min(255));
+                    }
                 }
             }
         }
-        for backend in Backend::supported_for_tests() { backend.dispatch(Check); }
+        for backend in Backend::supported_for_tests() {
+            backend.dispatch(Check);
+        }
     }
 
     #[test]
@@ -408,8 +547,22 @@ mod tests {
 
             fn with_simd<S: Simd>(self, simd: S) {
                 let values32 = [
-                    0, 1, 2, 255, 65_535, 65_536, 0x7fff_ffff, 0x8000_0000,
-                    u32::MAX - 1, u32::MAX, 1_024, 17, 3, 0x4000_0000, 65_537, 257,
+                    0,
+                    1,
+                    2,
+                    255,
+                    65_535,
+                    65_536,
+                    0x7fff_ffff,
+                    0x8000_0000,
+                    u32::MAX - 1,
+                    u32::MAX,
+                    1_024,
+                    17,
+                    3,
+                    0x4000_0000,
+                    65_537,
+                    257,
                 ];
                 for offset in 0..values32.len() {
                     let a: [u32; 16] = std::array::from_fn(|i| values32[(i + offset) % 16]);
@@ -420,8 +573,10 @@ mod tests {
                     let sum = sat_add_u32(simd, av, bv);
                     let mul = sat_mul_u32(simd, av, bv);
                     let (first, second) = widening_mul_u32_to_u64(simd, av, bv);
-                    let sum = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&sum));
-                    let mul = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&mul));
+                    let sum =
+                        pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&sum));
+                    let mul =
+                        pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&mul));
                     let halves = [first, second];
                     let products = pulp::bytemuck::cast_slice::<S::u64s, u64>(&halves);
                     for i in 0..count {
@@ -434,7 +589,16 @@ mod tests {
                     }
                 }
 
-                let values64 = [0, 1, 2, u64::MAX / 2, 1 << 63, u64::MAX - 1, u64::MAX, 1_024];
+                let values64 = [
+                    0,
+                    1,
+                    2,
+                    u64::MAX / 2,
+                    1 << 63,
+                    u64::MAX - 1,
+                    u64::MAX,
+                    1_024,
+                ];
                 for offset in 0..values64.len() {
                     let a: [u64; 8] = std::array::from_fn(|i| values64[(i + offset) % 8]);
                     let b: [u64; 8] = std::array::from_fn(|i| values64[(3 * i + offset + 1) % 8]);
@@ -444,7 +608,8 @@ mod tests {
                         simd.partial_load_u64s(&a[..count]),
                         simd.partial_load_u64s(&b[..count]),
                     );
-                    let sum = pulp::bytemuck::cast_slice::<S::u64s, u64>(std::slice::from_ref(&sum));
+                    let sum =
+                        pulp::bytemuck::cast_slice::<S::u64s, u64>(std::slice::from_ref(&sum));
                     for i in 0..count {
                         assert_eq!(sum[i], a[i].saturating_add(b[i]));
                     }

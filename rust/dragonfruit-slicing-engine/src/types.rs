@@ -359,7 +359,9 @@ impl SliceJobV3 {
 
     #[inline]
     pub fn blur_brush_kernel_is_gaussian(&self) -> bool {
-        self.blur_brush_kernel.trim().eq_ignore_ascii_case("gaussian")
+        self.blur_brush_kernel
+            .trim()
+            .eq_ignore_ascii_case("gaussian")
     }
 
     #[inline]
@@ -475,11 +477,20 @@ mod tests {
 
     #[test]
     fn effective_dither_bit_depth_passes_through_low_bit_depths() {
-        assert_eq!(dither_job(true, Some(3)).effective_dither_bit_depth(), Some(3));
-        assert_eq!(dither_job(true, Some(7)).effective_dither_bit_depth(), Some(7));
+        assert_eq!(
+            dither_job(true, Some(3)).effective_dither_bit_depth(),
+            Some(3)
+        );
+        assert_eq!(
+            dither_job(true, Some(7)).effective_dither_bit_depth(),
+            Some(7)
+        );
         // Below the 2-bit floor there is no meaningful palette; clamp up rather
         // than build one with a single level.
-        assert_eq!(dither_job(true, Some(1)).effective_dither_bit_depth(), Some(2));
+        assert_eq!(
+            dither_job(true, Some(1)).effective_dither_bit_depth(),
+            Some(2)
+        );
     }
 
     #[test]
@@ -487,8 +498,14 @@ mod tests {
         // Clamping 8 down to 7 would quantize a panel that can already emit
         // every grey level, so the whole dither pass is skipped instead.
         assert_eq!(dither_job(true, Some(8)).effective_dither_bit_depth(), None);
-        assert_eq!(dither_job(true, Some(10)).effective_dither_bit_depth(), None);
-        assert_eq!(dither_job(true, Some(12)).effective_dither_bit_depth(), None);
+        assert_eq!(
+            dither_job(true, Some(10)).effective_dither_bit_depth(),
+            None
+        );
+        assert_eq!(
+            dither_job(true, Some(12)).effective_dither_bit_depth(),
+            None
+        );
     }
 
     #[test]
@@ -498,7 +515,10 @@ mod tests {
 
     #[test]
     fn effective_dither_bit_depth_is_none_when_dithering_is_off() {
-        assert_eq!(dither_job(false, Some(3)).effective_dither_bit_depth(), None);
+        assert_eq!(
+            dither_job(false, Some(3)).effective_dither_bit_depth(),
+            None
+        );
     }
 
     #[test]

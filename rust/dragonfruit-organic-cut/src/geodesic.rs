@@ -78,7 +78,10 @@ pub fn shortest_vertex_path(graph: &VertexGraph, start: u32, goal: u32) -> Optio
     let mut heap = BinaryHeap::new();
 
     dist[start as usize] = 0.0;
-    heap.push(HeapNode { dist: 0.0, vertex: start });
+    heap.push(HeapNode {
+        dist: 0.0,
+        vertex: start,
+    });
 
     while let Some(HeapNode { dist: d, vertex }) = heap.pop() {
         if vertex == goal {
@@ -92,7 +95,10 @@ pub fn shortest_vertex_path(graph: &VertexGraph, start: u32, goal: u32) -> Optio
             if nd < dist[next as usize] {
                 dist[next as usize] = nd;
                 prev[next as usize] = vertex;
-                heap.push(HeapNode { dist: nd, vertex: next });
+                heap.push(HeapNode {
+                    dist: nd,
+                    vertex: next,
+                });
             }
         }
     }
@@ -158,7 +164,11 @@ pub fn surface_loop_positions(
 /// call. For repeated queries against an UNCHANGING mesh (e.g. dragging a
 /// waypoint live), build a [`GeodesicSolver`] once and reuse it instead — the
 /// per-call cost then drops to just the Dijkstra + straightening.
-pub fn surface_loop_from_mesh(mesh: &IndexedMesh, waypoints: &[Vec3], close: bool) -> Option<Vec<Vec3>> {
+pub fn surface_loop_from_mesh(
+    mesh: &IndexedMesh,
+    waypoints: &[Vec3],
+    close: bool,
+) -> Option<Vec<Vec3>> {
     surface_loop_from_mesh_smoothed(mesh, waypoints, close, DEFAULT_SEAM_SMOOTHING)
 }
 
@@ -224,12 +234,7 @@ impl GeodesicSolver {
             surface_loop_with_anchors(&self.mesh, &self.graph, waypoints, close)?;
         let straight = straighten_path(&self.mesh, &self.topo, &path, &is_anchor, close);
         Some(smooth_through_anchors(
-            &self.mesh,
-            &self.topo,
-            &straight,
-            &is_anchor,
-            close,
-            smoothing,
+            &self.mesh, &self.topo, &straight, &is_anchor, close, smoothing,
         ))
     }
 }
@@ -689,8 +694,20 @@ fn smooth_through_anchors(
             let u3 = u2 * u;
             p_0.scale(2.0)
                 .add(p_1.sub(pm1).scale(u))
-                .add(pm1.scale(2.0).add(p_0.scale(-5.0)).add(p_1.scale(4.0)).sub(p_2).scale(u2))
-                .add(pm1.scale(-1.0).add(p_0.scale(3.0)).add(p_1.scale(-3.0)).add(p_2).scale(u3))
+                .add(
+                    pm1.scale(2.0)
+                        .add(p_0.scale(-5.0))
+                        .add(p_1.scale(4.0))
+                        .sub(p_2)
+                        .scale(u2),
+                )
+                .add(
+                    pm1.scale(-1.0)
+                        .add(p_0.scale(3.0))
+                        .add(p_1.scale(-3.0))
+                        .add(p_2)
+                        .scale(u3),
+                )
                 .scale(0.5)
         };
 
@@ -698,7 +715,9 @@ fn smooth_through_anchors(
             if d == 0 {
                 continue; // anchor interpolated exactly — leave it put
             }
-            let Some(j) = idx(ai as isize + d) else { continue };
+            let Some(j) = idx(ai as isize + d) else {
+                continue;
+            };
             if is_anchor.get(j).copied().unwrap_or(false) {
                 continue; // don't disturb a neighbouring waypoint
             }
@@ -758,7 +777,10 @@ mod tests {
                 triangles.push([v(r, c), v(r + 1, c + 1), v(r + 1, c)]);
             }
         }
-        IndexedMesh { positions, triangles }
+        IndexedMesh {
+            positions,
+            triangles,
+        }
     }
 
     #[test]
@@ -772,7 +794,9 @@ mod tests {
         assert_eq!(*path.last().unwrap(), 8);
         // Path should be along the surface (every step is a real edge).
         for w in path.windows(2) {
-            let connected = graph.neighbors[w[0] as usize].iter().any(|&(n, _)| n == w[1]);
+            let connected = graph.neighbors[w[0] as usize]
+                .iter()
+                .any(|&(n, _)| n == w[1]);
             assert!(connected, "consecutive path verts must be edge-connected");
         }
     }
@@ -827,11 +851,21 @@ mod tests {
         let (path, is_anchor) =
             surface_loop_with_anchors(&mesh, &graph, &waypoints, true).expect("loop");
         let straight = straighten_path(&mesh, &topo, &path, &is_anchor, true);
-        let line = smooth_through_anchors(&mesh, &topo, &straight, &is_anchor, true, DEFAULT_SEAM_SMOOTHING);
+        let line = smooth_through_anchors(
+            &mesh,
+            &topo,
+            &straight,
+            &is_anchor,
+            true,
+            DEFAULT_SEAM_SMOOTHING,
+        );
 
         for (wi, w) in waypoints.iter().enumerate() {
             let hit = line.iter().any(|p| p.sub(*w).length() < 1e-4);
-            assert!(hit, "waypoint {wi} ({w:?}) not found exactly in smoothed loop");
+            assert!(
+                hit,
+                "waypoint {wi} ({w:?}) not found exactly in smoothed loop"
+            );
         }
     }
 
@@ -855,7 +889,14 @@ mod tests {
         let (path, is_anchor) =
             surface_loop_with_anchors(&mesh, &graph, &waypoints, false).expect("loop");
         let straight = straighten_path(&mesh, &topo, &path, &is_anchor, false);
-        let line = smooth_through_anchors(&mesh, &topo, &straight, &is_anchor, false, DEFAULT_SEAM_SMOOTHING);
+        let line = smooth_through_anchors(
+            &mesh,
+            &topo,
+            &straight,
+            &is_anchor,
+            false,
+            DEFAULT_SEAM_SMOOTHING,
+        );
 
         // The apex (snapped back exactly) is present in the smoothed line.
         let ai = line
@@ -889,7 +930,11 @@ mod tests {
 
         // The smoothed line must stay on the surface (z ≈ 0 for this flat grid).
         for p in &line {
-            assert!(p.z.abs() < 1e-3, "smoothed point left the surface: z={}", p.z);
+            assert!(
+                p.z.abs() < 1e-3,
+                "smoothed point left the surface: z={}",
+                p.z
+            );
         }
     }
 
@@ -909,7 +954,10 @@ mod tests {
                 triangles.push([v(r, c), v(r + 1, c + 1), v(r + 1, c)]);
             }
         }
-        IndexedMesh { positions, triangles }
+        IndexedMesh {
+            positions,
+            triangles,
+        }
     }
 
     #[test]
@@ -946,8 +994,19 @@ mod tests {
         );
 
         // Endpoints stay pinned; every point stays on the surface (z ≈ 0).
-        assert!(straight[0].sub(edge_path[0]).length() < 1e-3, "start pinned");
-        assert!(straight.last().unwrap().sub(*edge_path.last().unwrap()).length() < 1e-3, "end pinned");
+        assert!(
+            straight[0].sub(edge_path[0]).length() < 1e-3,
+            "start pinned"
+        );
+        assert!(
+            straight
+                .last()
+                .unwrap()
+                .sub(*edge_path.last().unwrap())
+                .length()
+                < 1e-3,
+            "end pinned"
+        );
         for p in &straight {
             assert!(p.z.abs() < 1e-3, "point left the surface: z={}", p.z);
         }
@@ -974,7 +1033,14 @@ mod tests {
         let (path, is_anchor) =
             surface_loop_with_anchors(&mesh, &graph, &waypoints, true).expect("loop");
         let straight = straighten_path(&mesh, &topo, &path, &is_anchor, true);
-        let line = smooth_through_anchors(&mesh, &topo, &straight, &is_anchor, true, DEFAULT_SEAM_SMOOTHING);
+        let line = smooth_through_anchors(
+            &mesh,
+            &topo,
+            &straight,
+            &is_anchor,
+            true,
+            DEFAULT_SEAM_SMOOTHING,
+        );
 
         // (a) Same point set (corner-rounding smooths in place, doesn't resample).
         assert_eq!(

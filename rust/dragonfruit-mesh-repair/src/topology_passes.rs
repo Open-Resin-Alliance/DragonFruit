@@ -29,7 +29,11 @@ fn len3(a: [f64; 3]) -> f64 {
 }
 
 fn cross_len(a: [f64; 3], b: [f64; 3]) -> f64 {
-    let c = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let c = [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ];
     dot(c, c).sqrt()
 }
 
@@ -114,7 +118,10 @@ struct PointGrid {
 
 impl PointGrid {
     fn new(cell: f64) -> Self {
-        Self { cell, cells: AHashMap::new() }
+        Self {
+            cell,
+            cells: AHashMap::new(),
+        }
     }
 
     fn key(&self, p: [f64; 3]) -> (i64, i64, i64) {
@@ -199,7 +206,10 @@ pub fn stitch_borders(mesh: &mut IndexedMesh, tol: f32, max_rounds: usize) -> us
         let mut lens: Vec<f64> = border
             .iter()
             .map(|&(a, b, _)| {
-                let d = sub(d3(mesh.positions[b as usize]), d3(mesh.positions[a as usize]));
+                let d = sub(
+                    d3(mesh.positions[b as usize]),
+                    d3(mesh.positions[a as usize]),
+                );
                 dot(d, d).sqrt()
             })
             .collect();
@@ -216,14 +226,25 @@ pub fn stitch_borders(mesh: &mut IndexedMesh, tol: f32, max_rounds: usize) -> us
             if split_face.contains_key(&f) {
                 continue;
             }
-            let (pa, pb) = (d3(mesh.positions[a as usize]), d3(mesh.positions[b as usize]));
+            let (pa, pb) = (
+                d3(mesh.positions[a as usize]),
+                d3(mesh.positions[b as usize]),
+            );
             let d = sub(pb, pa);
             let dd = dot(d, d);
             if dd <= tol * tol {
                 continue;
             }
-            let lo = [pa[0].min(pb[0]) - tol, pa[1].min(pb[1]) - tol, pa[2].min(pb[2]) - tol];
-            let hi = [pa[0].max(pb[0]) + tol, pa[1].max(pb[1]) + tol, pa[2].max(pb[2]) + tol];
+            let lo = [
+                pa[0].min(pb[0]) - tol,
+                pa[1].min(pb[1]) - tol,
+                pa[2].min(pb[2]) - tol,
+            ];
+            let hi = [
+                pa[0].max(pb[0]) + tol,
+                pa[1].max(pb[1]) + tol,
+                pa[2].max(pb[2]) + tol,
+            ];
             grid.in_box(lo, hi, &mut cand);
             for &p in &cand {
                 if p == a || p == b {
@@ -250,9 +271,15 @@ pub fn stitch_borders(mesh: &mut IndexedMesh, tol: f32, max_rounds: usize) -> us
             let mut added: AHashSet<(u32, u32)> = AHashSet::new();
             for (f, (a, b, p)) in faces {
                 let tri = mesh.triangles[f as usize];
-                let Some(&w) = tri.iter().find(|&&x| x != a && x != b) else { continue };
+                let Some(&w) = tri.iter().find(|&&x| x != a && x != b) else {
+                    continue;
+                };
                 let new_edges = [edge_key(a, p), edge_key(p, b), edge_key(p, w)];
-                if p == w || new_edges.iter().any(|e| closed_edge(&topo, *e) || added.contains(e)) {
+                if p == w
+                    || new_edges
+                        .iter()
+                        .any(|e| closed_edge(&topo, *e) || added.contains(e))
+                {
                     continue;
                 }
                 added.extend(new_edges);
@@ -272,7 +299,10 @@ pub fn stitch_borders(mesh: &mut IndexedMesh, tol: f32, max_rounds: usize) -> us
             ending_at.entry(b).or_default().push(a);
         }
         let near = |p: u32, q: u32| {
-            let d = sub(d3(mesh.positions[p as usize]), d3(mesh.positions[q as usize]));
+            let d = sub(
+                d3(mesh.positions[p as usize]),
+                d3(mesh.positions[q as usize]),
+            );
             dot(d, d) < tol * tol
         };
         let mut parent: Vec<u32> = (0..mesh.positions.len() as u32).collect();
@@ -285,7 +315,9 @@ pub fn stitch_borders(mesh: &mut IndexedMesh, tol: f32, max_rounds: usize) -> us
                 &mut cand,
             );
             for &d in &cand {
-                let Some(froms) = ending_at.get(&d) else { continue };
+                let Some(froms) = ending_at.get(&d) else {
+                    continue;
+                };
                 for &c in froms {
                     if (c, d) == (b, a) || (c == a && d == b) || !near(a, d) || !near(b, c) {
                         continue;
@@ -317,7 +349,13 @@ pub fn stitch_borders(mesh: &mut IndexedMesh, tol: f32, max_rounds: usize) -> us
 }
 
 /// `chord_taken[i * n + j]` marks loop chords that already exist as mesh edges.
-fn min_area_triangulation(pts: &[[f64; 3]], chord_taken: &[bool], sliver: f64, penalty: f64, weight: f64) -> Option<Vec<[usize; 3]>> {
+fn min_area_triangulation(
+    pts: &[[f64; 3]],
+    chord_taken: &[bool],
+    sliver: f64,
+    penalty: f64,
+    weight: f64,
+) -> Option<Vec<[usize; 3]>> {
     let n = pts.len();
     let mut w = vec![0.0f64; n * n];
     let mut k_of = vec![usize::MAX; n * n];
@@ -345,7 +383,11 @@ fn min_area_triangulation(pts: &[[f64; 3]], chord_taken: &[bool], sliver: f64, p
                 // out as a strip. `weight` is the model's own diagonal, so the term is scale-free; the sliver
                 // penalty stays far larger than either, so nothing here reintroduces slivers.
                 let reach = len3(sub(pts[k], pts[i])) + len3(sub(pts[j], pts[k]));
-                let tri = if c < sliver { penalty } else { 0.5 * c + weight * reach };
+                let tri = if c < sliver {
+                    penalty
+                } else {
+                    0.5 * c + weight * reach
+                };
                 let cost = w[idx(i, k)] + w[idx(k, j)] + tri;
                 if cost < best {
                     best = cost;
@@ -390,7 +432,6 @@ fn fan_shaped(tris: &[[usize; 3]], n: usize) -> bool {
     let worst = count.values().copied().max().unwrap_or(0);
     worst * 4 > tris.len()
 }
-
 
 /// The normal of the face on each edge of `boundary`, in the order the loop traverses it.
 ///
@@ -440,9 +481,7 @@ fn loop_area(pts: &[Vec3]) -> f32 {
     if n < 3 {
         return 0.0;
     }
-    let sum = (0..n).fold(Vec3::ZERO, |acc, i| {
-        acc.add(pts[i].cross(pts[(i + 1) % n]))
-    });
+    let sum = (0..n).fold(Vec3::ZERO, |acc, i| acc.add(pts[i].cross(pts[(i + 1) % n])));
     sum.length() * 0.5
 }
 
@@ -522,7 +561,11 @@ fn flat_cap(mesh: &mut IndexedMesh, topo: Option<&Topology>, lp: &[u32]) -> usiz
     }
 
     // Last resort, for a loop whose sides cannot be paired at all.
-    let centre_pt = mean(&pts.iter().map(|p| Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32)).collect::<Vec<_>>());
+    let centre_pt = mean(
+        &pts.iter()
+            .map(|p| Vec3::new(p[0] as f32, p[1] as f32, p[2] as f32))
+            .collect::<Vec<_>>(),
+    );
     mesh.positions.push(centre_pt);
     let centre = (mesh.positions.len() - 1) as u32;
     for i in 0..n {
@@ -614,9 +657,8 @@ fn zip_loop_sides(pts: &[[f64; 3]], lp: &[u32], topo: Option<&Topology>) -> Opti
         // itself and leave an edge with three faces. This is the check the minimum-area plan makes before it
         // starts, and the zip needs it too — measured, a supported model came out of a zip with one
         // non-manifold edge and two pinched vertices without it.
-        let taken = |a: u32, b: u32| -> bool {
-            topo.map_or(false, |t| closed_edge(t, edge_key(a, b)))
-        };
+        let taken =
+            |a: u32, b: u32| -> bool { topo.map_or(false, |t| closed_edge(t, edge_key(a, b))) };
         // Both sides can run out at different times, and the side that is ahead is not asked about its rung:
         // reading `side_b[q + 1]` past the end is a panic, and it is reachable — a loop whose sides differ in
         // length by one hits it as soon as one of them is exhausted.
@@ -747,7 +789,10 @@ fn fill_loop_with_patch(mesh: &mut IndexedMesh, topo: &Topology, lp: &[u32]) -> 
         if n < PATCH_MIN_LOOP {
             break;
         }
-        let rim: Vec<Vec3> = boundary.iter().map(|&v| mesh.positions[v as usize]).collect();
+        let rim: Vec<Vec3> = boundary
+            .iter()
+            .map(|&v| mesh.positions[v as usize])
+            .collect();
         let centroid = mean(&rim);
         // The narrowest edge on the loop. An inset larger than a fraction of it turns the ring inside
         // out: a hole that is a band closes across its width first, and a ring that crossed its own
@@ -800,7 +845,11 @@ fn fill_loop_with_patch(mesh: &mut IndexedMesh, topo: &Topology, lp: &[u32]) -> 
                 ring.push(p);
                 continue;
             }
-            let direction = if flip { direction.scale(-1.0) } else { direction };
+            let direction = if flip {
+                direction.scale(-1.0)
+            } else {
+                direction
+            };
             let step = (PATCH_INSET_FRACTION * local).min(PATCH_MAX_INSET_SHARE * narrowest);
             inset += step;
             ring.push(p.add(direction.scale(step)));
@@ -830,8 +879,10 @@ fn fill_loop_with_patch(mesh: &mut IndexedMesh, topo: &Topology, lp: &[u32]) -> 
         for i in 0..n {
             let j = (i + 1) % n;
             // The two faces between one rim edge and the ring edge inside it.
-            mesh.triangles.push([boundary[i], boundary[j], base + j as u32]);
-            mesh.triangles.push([boundary[i], base + j as u32, base + i as u32]);
+            mesh.triangles
+                .push([boundary[i], boundary[j], base + j as u32]);
+            mesh.triangles
+                .push([boundary[i], base + j as u32, base + i as u32]);
             added += 2;
         }
 
@@ -937,10 +988,17 @@ pub fn crossing_component_pairs(mesh: &IndexedMesh, components: &[u32]) -> AHash
 }
 
 #[cfg(feature = "manifold")]
-pub fn union_closed_components(mesh: &mut IndexedMesh, components: &[u32]) -> Option<(usize, usize, usize)> {
+pub fn union_closed_components(
+    mesh: &mut IndexedMesh,
+    components: &[u32],
+) -> Option<(usize, usize, usize)> {
     use manifold_csg::Manifold;
 
-    let n_comps = components.iter().copied().max().map_or(0, |m| m as usize + 1);
+    let n_comps = components
+        .iter()
+        .copied()
+        .max()
+        .map_or(0, |m| m as usize + 1);
     let mut by_comp: Vec<Vec<[u32; 3]>> = vec![Vec::new(); n_comps];
     for (fi, tri) in mesh.triangles.iter().enumerate() {
         by_comp[components[fi] as usize].push(*tri);
@@ -1040,7 +1098,10 @@ pub fn union_closed_components(mesh: &mut IndexedMesh, components: &[u32]) -> Op
     positions.extend(vp.chunks_exact(np).map(|c| Vec3::new(c[0], c[1], c[2])));
     let mut triangles = kept;
     let kept_tris = triangles.len();
-    triangles.extend(ti.chunks_exact(3).map(|c| [c[0] + base, c[1] + base, c[2] + base]));
+    triangles.extend(
+        ti.chunks_exact(3)
+            .map(|c| [c[0] + base, c[1] + base, c[2] + base]),
+    );
     mesh.positions = positions;
     mesh.triangles = triangles;
     Some((unioned, kept_tris, separate))
@@ -1144,7 +1205,11 @@ pub(crate) fn split_pinched_vertices(mesh: &mut IndexedMesh) -> usize {
 }
 
 fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn unit(a: [f64; 3]) -> Option<[f64; 3]> {
@@ -1158,14 +1223,24 @@ fn unit(a: [f64; 3]) -> Option<[f64; 3]> {
 /// directions. Faces left unpaired are sheets ending on the edge.
 fn pair_around_edge(mesh: &IndexedMesh, p: u32, q: u32, faces: &[u32]) -> Vec<(u32, u32)> {
     let a = d3(mesh.positions[p as usize]);
-    let Some(d) = unit(sub(d3(mesh.positions[q as usize]), a)) else { return Vec::new() };
-    let seed = if d[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
-    let Some(u) = unit(cross3(d, seed)) else { return Vec::new() };
+    let Some(d) = unit(sub(d3(mesh.positions[q as usize]), a)) else {
+        return Vec::new();
+    };
+    let seed = if d[0].abs() < 0.9 {
+        [1.0, 0.0, 0.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    let Some(u) = unit(cross3(d, seed)) else {
+        return Vec::new();
+    };
     let w = cross3(d, u);
     let mut around: Vec<(f64, u32, bool, bool)> = Vec::with_capacity(faces.len());
     for &fi in faces {
         let t = mesh.triangles[fi as usize];
-        let Some(&c) = t.iter().find(|&&x| x != p && x != q) else { continue };
+        let Some(&c) = t.iter().find(|&&x| x != p && x != q) else {
+            continue;
+        };
         let r = sub(d3(mesh.positions[c as usize]), a);
         let s = dot(r, d);
         let r = [r[0] - d[0] * s, r[1] - d[1] * s, r[2] - d[2] * s];
@@ -1203,7 +1278,10 @@ pub fn split_non_manifold_edges(mesh: &mut IndexedMesh, offset: f32) -> usize {
         AHashMap::with_capacity(mesh.triangles.len() * 3 / 2);
     for (fi, t) in mesh.triangles.iter().enumerate() {
         for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
-            edge_faces.entry(edge_key(a, b)).or_default().push(fi as u32);
+            edge_faces
+                .entry(edge_key(a, b))
+                .or_default()
+                .push(fi as u32);
         }
     }
     let mut links: AHashMap<(u32, u32), Vec<(u32, u32)>> = AHashMap::new();
@@ -1238,7 +1316,8 @@ pub fn split_non_manifold_edges(mesh: &mut IndexedMesh, offset: f32) -> usize {
     let mut added = 0usize;
     for (i, &v) in verts.iter().enumerate() {
         let fs = &incident[i];
-        let local: AHashMap<u32, u32> = fs.iter().enumerate().map(|(k, &f)| (f, k as u32)).collect();
+        let local: AHashMap<u32, u32> =
+            fs.iter().enumerate().map(|(k, &f)| (f, k as u32)).collect();
         let mut parent: Vec<u32> = (0..fs.len() as u32).collect();
         for &f in fs {
             let t = mesh.triangles[f as usize];
@@ -1261,7 +1340,10 @@ pub fn split_non_manifold_edges(mesh: &mut IndexedMesh, offset: f32) -> usize {
         }
         let mut groups: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         for (k, &f) in fs.iter().enumerate() {
-            groups.entry(find(&mut parent, k as u32)).or_default().push(f);
+            groups
+                .entry(find(&mut parent, k as u32))
+                .or_default()
+                .push(f);
         }
         if groups.len() < 2 {
             continue;
@@ -1311,7 +1393,10 @@ pub fn remove_open_fragments(mesh: &mut IndexedMesh, max_faces: usize) -> usize 
     let mut edge_faces: AHashMap<(u32, u32), Vec<u32>> = AHashMap::with_capacity(n * 3 / 2);
     for (fi, t) in mesh.triangles.iter().enumerate() {
         for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
-            edge_faces.entry(edge_key(a, b)).or_default().push(fi as u32);
+            edge_faces
+                .entry(edge_key(a, b))
+                .or_default()
+                .push(fi as u32);
         }
     }
     let mut parent: Vec<u32> = (0..n as u32).collect();
@@ -1351,7 +1436,8 @@ pub fn remove_open_fragments(mesh: &mut IndexedMesh, max_faces: usize) -> usize 
 pub fn excise_tangles(mesh: &mut IndexedMesh) -> usize {
     let ids = mesh.position_weld_ids();
     // (faces, faces running low id -> high id)
-    let mut uses: AHashMap<(u32, u32), (u32, u32)> = AHashMap::with_capacity(mesh.triangles.len() * 3 / 2);
+    let mut uses: AHashMap<(u32, u32), (u32, u32)> =
+        AHashMap::with_capacity(mesh.triangles.len() * 3 / 2);
     for t in &mesh.triangles {
         let w = t.map(|v| ids[v as usize]);
         for (a, b) in [(w[0], w[1]), (w[1], w[2]), (w[2], w[0])] {
@@ -1379,7 +1465,8 @@ pub fn excise_tangles(mesh: &mut IndexedMesh) -> usize {
         return 0;
     }
     let before = mesh.triangles.len();
-    mesh.triangles.retain(|t| !t.iter().any(|&v| hit.contains(&ids[v as usize])));
+    mesh.triangles
+        .retain(|t| !t.iter().any(|&v| hit.contains(&ids[v as usize])));
     mesh.weld_by_position();
     before - mesh.triangles.len()
 }
@@ -1397,9 +1484,17 @@ pub fn remove_coincident_faces(mesh: &mut IndexedMesh) -> usize {
         }
         let r = (0..3).min_by_key(|&i| w[i]).unwrap();
         let rot = [w[r], w[(r + 1) % 3], w[(r + 2) % 3]];
-        let (key, forward) = if rot[1] < rot[2] { (rot, true) } else { ([rot[0], rot[2], rot[1]], false) };
+        let (key, forward) = if rot[1] < rot[2] {
+            (rot, true)
+        } else {
+            ([rot[0], rot[2], rot[1]], false)
+        };
         let g = groups.entry(key).or_default();
-        if forward { g.0.push(fi) } else { g.1.push(fi) }
+        if forward {
+            g.0.push(fi)
+        } else {
+            g.1.push(fi)
+        }
     }
     let mut drop = vec![false; mesh.triangles.len()];
     let mut removed = 0usize;
@@ -1446,23 +1541,35 @@ pub fn flip_degenerate_caps(mesh: &mut IndexedMesh, area_eps: f32, max_rounds: u
                 continue;
             }
             let tri = mesh.triangles[f as usize];
-            let p = [d3(mesh.positions[tri[0] as usize]), d3(mesh.positions[tri[1] as usize]), d3(mesh.positions[tri[2] as usize])];
+            let p = [
+                d3(mesh.positions[tri[0] as usize]),
+                d3(mesh.positions[tri[1] as usize]),
+                d3(mesh.positions[tri[2] as usize]),
+            ];
             let len2 = |i: usize| {
                 let d = sub(p[(i + 1) % 3], p[i]);
                 dot(d, d)
             };
             let k = (0..3).max_by(|&x, &y| len2(x).total_cmp(&len2(y))).unwrap();
             let (u, v, c) = (tri[k], tri[(k + 1) % 3], tri[(k + 2) % 3]);
-            let Some(info) = topo.edges.get(&edge_key(u, v)) else { continue };
+            let Some(info) = topo.edges.get(&edge_key(u, v)) else {
+                continue;
+            };
             if info.faces.len() != 2 {
                 continue;
             }
-            let nb = if info.faces[0] == f { info.faces[1] } else { info.faces[0] };
+            let nb = if info.faces[0] == f {
+                info.faces[1]
+            } else {
+                info.faces[0]
+            };
             if touched.contains(&nb) {
                 continue;
             }
             let ntri = mesh.triangles[nb as usize];
-            let Some(&d) = ntri.iter().find(|&&x| x != u && x != v) else { continue };
+            let Some(&d) = ntri.iter().find(|&&x| x != u && x != v) else {
+                continue;
+            };
             let consistent = (0..3).any(|i| ntri[i] == v && ntri[(i + 1) % 3] == u);
             if !consistent || c == d || topo.edges.contains_key(&edge_key(c, d)) {
                 continue;
@@ -1544,12 +1651,7 @@ mod tests {
         for tet in [near, far] {
             let base = positions.len() as u32;
             positions.extend(tet.iter().map(|p| v(p[0], p[1], p[2])));
-            for t in [
-                [0u32, 2, 1],
-                [0, 1, 3],
-                [0, 3, 2],
-                [1, 2, 3],
-            ] {
+            for t in [[0u32, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]] {
                 triangles.push([t[0] + base, t[1] + base, t[2] + base]);
             }
         }

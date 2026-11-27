@@ -278,11 +278,7 @@ impl IndexedMesh {
         // key rather than hashing the raw bits.
         let key = |p: Vec3| {
             let n = |v: f32| if v == 0.0 { 0.0f32 } else { v };
-            [
-                n(p.x).to_bits(),
-                n(p.y).to_bits(),
-                n(p.z).to_bits(),
-            ]
+            [n(p.x).to_bits(), n(p.y).to_bits(), n(p.z).to_bits()]
         };
         let mut map: ahash::AHashMap<[u32; 3], u32> =
             ahash::AHashMap::with_capacity(self.positions.len());

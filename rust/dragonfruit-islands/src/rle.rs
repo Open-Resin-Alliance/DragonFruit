@@ -519,8 +519,20 @@ mod tests {
         let result = rle_subtract(&a, &b);
         // Expected: [2,2] and [6,2]
         assert_eq!(result.rows[0].len(), 2);
-        assert_eq!(result.rows[0][0], RleRun { start: 2, length: 2 });
-        assert_eq!(result.rows[0][1], RleRun { start: 6, length: 2 });
+        assert_eq!(
+            result.rows[0][0],
+            RleRun {
+                start: 2,
+                length: 2
+            }
+        );
+        assert_eq!(
+            result.rows[0][1],
+            RleRun {
+                start: 6,
+                length: 2
+            }
+        );
     }
 
     #[test]
@@ -563,7 +575,13 @@ mod tests {
         // All three rows should have a run [4, 3]
         for row in &result.rows {
             assert_eq!(row.len(), 1);
-            assert_eq!(row[0], RleRun { start: 4, length: 3 });
+            assert_eq!(
+                row[0],
+                RleRun {
+                    start: 4,
+                    length: 3
+                }
+            );
         }
     }
 
@@ -612,11 +630,20 @@ mod tests {
     fn pixel_count() {
         let mask = RleMask {
             rows: vec![
-                vec![RleRun { start: 0, length: 5 }],
+                vec![RleRun {
+                    start: 0,
+                    length: 5,
+                }],
                 vec![],
                 vec![
-                    RleRun { start: 2, length: 3 },
-                    RleRun { start: 7, length: 2 },
+                    RleRun {
+                        start: 2,
+                        length: 3,
+                    },
+                    RleRun {
+                        start: 7,
+                        length: 2,
+                    },
                 ],
             ],
             width: 10,

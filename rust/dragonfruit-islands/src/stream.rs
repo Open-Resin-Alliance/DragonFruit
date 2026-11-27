@@ -43,11 +43,8 @@ pub fn run_island_scan_streaming(
 ) -> IslandScanResult {
     let num_layers = job.num_layers as usize;
 
-    let mut tracker = IslandTracker::new(
-        job.px_mm,
-        job.min_overlap_px,
-        job.overlap_neighborhood_px,
-    );
+    let mut tracker =
+        IslandTracker::new(job.px_mm, job.min_overlap_px, job.overlap_neighborhood_px);
 
     // ── Pre-index triangles into Z-buckets (mirrors rasterize_for_island_scan) ──
     // Each triangle goes into every bucket whose Z-band its span overlaps, so a
@@ -272,14 +269,8 @@ mod tests {
         };
 
         // Streaming (Z-bucketed) pipeline
-        let stream_result = run_island_scan_streaming(
-            &make_job(),
-            &triangles,
-            bbox_min_z,
-            bbox_max_z,
-            true,
-            None,
-        );
+        let stream_result =
+            run_island_scan_streaming(&make_job(), &triangles, bbox_min_z, bbox_max_z, true, None);
 
         // Un-bucketed reference: rasterize every layer against ALL triangles,
         // then run the batch pipeline over those masks.
@@ -288,13 +279,7 @@ mod tests {
         for l in 0..num_layers {
             let z = bbox_min_z + (l as f64 + 1.0) * layer_height_mm + 1e-6;
             ref_masks.push(crate::rasterize::rasterize_triangles_for_island_scan(
-                &all_tris,
-                z,
-                40,
-                40,
-                0.0,
-                -10.0,
-                px_mm,
+                &all_tris, z, 40, 40, 0.0, -10.0, px_mm,
             ));
         }
         let batch_result = crate::pipeline::run_island_scan(&make_job(), &ref_masks, None);
@@ -304,17 +289,26 @@ mod tests {
         // layers 1/3 must not.
         let has_quad_px = |mask: &RleMask| -> bool {
             mask.rows.iter().any(|row| {
-                row.iter().any(|run| run.start >= 29 && run.start < 33 && run.length > 0)
+                row.iter()
+                    .any(|run| run.start >= 29 && run.start < 33 && run.length > 0)
             })
         };
-        assert!(has_quad_px(&ref_masks[2]), "layer 2 must contain the quad footprint");
-        assert!(!has_quad_px(&ref_masks[1]), "layer 1 must not contain the quad");
-        assert!(!has_quad_px(&ref_masks[3]), "layer 3 must not contain the quad");
+        assert!(
+            has_quad_px(&ref_masks[2]),
+            "layer 2 must contain the quad footprint"
+        );
+        assert!(
+            !has_quad_px(&ref_masks[1]),
+            "layer 1 must not contain the quad"
+        );
+        assert!(
+            !has_quad_px(&ref_masks[3]),
+            "layer 3 must not contain the quad"
+        );
 
         // Bit-identical per-layer labels (includes placeholder reassignment).
         assert_eq!(
-            stream_result.island_labels_per_layer,
-            batch_result.island_labels_per_layer,
+            stream_result.island_labels_per_layer, batch_result.island_labels_per_layer,
             "label masks differ between bucketed streaming and un-bucketed batch"
         );
 

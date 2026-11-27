@@ -22,7 +22,8 @@ impl Importer for EchoImport {
     fn import(&mut self, input: &Path, output: &Path) -> Result<(), String> {
         // Read the source so a plugin that cannot open the file fails here rather
         // than after the host has created a scene.
-        let source = std::fs::read(input).map_err(|error| format!("read {}: {error}", input.display()))?;
+        let source =
+            std::fs::read(input).map_err(|error| format!("read {}: {error}", input.display()))?;
 
         let positions: [f32; 9] = [0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0];
         let indices: [u32; 3] = [0, 1, 2];
@@ -45,17 +46,22 @@ impl Importer for EchoImport {
 
         let mut file = std::fs::File::create(output).map_err(|error| error.to_string())?;
         file.write_all(MAGIC).map_err(|error| error.to_string())?;
-        file.write_all(&1u32.to_le_bytes()).map_err(|error| error.to_string())?;
+        file.write_all(&1u32.to_le_bytes())
+            .map_err(|error| error.to_string())?;
         file.write_all(&(meta_bytes.len() as u32).to_le_bytes())
             .map_err(|error| error.to_string())?;
-        file.write_all(&meta_bytes).map_err(|error| error.to_string())?;
+        file.write_all(&meta_bytes)
+            .map_err(|error| error.to_string())?;
         for value in positions {
-            file.write_all(&value.to_le_bytes()).map_err(|error| error.to_string())?;
+            file.write_all(&value.to_le_bytes())
+                .map_err(|error| error.to_string())?;
         }
         for value in indices {
-            file.write_all(&value.to_le_bytes()).map_err(|error| error.to_string())?;
+            file.write_all(&value.to_le_bytes())
+                .map_err(|error| error.to_string())?;
         }
-        file.write_all(&support_bytes).map_err(|error| error.to_string())?;
+        file.write_all(&support_bytes)
+            .map_err(|error| error.to_string())?;
         Ok(())
     }
 }
