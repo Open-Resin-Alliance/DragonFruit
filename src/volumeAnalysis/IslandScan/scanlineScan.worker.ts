@@ -49,7 +49,8 @@ self.onmessage = (e: MessageEvent<InitMessage | StartMessage | LayerMessage>) =>
 
     if (msg.type === 'layer') {
         if (!slicer) {
-            console.error('Worker received layer request before init');
+            // Reply with an error so the caller rejects instead of waiting.
+            self.postMessage({ type: 'error', message: 'layer request before init' });
             return;
         }
 
