@@ -23,6 +23,7 @@ interface ContactDiskDragSessionOptions {
     initialEvent?: PointerEvent | MouseEvent | any;
     modelId?: string | null;
     placementSurface?: 'interior' | 'exterior';
+    contactRadiusMm?: number;
 }
 
 const _interiorCavityRaycaster = new THREE.Raycaster();
@@ -58,13 +59,24 @@ function collectModelMeshes(root: THREE.Object3D, targetModelId?: string | null)
 }
 
 export function startContactDiskDragSession(options: ContactDiskDragSessionOptions): ContactDiskDragSession {
-    const { camera, domElement, scene, onHit, onEnd, initialEvent, modelId, placementSurface } = options;
+    const {
+        camera,
+        domElement,
+        scene,
+        onHit,
+        onEnd,
+        initialEvent,
+        modelId,
+        placementSurface,
+        contactRadiusMm,
+    } = options;
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     const modelMeshes = collectModelMeshes(scene, modelId);
     let stopped = false;
     let rafId: number | null = null;
     let pendingEvent: PointerEvent | MouseEvent | null = null;
+    let prevSynthesizedNormal: THREE.Vector3 | null = null;
 
     const findInteriorCavityHit = (
         ray: THREE.Ray,
@@ -150,9 +162,27 @@ export function startContactDiskDragSession(options: ContactDiskDragSessionOptio
           hit = fallback;
         }
 
+        const surfaceNormal = calculateSmoothedNormal(hit, {
+            contactRadiusMm,
+            prevNormal: prevSynthesizedNormal ?? undefined,
+            isDiskHudDrag: true,
+        });
+        if (
+            Number.isFinite(surfaceNormal.x)
+            && Number.isFinite(surfaceNormal.y)
+            && Number.isFinite(surfaceNormal.z)
+            && (surfaceNormal.x * surfaceNormal.x + surfaceNormal.y * surfaceNormal.y + surfaceNormal.z * surfaceNormal.z) > 1e-12
+        ) {
+            if (prevSynthesizedNormal === null) {
+                prevSynthesizedNormal = new THREE.Vector3(surfaceNormal.x, surfaceNormal.y, surfaceNormal.z);
+            } else {
+                prevSynthesizedNormal.set(surfaceNormal.x, surfaceNormal.y, surfaceNormal.z);
+            }
+        }
+
         onHit({
             point: { x: hit.point.x, y: hit.point.y, z: hit.point.z },
-            surfaceNormal: calculateSmoothedNormal(hit),
+            surfaceNormal,
             mesh: hit.object instanceof THREE.Mesh ? hit.object : undefined,
         });
     };
@@ -174,6 +204,7 @@ export function startContactDiskDragSession(options: ContactDiskDragSessionOptio
     const stop = () => {
         if (stopped) return;
         stopped = true;
+        prevSynthesizedNormal = null;
         if (rafId !== null) {
             cancelAnimationFrame(rafId);
             rafId = null;

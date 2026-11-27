@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import { modelGeometryOf } from '../autoSupport/meshStore';
+import { getSettings } from '../Settings/state';
+import {
+    synthesizePlacementNormal,
+    type PlacementNormalSynthesisResult,
+} from './PlacementNormalSynthesis';
 
 // Pooled scratch objects — reused across calls to avoid per-frame GC pressure.
 const _nA = new THREE.Vector3();
@@ -12,6 +17,18 @@ const _tri = new THREE.Triangle();
 const _bary = new THREE.Vector3();
 const _interpolated = new THREE.Vector3();
 const _normalMatrix = new THREE.Matrix3();
+const _synthTarget: PlacementNormalSynthesisResult = {
+    normal: new THREE.Vector3(),
+    regime: 'raw',
+    acceptedSphereTris: 0,
+};
+
+export interface CalculateSmoothedNormalOptions {
+    contactRadiusMm?: number;
+    prevNormal?: { x: number; y: number; z: number } | THREE.Vector3;
+    isDiskHudDrag?: boolean;
+    forceRaw?: boolean;
+}
 
 function localNormalToWorld(
     nx: number,
@@ -42,13 +59,10 @@ function localNormalToWorld(
 }
 
 /**
- * Calculates the smoothed normal (interpolated vertex normal) at a specific intersection point on a mesh.
- * This provides a much smoother angle for support placement on curved surfaces compared to raw face normals.
- * 
- * @param hit The Three.js Intersection object containing face, object, and point data.
- * @returns The smoothed normal vector in world space, or the face normal if smoothing fails.
+ * Calculates the raw barycentric-interpolated world normal at a raycast hit on `modelGeometryOf(hit.object)`.
+ * Falls back to the world-transformed face normal when vertex attributes are absent.
  */
-export function calculateSmoothedNormal(hit: THREE.Intersection): { x: number, y: number, z: number } {
+export function calculateRawWorldNormal(hit: THREE.Intersection): { x: number, y: number, z: number } {
     if (!hit.face) {
         return { x: 0, y: 0, z: 1 };
     }
@@ -95,6 +109,58 @@ export function calculateSmoothedNormal(hit: THREE.Intersection): { x: number, y
     _interpolated.normalize();
 
     return localNormalToWorld(_interpolated.x, _interpolated.y, _interpolated.z, hit.object);
+}
+
+/**
+ * Calculates the smoothed normal at a mesh intersection point, delegating to
+ * BVH placement normal synthesis when `smoothContactNormals` is enabled.
+ */
+export function calculateSmoothedNormal(
+    hit: THREE.Intersection,
+    options?: CalculateSmoothedNormalOptions,
+): { x: number, y: number, z: number } {
+    const raw = calculateRawWorldNormal(hit);
+    const settings = getSettings();
+    if (
+        options?.forceRaw
+        || !settings.smoothContactNormals
+        || !hit.face
+        || !hit.point
+        || !(hit.object instanceof THREE.Mesh)
+        || !modelGeometryOf(hit.object)
+    ) {
+        return raw;
+    }
+
+    const devTools = settings.devToolsEnabled === true ? settings.devTools : undefined;
+    const synthesized = synthesizePlacementNormal(
+        hit.object,
+        hit.point,
+        raw,
+        {
+            mode: settings.normalSynthesisPreset,
+            contactRadiusMm: options?.contactRadiusMm ?? settings.tip.contactDiameterMm * 0.5,
+            prevNormal: options?.prevNormal,
+            isDiskHudDrag: options?.isDiskHudDrag,
+            ...(devTools
+                ? {
+                    sampleRadiusScale: devTools.normalSampleRadiusScale,
+                    flatThresholdDeg: devTools.normalFlatThresholdDeg,
+                    ...(devTools.normalCreaseThresholdDeg > 0
+                        ? { creaseThresholdDeg: devTools.normalCreaseThresholdDeg }
+                        : {}),
+                    deadbandScale: devTools.normalDeadbandScale,
+                }
+                : {}),
+        },
+        _synthTarget,
+    );
+
+    return {
+        x: synthesized.normal.x,
+        y: synthesized.normal.y,
+        z: synthesized.normal.z,
+    };
 }
 
 /**

@@ -233,11 +233,13 @@ export const TwigRenderer = React.memo(function TwigRenderer({
   const startDiskDrag = React.useCallback((diskKey: 'contactDiskA' | 'contactDiskB', initialEvent?: any) => {
     if (!isSelected) return;
 
+    const disk = diskKey === 'contactDiskA' ? twig.contactDiskA : twig.contactDiskB;
     activeDiskRef.current = diskKey;
     startTipDrag({
       event: initialEvent, camera, domElement: gl.domElement, scene,
       modelId: twig.modelId,
-      placementSurface: (diskKey === 'contactDiskA' ? twig.contactDiskA : twig.contactDiskB).placementSurface,
+      placementSurface: disk.placementSurface,
+      contactRadiusMm: (disk.profile.contactDiameterMm ?? disk.contactDiameterMm) * 0.5,
     });
   }, [camera, gl.domElement, isSelected, recomputeTwigForMovedDisk, scene, startTipDrag, twig.contactDiskA, twig.contactDiskB, twig.id, twig.modelId]);
 

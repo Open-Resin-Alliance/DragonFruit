@@ -130,6 +130,7 @@ export const BranchRenderer = React.memo(function BranchRenderer({
       event: e, camera, domElement: gl.domElement, scene,
       modelId: branch.modelId,
       placementSurface: branch.contactCone?.placementSurface,
+      contactRadiusMm: branch.contactCone.profile.contactDiameterMm * 0.5,
     });
   }, [branch.contactCone, branch.modelId, camera, gl.domElement, isSelected, scene, tipDrag]);
 

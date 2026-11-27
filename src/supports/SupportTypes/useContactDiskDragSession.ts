@@ -76,6 +76,7 @@ export interface ContactDiskDragSessionApi<TPreview> {
         scene: unknown;
         modelId: string;
         placementSurface?: 'interior' | 'exterior';
+        contactRadiusMm?: number;
         /**
          * The cone this gesture may draw as instances. Omitted by types whose
          * tip drag rebuilds geometry, which keeps them on the detail path.
@@ -146,6 +147,9 @@ export function useContactDiskDragSession<TPreview>(
             }) !== null;
         coneDragRef.current = coneFast;
 
+        const contactRadiusMm = options.contactRadiusMm
+            ?? (options.contact ? options.contact.cone.profile.contactDiameterMm * 0.5 : undefined);
+
         sessionRef.current = startContactDiskDragSession({
             camera: options.camera as never,
             domElement: options.domElement,
@@ -153,6 +157,7 @@ export function useContactDiskDragSession<TPreview>(
             initialEvent: options.event as never,
             modelId: options.modelId,
             placementSurface: options.placementSurface,
+            contactRadiusMm,
             onHit: (hit: ContactDiskDragHit) => {
                 const skipColdMesh = hit.mesh !== undefined && !hasWarmSDFCache(hit.mesh);
                 const next = handlersRef.current.onHit(skipColdMesh ? { ...hit, mesh: undefined } : hit);

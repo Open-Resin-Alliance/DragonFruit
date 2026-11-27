@@ -131,7 +131,7 @@ import { buildBranchData } from '../SupportTypes/Branch/branchBuilder';
 import type { BranchBuildInput, BranchBuildResult } from '../SupportTypes/Branch/branchBuilder';
 import { buildLeafData } from '../SupportTypes/Leaf/leafBuilder';
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
-import { calculateSmoothedNormal } from '../PlacementLogic/PlacementUtils';
+import { calculateRawWorldNormal } from '../PlacementLogic/PlacementUtils';
 import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
 import { addTargetedStressBraces, buildAutoBracedSnapshot, BRACE_CANOPY_KEEP_OUT_MM, type StressBraceRequest } from '../autoBracing/autoBrace';
 import { buildKickstandData } from '../SupportTypes/Kickstand/kickstandBuilder';
@@ -579,7 +579,7 @@ function resolveSurfaceNormal(
     if (upHit) {
         return {
             point: { x: upHit.point.x, y: upHit.point.y, z: upHit.point.z },
-            normal: calculateSmoothedNormal(upHit),
+            normal: calculateRawWorldNormal(upHit),
             hit: true,
         };
     }
@@ -588,7 +588,7 @@ function resolveSurfaceNormal(
     // so the support still grows away from the face.
     const downHit = castFromDisc(-1);
     if (downHit) {
-        const smoothed = calculateSmoothedNormal(downHit);
+        const smoothed = calculateRawWorldNormal(downHit);
         return {
             point: { x: downHit.point.x, y: downHit.point.y, z: downHit.point.z },
             normal: { x: -smoothed.x, y: -smoothed.y, z: -smoothed.z },
