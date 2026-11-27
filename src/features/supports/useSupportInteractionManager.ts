@@ -68,7 +68,6 @@ export function resolveSupportOwnerFromJointId(jointId: string) {
 }
 
 export function useSupportInteractionManager({ mode }: SupportInteractionOptions) {
-  // V2 Trunk Placement
   const trunkPlacementV2 = useTrunkPlacementV2();
   const branchPlacement = useBranchPlacement();
   const leafPlacement = useLeafPlacement();
@@ -139,7 +138,6 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     });
   }, [getHotkey, branchPlacement.branchHotkeyActive, branchPlacement.stage, leafPlacement.hotkeyActive, leafPlacement.stage, branchPlacement.braceHotkeyActive, bracePlacement.stage, kickstandPlacement.hotkeyActive]);
 
-  // Handler for MODEL hover (used for trunk placement preview, or branch tip preview)
   const onModelHover = useCallback((hit: THREE.Intersection | null) => {
     if (isSupportEditInteractionActive()) {
       dispatchModelHover('none', null);
@@ -182,7 +180,6 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     trunkPlacementV2.onSupportHover(hit);
   }, [isPlacementHardDisabled, trunkPlacementV2, dispatchModelHover, leafPlacement, jointCreationState.isActive, resolvePlacementRouting]);
 
-  // Handler for MODEL click (trunk placement, or branch tip placement)
   const onModelClick = useCallback((hit: THREE.Intersection) => {
     if (isSupportEditInteractionActive()) {
       return;
@@ -219,9 +216,9 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
       if (category === 'joint') {
         const resolved = removeJointWithPayload(id);
         if (!resolved) {
-          const kickstandOwner = resolveSupportOwnerFromJointId(id);
-          if (!kickstandOwner) return false;
-          return deleteSelectionByCategoryAndId(kickstandOwner.category, kickstandOwner.id, recordHistory);
+          const shaftOwner = resolveSupportOwnerFromJointId(id);
+          if (!shaftOwner) return false;
+          return deleteSelectionByCategoryAndId(shaftOwner.category, shaftOwner.id, recordHistory);
         }
         // A type declaring `historyUpdate` records the edit its action owns;
         // one without it records the full-state snapshot joint drags use.
@@ -476,7 +473,6 @@ export function useSupportInteractionManager({ mode }: SupportInteractionOptions
     globalSelectedId,
     globalSelectedCategory,
     selectedJointId,
-    // Model interaction (for trunk placement or branch tip)
     onModelHover,
     onModelClick,
     previewError: trunkPlacementV2.previewError,
