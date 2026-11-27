@@ -9,6 +9,7 @@ import {
 } from '@/features/scene/importDefaultsPreferences';
 import {
   getSupportTypeDescriptor,
+  INLINE_ROOT_TYPES,
   SUPPORT_COLLECTION_KEYS,
   type SupportCollectionKey,
   type SupportTypeId,
@@ -258,4 +259,49 @@ test('getImportDefaultsRaftPatch disables wall when raft base is line', () => {
 
   assert.equal(patch.bottomMode, 'line');
   assert.equal(patch.wallEnabled, false);
+});
+
+test('applyImportDefaultsToSupportPayload narrows an inline base when roots are disabled', () => {
+  const payload = makePayload();
+  const inline = INLINE_ROOT_TYPES[0];
+  assert.ok(inline, 'the registry declares at least one inline-root type');
+
+  setCollection(payload, inline.typeId as 'stump', [
+    {
+      id: 'stump-a',
+      modelId: 'm1',
+      rootPos: { x: 0, y: 0, z: 0 },
+      rootBaseDiameter: 9,
+      rootTopDiameter: 9,
+      rootHeight: 1,
+      joint: { id: 'stump-joint-a', pos: { x: 0, y: 0, z: 1 }, diameter: 2 },
+      segments: [
+        {
+          id: 'stump-seg-a',
+          diameter: 2,
+          topJoint: { id: 'stump-jt-a', pos: { x: 0, y: 0, z: 5 }, diameter: 2 },
+        },
+      ],
+      contactCone: {
+        id: 'stump-cone-a',
+        pos: { x: 0, y: 0, z: 6 },
+        normal: { x: 0, y: 0, z: 1 },
+      },
+    },
+  ] as never);
+
+  const defaults: ImportDefaultsSettings = {
+    raftBottomMode: 'line',
+    raftWallEnabled: true,
+    rootsEnabled: false,
+    autoRepair: true,
+    autoRepairScenes: true,
+  };
+
+  const next = applyImportDefaultsToSupportPayload(payload, defaults);
+  const read = (p: DragonfruitImportFormat) =>
+    (p as unknown as Record<string, Record<string, unknown>[]>)[inline.collectionKey][0];
+
+  assert.equal(read(next)[inline.radiusField], 2, 'inline base takes the shaft diameter');
+  assert.equal(read(payload)[inline.radiusField], 9, 'original payload must not be mutated');
 });

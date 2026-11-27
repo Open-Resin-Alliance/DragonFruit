@@ -1,5 +1,11 @@
 import type { RaftBottomMode, RaftSettings } from '@/supports/Rafts/Crenelated/RaftTypes';
-import type { DragonfruitImportFormat, Trunk } from '@/supports/types';
+import {
+  bundledSupportTypeId,
+  getSupportTypeDescriptor,
+  INLINE_ROOT_TYPES,
+  SUPPORT_TYPES,
+} from '@/supports/supportTypeRegistry';
+import type { DragonfruitImportFormat } from '@/supports/types';
 import { hasWindow } from '@/utils/dom';
 
 export type ImportDefaultsSettings = {
@@ -80,107 +86,109 @@ export function saveImportDefaultsSettings(settings: ImportDefaultsSettings): vo
   }
 }
 
-function resolveTrunkDiameterMm(trunk: Trunk): number | null {
-  if (typeof trunk.baseDiameterMm === 'number' && Number.isFinite(trunk.baseDiameterMm) && trunk.baseDiameterMm > 0) {
-    return trunk.baseDiameterMm;
-  }
+type Shafted = {
+  baseDiameterMm?: unknown;
+  segments?: { diameter?: unknown }[];
+  profile?: { bodyDiameterMm?: unknown };
+};
 
-  const firstSegmentDiameter = trunk.segments[0]?.diameter;
-  if (typeof firstSegmentDiameter === 'number' && Number.isFinite(firstSegmentDiameter) && firstSegmentDiameter > 0) {
-    return firstSegmentDiameter;
-  }
-
-  return null;
+function positive(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }
 
-function resolveKickstandDiameterMm(
-  build: NonNullable<DragonfruitImportFormat['kickstands']>[number],
-): number | null {
-  const firstSegmentDiameter = build.kickstand.segments[0]?.diameter;
-  if (typeof firstSegmentDiameter === 'number' && Number.isFinite(firstSegmentDiameter) && firstSegmentDiameter > 0) {
-    return firstSegmentDiameter;
-  }
+/**
+ * The diameter a base should take from the entity standing on it: the captured
+ * baseline, else the first segment, else the body profile.
+ */
+function resolveBaseDiameterMm(entity: unknown): number | null {
+  const shaft = entity as Shafted;
+  return positive(shaft.baseDiameterMm)
+    ?? positive(shaft.segments?.[0]?.diameter)
+    ?? positive(shaft.profile?.bodyDiameterMm);
+}
 
-  const bodyDiameter = build.kickstand.profile.bodyDiameterMm;
-  if (typeof bodyDiameter === 'number' && Number.isFinite(bodyDiameter) && bodyDiameter > 0) {
-    return bodyDiameter;
-  }
-
-  return null;
+/** A bundled type writes `{ <singular>, root, hostKnot }`, so the shaft is nested. */
+function shaftOf(entry: unknown, typeId: string, bundled: boolean): unknown {
+  if (!bundled) return entry;
+  return (entry as Record<string, unknown>)[getSupportTypeDescriptor(typeId as never).singular];
 }
 
 export function applyImportDefaultsToSupportPayload(
   payload: DragonfruitImportFormat,
   defaults: ImportDefaultsSettings,
 ): DragonfruitImportFormat {
-  const kickstandBuilds = payload.kickstands ?? [];
+  const wire = payload as unknown as Record<string, unknown[] | undefined>;
+  const bundledId = bundledSupportTypeId();
+  // Every type standing on its own base, rather than only the two named here
+  // before: a new one would otherwise keep an oversized plate.
+  const rootOwners = SUPPORT_TYPES.filter((descriptor) => descriptor.ownsRoot);
 
-  if (defaults.rootsEnabled || (payload.roots.length === 0 && kickstandBuilds.length === 0)) {
+  const hasInlineRoots = INLINE_ROOT_TYPES.some((t) => (wire[t.collectionKey]?.length ?? 0) > 0);
+  const ownerEntries = rootOwners.flatMap((descriptor) => wire[descriptor.location.key] ?? []);
+  if (defaults.rootsEnabled || (payload.roots.length === 0 && !hasInlineRoots && ownerEntries.length === 0)) {
     return payload;
   }
 
+  // Widest shaft wins: one base can carry several entities.
   const rootDiameterById = new Map<string, number>();
-  for (const trunk of payload.trunks) {
-    const diameter = resolveTrunkDiameterMm(trunk);
-    if (diameter == null) continue;
-    const existing = rootDiameterById.get(trunk.rootId);
-    if (existing == null || diameter > existing) {
-      rootDiameterById.set(trunk.rootId, diameter);
-    }
-  }
+  const claim = (rootId: string | undefined, diameter: number | null) => {
+    if (!rootId || diameter == null) return;
+    const existing = rootDiameterById.get(rootId);
+    if (existing == null || diameter > existing) rootDiameterById.set(rootId, diameter);
+  };
 
-  for (const build of kickstandBuilds) {
-    const diameter = resolveKickstandDiameterMm(build);
-    if (diameter == null) continue;
-    const existing = rootDiameterById.get(build.root.id);
-    if (existing == null || diameter > existing) {
-      rootDiameterById.set(build.root.id, diameter);
+  for (const descriptor of rootOwners) {
+    const bundled = descriptor.id === bundledId;
+    for (const entry of wire[descriptor.location.key] ?? []) {
+      const shaft = shaftOf(entry, descriptor.id, bundled);
+      const rootId = bundled
+        ? (entry as { root?: { id?: string } }).root?.id
+        : (shaft as { rootId?: string }).rootId;
+      claim(rootId, resolveBaseDiameterMm(shaft));
     }
-  }
-
-  if (rootDiameterById.size === 0) {
-    return payload;
   }
 
   let changed = false;
   const nextRoots = payload.roots.map((root) => {
-    const trunkDiameter = rootDiameterById.get(root.id);
-    if (trunkDiameter == null || root.diameter === trunkDiameter) {
-      return root;
-    }
-
+    const diameter = rootDiameterById.get(root.id);
+    if (diameter == null || root.diameter === diameter) return root;
     changed = true;
-    return {
-      ...root,
-      diameter: trunkDiameter,
-    };
+    return { ...root, diameter };
   });
 
-  const nextKickstands = kickstandBuilds.map((build) => {
-    const kickstandDiameter = rootDiameterById.get(build.root.id);
-    if (kickstandDiameter == null || build.root.diameter === kickstandDiameter) {
-      return build;
-    }
+  const next = { ...payload, roots: nextRoots } as unknown as Record<string, unknown>;
 
-    changed = true;
-    return {
-      ...build,
-      root: {
-        ...build.root,
-        diameter: kickstandDiameter,
-      },
-    };
-  });
+  for (const descriptor of rootOwners) {
+    if (descriptor.id !== bundledId) continue;
+    const entries = wire[descriptor.location.key];
+    if (!entries) continue;
+    next[descriptor.location.key] = entries.map((entry) => {
+      const bundle = entry as { root: { id: string; diameter: number } };
+      const diameter = rootDiameterById.get(bundle.root.id);
+      if (diameter == null || bundle.root.diameter === diameter) return entry;
+      changed = true;
+      return { ...bundle, root: { ...bundle.root, diameter } };
+    });
+  }
+
+  // An inline base is geometry on the entity, at the radius field the registry names.
+  for (const inline of INLINE_ROOT_TYPES) {
+    const entries = wire[inline.collectionKey];
+    if (!entries) continue;
+    next[inline.collectionKey] = entries.map((entry) => {
+      const entity = entry as Record<string, unknown>;
+      const diameter = resolveBaseDiameterMm(entity);
+      if (diameter == null || entity[inline.radiusField] === diameter) return entry;
+      changed = true;
+      return { ...entity, [inline.radiusField]: diameter };
+    });
+  }
 
   if (!changed) {
     return payload;
   }
 
-  return {
-    ...payload,
-    roots: nextRoots,
-    kickstands: nextKickstands,
-  };
+  return next as unknown as DragonfruitImportFormat;
 }
 
 export function getImportDefaultsRaftPatch(settings: ImportDefaultsSettings): Pick<RaftSettings, 'bottomMode' | 'wallEnabled'> {
