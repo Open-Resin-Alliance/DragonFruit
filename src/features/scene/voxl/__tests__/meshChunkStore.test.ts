@@ -36,6 +36,16 @@ function countingEncoder(bytes: Uint8Array) {
   };
 }
 
+function deferredBytes() {
+  let resolve!: (bytes: Uint8Array) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<Uint8Array>((accept, fail) => {
+    resolve = accept;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('the COW compressed-chunk store', () => {
   let store: MeshChunkStore;
 
@@ -185,6 +195,138 @@ describe('the COW compressed-chunk store', () => {
 
     assert.equal(store.stats().compressions, 1, 'a coalesced bake ran zlib twice');
     assert.equal(first.data, second.data);
+  });
+
+  test('concurrent identical content preserves every owner reference', async () => {
+    const [first, second] = await Promise.all([
+      store.bake({ modelId: 'm0', signature: 'geo-0', encode: () => RAW_A.slice() }),
+      store.bake({ modelId: 'm1', signature: 'geo-1', encode: () => RAW_A.slice() }),
+    ]);
+
+    assert.equal(first.data, second.data, 'both owners must use the canonical blob');
+    store.release('m0');
+    assert.ok(store.lookup('m1', 'geo-1'), 'releasing one owner evicted the surviving owner');
+    assert.equal(store.stats().blobs, 1);
+    store.release('m1');
+    assert.equal(store.stats().blobs, 0);
+  });
+
+  test('a bake completing after release returns its bytes without retaining them', async () => {
+    const encoded = deferredBytes();
+    const pending = store.bake({ modelId: 'm0', signature: 'sig-1', encode: () => encoded.promise });
+    store.release('m0');
+    encoded.resolve(RAW_A);
+    const result = await pending;
+
+    assert.equal(result.uncompressedSize, RAW_A.length);
+    assert.equal(store.stats().owners, 0, 'a completed bake resurrected a deleted owner');
+    assert.equal(store.stats().blobs, 0);
+    assert.equal(store.isBakeInFlight(), false);
+  });
+
+  test('retainOnly invalidates pending-only owners without dropping retained work', async () => {
+    const removed = deferredBytes();
+    const kept = deferredBytes();
+    const removedBake = store.bake({ modelId: 'removed', signature: 's0', encode: () => removed.promise });
+    const keptBake = store.bake({ modelId: 'kept', signature: 's1', encode: () => kept.promise });
+    store.retainOnly(['kept']);
+    removed.resolve(RAW_A);
+    kept.resolve(RAW_B);
+    await Promise.all([removedBake, keptBake]);
+
+    assert.equal(store.lookup('removed', 's0'), null);
+    assert.ok(store.lookup('kept', 's1'));
+    assert.equal(store.stats().owners, 1);
+    assert.equal(store.stats().blobs, 1);
+  });
+
+  test('clear invalidates old work without letting its cleanup remove a fresh bake', async () => {
+    const old = deferredBytes();
+    const fresh = deferredBytes();
+    const oldBake = store.bake({ modelId: 'm0', signature: 'sig-1', encode: () => old.promise });
+    store.clear();
+    const freshBake = store.bake({ modelId: 'm0', signature: 'sig-1', encode: () => fresh.promise });
+    const freshPending = store.pending('m0', 'sig-1');
+    old.resolve(RAW_A);
+    await oldBake;
+
+    assert.equal(store.stats().owners, 0);
+    assert.equal(store.stats().blobs, 0);
+    assert.equal(store.stats().compressions, 0, 'old work changed reset statistics');
+    assert.equal(store.pending('m0', 'sig-1'), freshPending);
+    assert.equal(store.isBakeInFlight(), true);
+    fresh.resolve(RAW_B);
+    await freshBake;
+    assert.ok(store.lookup('m0', 'sig-1'));
+    assert.equal(store.stats().owners, 1);
+    assert.equal(store.stats().blobs, 1);
+  });
+
+  test('an older signature completing last cannot overwrite the newer bake', async () => {
+    const old = deferredBytes();
+    const fresh = deferredBytes();
+    const oldBake = store.bake({ modelId: 'm0', signature: 'old', encode: () => old.promise });
+    const freshBake = store.bake({ modelId: 'm0', signature: 'fresh', encode: () => fresh.promise });
+    fresh.resolve(RAW_B);
+    const expected = await freshBake;
+    old.resolve(RAW_A);
+    await oldBake;
+
+    assert.equal(store.lookup('m0', 'old'), null);
+    assert.equal(store.lookup('m0', 'fresh')?.data, expected.data);
+    assert.equal(store.stats().blobs, 1);
+  });
+
+  test('returning to a cached signature invalidates a different pending bake', async () => {
+    const cached = await store.bake({ modelId: 'm0', signature: 'cached', encode: () => RAW_A });
+    const changed = deferredBytes();
+    const changedBake = store.bake({ modelId: 'm0', signature: 'changed', encode: () => changed.promise });
+    await store.bake({ modelId: 'm0', signature: 'cached', encode: () => RAW_A });
+    changed.resolve(RAW_B);
+    await changedBake;
+
+    assert.equal(store.lookup('m0', 'cached')?.data, cached.data);
+    assert.equal(store.lookup('m0', 'changed'), null);
+    assert.equal(store.stats().blobs, 1);
+  });
+
+  test('releasing a pending preview leaves the original slot live', async () => {
+    const preview = deferredBytes();
+    const original = deferredBytes();
+    const previewBake = store.bake({ modelId: 'm0', signature: 's0', encode: () => preview.promise });
+    const originalBake = store.bake({ modelId: 'm0', slot: 'original', signature: 's1', encode: () => original.promise });
+    store.release('m0', 'preview');
+    preview.resolve(RAW_A);
+    original.resolve(RAW_B);
+    await Promise.all([previewBake, originalBake]);
+
+    assert.equal(store.lookup('m0', 's0'), null);
+    assert.ok(store.lookup('m0', 's1', 'original'));
+    assert.equal(store.stats().owners, 1);
+  });
+
+  test('precompressed chunks with a known digest are adopted and shared', async () => {
+    const precompressed = { data: RAW_A, compression: 0, uncompressedSize: RAW_A.length, sha256: 'known-digest' };
+    const encode = () => { throw new Error('precompressed chunks must not be encoded'); };
+    await Promise.all([
+      store.bake({ modelId: 'm0', signature: 's0', precompressed, encode }),
+      store.bake({ modelId: 'm1', signature: 's1', precompressed, encode }),
+    ]);
+    store.release('m0');
+    assert.equal(store.lookup('m1', 's1')?.data, RAW_A);
+    assert.equal(store.stats().compressions, 0);
+  });
+
+  test('a rejected bake does not strand pending work or block a retry', async () => {
+    const encoded = deferredBytes();
+    const pending = store.bake({ modelId: 'm0', signature: 'sig-1', encode: () => encoded.promise });
+    const rejected = assert.rejects(pending, /encode failed/);
+    encoded.reject(new Error('encode failed'));
+    await rejected;
+    assert.equal(store.pending('m0', 'sig-1'), null);
+    assert.equal(store.isBakeInFlight(), false);
+    await store.bake({ modelId: 'm0', signature: 'sig-1', encode: () => RAW_A });
+    assert.ok(store.lookup('m0', 'sig-1'));
   });
 
   test('payloads too small or too incompressible to shrink are stored raw', async () => {

@@ -2,6 +2,27 @@
 
 VOXL is DragonFruit’s native scene container. This page captures the core contract engineers should rely on in code and tests.
 
+## Geometry chunk cache lifecycle
+
+`src/features/scene/voxl/meshChunkStore.ts` caches compressed geometry by content
+digest, with references from each model and slot. Concurrent bakes of identical
+bytes must adopt the same canonical blob: a compression finishing later must
+not overwrite reference counts installed while it awaited.
+
+Each owner has one current pending bake. Requests with the same signature share
+that work; a newer signature supersedes it. Returning to an already cached
+signature also invalidates a different pending bake. `release`, `retainOnly`
+and `clear` invalidate pending work as well as retained chunks, including owners
+that have not completed their first bake. A slot-specific release leaves the
+model's other slot intact.
+
+Invalidation does not reject an existing caller's promise: it still receives
+the bytes it requested, but those bytes cannot repopulate the cache or change
+reset statistics. Completion of invalidated work must not remove the pending
+entry of a newer bake. `pending` and `isBakeInFlight` describe current, live
+work, not invalidated operations still finishing for their callers. These are
+in-memory lifecycle rules; the VOXL file format is unchanged.
+
 ## Supported generations
 
 Two independent numbers describe a VOXL file.
