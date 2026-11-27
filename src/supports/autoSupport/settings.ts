@@ -1,4 +1,5 @@
 import { MIN_LEAF_FAN_RADIUS_MM } from './constants';
+import type { PlacementNormalSynthesisMode } from './types';
 
 /**
  * The seven numbers a run sizes every shaft, tip and root from — a Support
@@ -159,6 +160,10 @@ export interface AutoSupportSettings {
      *  load falls with L², so the cap bounds how much a tall support thickens.
      *  **Calibration, not a preference.** Read by `sizeParameters`. */
     heightFactorCap: number;
+    /** Optional A/B placement normal synthesis mode (never in defaults). */
+    normalSynthesisMode?: PlacementNormalSynthesisMode;
+    /** Optional A/B leaf cap orbit toggle (never in defaults). */
+    leafCapOrbit?: boolean;
 }
 
 /**

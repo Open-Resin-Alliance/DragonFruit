@@ -33,6 +33,7 @@
 
 import { readFileSync, readdirSync, existsSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 
@@ -59,7 +60,7 @@ import type { ContactDiskProfile } from '../src/supports/SupportPrimitives/Conta
 import { calculateDiskThickness } from '../src/supports/SupportPrimitives/ContactDisk/contactDiskUtils';
 import { SUPPORT_STATE_TYPES, contactEndpointsFor } from '../src/supports/supportTypeRegistry';
 import type { AutoSupportSettings } from '../src/supports/autoSupport/settings';
-import type { AutoSupportPlan } from '../src/supports/autoSupport/types';
+import type { AutoSupportPlan, NormalSynthesisMetrics, PlacementNormalSynthesisMode } from '../src/supports/autoSupport/types';
 import type { SupportState, Vec3 } from '../src/supports/types';
 import type { SupportFrameStressReport } from '../src/supports/autoSupport/supportGraphStress';
 import type { DetectedIsland } from '../src/volumeAnalysis/Islands/types';
@@ -122,6 +123,8 @@ interface ModelMetrics {
     phases: Record<string, number>;
     /** Frame solve on the committed supports, or null when the run placed none. */
     stress: StressMetrics | null;
+    /** Pre-constraint normal-synthesis & disk-thickness telemetry (H1-H4). */
+    normalSynthesis?: NormalSynthesisMetrics;
 }
 
 export interface StressMetrics {
@@ -145,7 +148,7 @@ export interface StressMetrics {
 
 type Interval = { low: number; high: number };
 
-function parseArgs(argv: string[]): {
+export function parseArgs(argv: string[]): {
     only: string[] | null;
     corpusDir: string | null;
     json: boolean;
@@ -177,6 +180,8 @@ function parseArgs(argv: string[]): {
         stress: false,
         failOnOverload: false,
     };
+    let normalSynthesisMode: PlacementNormalSynthesisMode | undefined;
+    let leafCapOrbit: boolean | undefined;
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         const value = (): string => {
@@ -191,7 +196,19 @@ function parseArgs(argv: string[]): {
         else if (arg === '--update-baseline') options.updateBaseline = true;
         else if (arg === '--baseline') options.baselinePath = value();
         else if (arg === '--settings') options.settings = JSON.parse(value()) as Partial<AutoSupportSettings>;
-        else if (arg === '--repeat') options.repeat = Math.max(1, Number(value()));
+        else if (arg === '--normal-synthesis') {
+            const mode = value();
+            if (mode !== 'raw' && mode !== 'bisector' && mode !== 'crease-lock' && mode !== 'macro-smooth') {
+                throw new Error(`invalid --normal-synthesis "${mode}" (expected raw|bisector|crease-lock|macro-smooth)`);
+            }
+            normalSynthesisMode = mode;
+        } else if (arg === '--leaf-cap-orbit') {
+            const toggle = value();
+            if (toggle !== 'on' && toggle !== 'off') {
+                throw new Error(`invalid --leaf-cap-orbit "${toggle}" (expected on|off)`);
+            }
+            leafCapOrbit = toggle === 'on';
+        } else if (arg === '--repeat') options.repeat = Math.max(1, Number(value()));
         else if (arg === '--grid') options.grid = true;
         else if (arg === '--verbose') options.verbose = true;
         else if (arg === '--detect') options.detect = true;
@@ -206,6 +223,8 @@ function parseArgs(argv: string[]): {
             throw new Error(`unknown argument "${arg}" (try --help)`);
         }
     }
+    if (normalSynthesisMode !== undefined) options.settings.normalSynthesisMode = normalSynthesisMode;
+    if (leafCapOrbit !== undefined) options.settings.leafCapOrbit = leafCapOrbit;
     return options;
 }
 
@@ -637,6 +656,7 @@ function metricsFrom(
             (plan.analytics.timings?.phases ?? []).map((phase) => [phase.label, Math.round(phase.durationMs)]),
         ),
         stress: stressFrom(report?.frameStress),
+        ...(plan.analytics.normalSynthesisMetrics ? { normalSynthesis: plan.analytics.normalSynthesisMetrics } : {}),
     };
 }
 
@@ -673,7 +693,8 @@ function sameForestAs(first: ModelMetrics, second: ModelMetrics): boolean {
     return keys.every((key) => JSON.stringify(first[key]) === JSON.stringify(second[key]))
         && JSON.stringify(first.entitiesByType) === JSON.stringify(second.entitiesByType)
         && JSON.stringify(first.placedByType) === JSON.stringify(second.placedByType)
-        && JSON.stringify(first.refusals) === JSON.stringify(second.refusals);
+        && JSON.stringify(first.refusals) === JSON.stringify(second.refusals)
+        && JSON.stringify(first.normalSynthesis) === JSON.stringify(second.normalSynthesis);
 }
 
 /** The metrics that must match the baseline exactly. */
@@ -780,6 +801,38 @@ function formatStressTable(rows: ModelMetrics[]): string {
     return [line(header), widths.map((width) => '-'.repeat(width)).join('  '), ...body.map(line)].join('\n');
 }
 
+function formatNormalSynthesisTable(rows: ModelMetrics[]): string {
+    const header = ['model', 'mode', 'n', 'p50', 'p90', 'max', '>0.25', '=0.35', 'fl/ang/col', 'devP90', 'lean(0/30/60/90+)', 'H4(c/lf/br/blk)'];
+    const body = rows.map((row) => {
+        const ns = row.normalSynthesis;
+        if (!ns) {
+            return [row.name, '—', '—', '—', '—', '—', '—', '—', '—', '—', '—', '—'];
+        }
+        const o = ns.overall;
+        const l = ns.surfaceLeanFromDownDeg;
+        return [
+            row.name,
+            `${ns.mode}${ns.leafCapOrbit ? '+orb' : ''}`,
+            String(o.count),
+            o.p50Mm.toFixed(3),
+            o.p90Mm.toFixed(3),
+            o.maxMm.toFixed(3),
+            String(o.extendedOver025Count),
+            String(o.maxClamped035Count),
+            `${o.flushCount}/${o.angleDrivenCount}/${o.collisionDrivenCount}`,
+            ns.coneDeviationFromSurfaceDeg.p90Deg.toFixed(1),
+            `${l.downward0To30Count}/${l.oblique30To60Count}/${l.steep60To90Count}/${l.upwardOver90Count}`,
+            `${ns.consolidationCandidates}/${ns.consolidationConvertedLeaves}/${ns.consolidationConvertedBranches}/${ns.consolidationBlockedCount}`,
+        ];
+    });
+    const widths = header.map((_, column) => Math.max(
+        header[column].length,
+        ...body.map((row) => row[column].length),
+    ));
+    const line = (cells: string[]): string => cells.map((cell, column) => cell.padEnd(widths[column])).join('  ');
+    return [line(header), widths.map((width) => '-'.repeat(width)).join('  '), ...body.map(line)].join('\n');
+}
+
 async function main(): Promise<void> {
     const options = parseArgs(process.argv.slice(2));
     const entries = options.corpusDir ? corpusFromDirectory(options.corpusDir) : SYNTHETIC_CORPUS;
@@ -823,7 +876,7 @@ async function main(): Promise<void> {
     }));
 
     if (options.json) {
-        console.log(JSON.stringify({ models: metrics, differences }, null, 2));
+        console.log(JSON.stringify({ mode, models: metrics, differences }, null, 2));
     } else {
         const overrides = Object.entries(options.settings).map(([key, value]) => `${key}=${JSON.stringify(value)}`);
         const sources = [...new Set(metrics.map((row) => row.islandSource))].join(', ');
@@ -838,6 +891,10 @@ async function main(): Promise<void> {
         }
         console.log(`   corpus: ${options.corpusDir ?? 'synthetic (scripts/bench-auto-support-corpus.ts)'}\n`);
         console.log(formatTable(metrics));
+        if (metrics.some((row) => row.normalSynthesis)) {
+            console.log('\n== Normal synthesis (H1-H4) ==');
+            console.log(formatNormalSynthesisTable(metrics));
+        }
         const undetermined = metrics.filter((row) => !row.deterministic);
         if (undetermined.length > 0) console.log(`\nNOT DETERMINISTIC: ${undetermined.map((row) => row.name).join(', ')}`);
         for (const row of metrics.filter((candidate) => candidate.aboveContact > 0)) {
@@ -904,7 +961,13 @@ async function main(): Promise<void> {
     }
 }
 
-main().catch((error) => {
-    console.error(error instanceof Error ? (error.stack ?? error.message) : error);
-    process.exitCode = 1;
-});
+const isDirectCli =
+    typeof process.argv[1] === 'string' &&
+    resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase();
+
+if (isDirectCli) {
+    main().catch((error) => {
+        console.error(error instanceof Error ? (error.stack ?? error.message) : error);
+        process.exitCode = 1;
+    });
+}

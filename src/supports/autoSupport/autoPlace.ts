@@ -26,8 +26,9 @@ import { quantizeToScale } from '@/utils/math';
  */
 const round2Mm = (v: number): number => quantizeToScale(v, 100);
 import type { ContactCone } from '../SupportPrimitives/ContactCone/types';
-import type { AttachmentKind, CandidatePoint, AutoPlaceResult, AutoPlaceStatus, AutoPlaceAnalytics, RejectReason, AutoSupportPlan, PlacementDiagnostics, FanLeafRefusal, ForestLedgerEntry, ForestReport, ForestTree, OrphanInfo, PlacementOutcomeKind } from './types';
+import type { AttachmentKind, CandidatePoint, AutoPlaceResult, AutoPlaceStatus, AutoPlaceAnalytics, RejectReason, AutoSupportPlan, PlacementDiagnostics, FanLeafRefusal, ForestLedgerEntry, ForestReport, ForestTree, OrphanInfo, PlacementOutcomeKind, PlacementNormalSynthesisMode } from './types';
 import { isLedgerKind } from './types';
+import { computeNormalSynthesisMetrics } from './normalSynthesisTelemetry';
 import type { Branch, Segment, SupportState, SupportOrigin, Vec3 } from '../types';
 import type { AutoSupportSettings, SizingPreset } from './settings';
 import type { AutoPlaceTimings } from './types';
@@ -5104,10 +5105,24 @@ export function computeAutoSupportPlan(
     const definedOverrides = settingsOverride
         ? Object.fromEntries(Object.entries(settingsOverride).filter(([, v]) => v !== undefined))
         : {};
-    const autoSettings = normalizeAutoSupportSettings({
-        ...(getSettings().autoSupport ?? {}),
-        ...definedOverrides,
-    });
+    const liveAutoSupport = getSettings().autoSupport;
+    const rawNormalSynthesisMode = settingsOverride?.normalSynthesisMode ?? liveAutoSupport?.normalSynthesisMode;
+    const rawLeafCapOrbit = settingsOverride?.leafCapOrbit ?? liveAutoSupport?.leafCapOrbit;
+    const normalSynthesisMode: PlacementNormalSynthesisMode =
+        rawNormalSynthesisMode === 'bisector'
+        || rawNormalSynthesisMode === 'crease-lock'
+        || rawNormalSynthesisMode === 'macro-smooth'
+            ? rawNormalSynthesisMode
+            : 'raw';
+    const leafCapOrbit = rawLeafCapOrbit === true;
+    const autoSettings: AutoSupportSettings = {
+        ...normalizeAutoSupportSettings({
+            ...(liveAutoSupport ?? {}),
+            ...definedOverrides,
+        }),
+        ...(rawNormalSynthesisMode !== undefined ? { normalSynthesisMode } : {}),
+        ...(rawLeafCapOrbit !== undefined ? { leafCapOrbit } : {}),
+    };
 
     if (!autoSettings.enabled) {
         return null;
@@ -5148,6 +5163,10 @@ export function computeAutoSupportPlan(
             presets: { detail: 0, structure: 0, anchor: 0 },
             rejectionReasons: {},
             areaCoverage: 0,
+            normalSynthesisMetrics: computeNormalSynthesisMetrics(draft, modelId, {
+                mode: normalSynthesisMode,
+                leafCapOrbit,
+            }),
         },
         result,
     });
@@ -5600,6 +5619,11 @@ export function computeAutoSupportPlan(
     // Consolidation (chunk fanning) refusal tallies — hoisted so the forest
     // report can surface them even when the resize pass re-scopes.
     const conRefusals: Partial<Record<FanLeafRefusal, number>> = {};
+    const consolidationAttemptedHosts = new Set<string>();
+    const consolidationBlockedHosts = new Set<string>();
+    const consolidationLeafIds = new Set<string>();
+    let consolidationConvertedLeaves = 0;
+    let consolidationConvertedBranches = 0;
     // Trunk id → origin kind, so the consolidation pass can adjust the tallies
     // when it converts a standalone grid pillar into a fan leaf.
     const hostOriginById = new Map<string, 'gridInfill' | 'coverageFill'>();
@@ -6239,6 +6263,7 @@ export function computeAutoSupportPlan(
             if (countAttachmentsOnHost(hostTypeId, hostId, draft) > 0) continue;
             const tip = entity.contactCone?.pos;
             if (!tip) continue;
+            consolidationAttemptedHosts.add(hostId);
             const tipNormal = entity.contactCone?.normal ?? { x: 0, y: 0, z: -1 };
             // The pillar this attempt replaces still stands in the draft until
             // the link that replaces it is built successfully, so it is
@@ -6297,6 +6322,13 @@ export function computeAutoSupportPlan(
                     })
                     : null;
                 if (branchResult) {
+                    consolidationBlockedHosts.delete(hostId);
+                    if (branchResult.kind === 'leaf') {
+                        consolidationLeafIds.add(branchResult.branchId);
+                        consolidationConvertedLeaves++;
+                    } else if (branchResult.kind === 'branch') {
+                        consolidationConvertedBranches++;
+                    }
                     draft = removeConvertedHost(branchResult.draft, hostTypeId, hostId, entity.rootId);
                     gridHostIds.delete(hostId);
                     const origin = originKind ?? 'standalone';
@@ -6314,8 +6346,16 @@ export function computeAutoSupportPlan(
                     }
                     continue;
                 }
+                consolidationBlockedHosts.add(hostId);
                 conRefusals[fan.reason] = (conRefusals[fan.reason] ?? 0) + 1;
                 continue;
+            }
+            consolidationBlockedHosts.delete(hostId);
+            if (fan.kind === 'leaf') {
+                if (fan.entityId) consolidationLeafIds.add(fan.entityId);
+                consolidationConvertedLeaves++;
+            } else if (fan.kind === 'branch') {
+                consolidationConvertedBranches++;
             }
             draft = removeConvertedHost(fan.draft, hostTypeId, hostId, entity.rootId);
             gridHostIds.delete(hostId);
@@ -8262,6 +8302,16 @@ export function computeAutoSupportPlan(
         analytics.timings = timings;
     }
     logAutoPlaceTimings(timings);
+
+    analytics.normalSynthesisMetrics = computeNormalSynthesisMetrics(draft, modelId, {
+        mode: normalSynthesisMode,
+        leafCapOrbit,
+        consolidationLeafIds,
+        consolidationCandidates: consolidationAttemptedHosts.size,
+        consolidationConvertedLeaves,
+        consolidationConvertedBranches,
+        consolidationBlockedCount: consolidationBlockedHosts.size,
+    });
 
     const result: AutoPlaceResult = {
         ...makeResult(placed, rejectedCount, changed, 'placed'),

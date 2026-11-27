@@ -314,6 +314,67 @@ export interface CompetitiveBakeoffAnalytics {
     avgWinnerMargin: number;
 }
 
+/** Pre-constraint placement normal synthesis mode (CLI / A/B benchmark). */
+export type PlacementNormalSynthesisMode = 'raw' | 'bisector' | 'crease-lock' | 'macro-smooth';
+
+/** Support kind tracked in normal-synthesis telemetry (twigs excluded). */
+export type NormalSynthesisSupportKind =
+    | 'trunk'
+    | 'branch'
+    | 'leaf'
+    | 'consolidationLeaf'
+    | 'stump'
+    | 'stick';
+
+/** Disk thickness distribution and H3 attribution counters. */
+export interface DiskThicknessDistribution {
+    count: number;
+    minMm: number;
+    p50Mm: number;
+    p90Mm: number;
+    p99Mm: number;
+    maxMm: number;
+    meanMm: number;
+    flushCount: number;
+    angleDrivenCount: number;
+    collisionDrivenCount: number;
+    extendedOver025Count: number;
+    maxClamped035Count: number;
+}
+
+/** Angular deviation between cone axis and surface normal (degrees). */
+export interface AngularDeviationSummary {
+    count: number;
+    p50Deg: number;
+    p90Deg: number;
+    p99Deg: number;
+    maxDeg: number;
+    meanDeg: number;
+}
+
+/** Surface normal lean from downward (-Z) in degrees. */
+export interface SurfaceLeanBuckets {
+    downward0To30Count: number;
+    oblique30To60Count: number;
+    steep60To90Count: number;
+    upwardOver90Count: number;
+}
+
+/** Pre-constraint normal-synthesis telemetry (H1-H4). */
+export interface NormalSynthesisMetrics {
+    mode: PlacementNormalSynthesisMode;
+    leafCapOrbit: boolean;
+    overall: DiskThicknessDistribution;
+    byKind: Record<NormalSynthesisSupportKind, DiskThicknessDistribution>;
+    coneDeviationFromSurfaceDeg: AngularDeviationSummary;
+    surfaceLeanFromDownDeg: SurfaceLeanBuckets;
+    consolidationCandidates: number;
+    consolidationConvertedLeaves: number;
+    consolidationConvertedBranches: number;
+    consolidationBlockedCount: number;
+    capSplit?: Record<string, unknown>;
+}
+
 /** Detailed analytics from an auto-place run. */
 export interface AutoPlaceAnalytics {
     /** Number of islands that had at least one support placed near them. */
@@ -338,6 +399,8 @@ export interface AutoPlaceAnalytics {
     forestReport?: ForestReport;
     /** Where the run's wall-clock time went. Logged as one line per run. */
     timings?: AutoPlaceTimings;
+    /** Pre-constraint normal-synthesis and disk-thickness telemetry (H1-H4). */
+    normalSynthesisMetrics?: NormalSynthesisMetrics;
 }
 
 /**
