@@ -25,7 +25,7 @@ import { quantizeToScale } from '@/utils/math';
  * decimal representation, and the two disagree on exact halfway values.
  */
 const round2Mm = (v: number): number => quantizeToScale(v, 100);
-import type { ContactCone } from '../SupportPrimitives/ContactCone/types';
+import type { ContactCone, LeafCapAnchor } from '../SupportPrimitives/ContactCone/types';
 import type { AttachmentKind, CandidatePoint, AutoPlaceResult, AutoPlaceStatus, AutoPlaceAnalytics, RejectReason, AutoSupportPlan, PlacementDiagnostics, FanLeafRefusal, ForestLedgerEntry, ForestReport, ForestTree, OrphanInfo, PlacementOutcomeKind } from './types';
 import { isLedgerKind } from './types';
 import { computeNormalSynthesisMetrics } from './normalSynthesisTelemetry';
@@ -133,9 +133,14 @@ import { buildLeafData } from '../SupportTypes/Leaf/leafBuilder';
 import { decideGridPlacement } from '../PlacementLogic/Grid/gridPlacement';
 import { calculateRawWorldNormal } from '../PlacementLogic/PlacementUtils';
 import {
+    buildLeafCapAnchor,
+    extractSphericalCapDescriptor,
+    orbitLeafCapAnchorTowardKnot,
+    resolvePlacementNormalAndCap,
     synthesizePlacementNormal,
     type PlacementNormalSynthesisOptions,
     type PlacementNormalSynthesisResult,
+    type SphericalCapDescriptor,
 } from '../PlacementLogic/PlacementNormalSynthesis';
 import { isShaftBlocked } from '../PlacementLogic/CollisionAvoidance';
 import { addTargetedStressBraces, buildAutoBracedSnapshot, BRACE_CANOPY_KEEP_OUT_MM, type StressBraceRequest } from '../autoBracing/autoBrace';
@@ -545,11 +550,26 @@ const _surfaceSynthResult: PlacementNormalSynthesisResult = {
     acceptedSphereTris: 0,
 };
 
+const _surfaceCapDescriptor: SphericalCapDescriptor = {
+    nMean: new THREE.Vector3(),
+    thetaSpreadRad: 0,
+    rimSlackRad: 0,
+    thetaCapRad: 0,
+    coneAngleLimitRad: Math.PI / 4,
+    concavityRatio: 0,
+    isConcave: false,
+    capRadiusMm: 0,
+    downwardTriCount: 0,
+};
+
+const LEAF_CAP_DOWNWARD_NZ_LIMIT = Math.sin(THREE.MathUtils.degToRad(5));
+
 function resolveSurfaceNormal(
     tipPos: CandidatePoint['tipPos'],
     mesh: THREE.Mesh | undefined,
     synthesisOptions?: PlacementNormalSynthesisOptions,
-): { point: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number }; hit: boolean } {
+    capOptions?: { extractCap: boolean; leafRimSlackDeg: number },
+): { point: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number }; hit: boolean; capAnchor?: LeafCapAnchor } {
     if (!mesh) {
         return { point: tipPos, normal: { x: 0, y: 0, z: -1 }, hit: false };
     }
@@ -591,7 +611,24 @@ function resolveSurfaceNormal(
     if (upHit) {
         const raw = calculateRawWorldNormal(upHit);
         let normal = raw;
-        if (synthesisOptions && synthesisOptions.mode !== 'raw') {
+        let capAnchor: LeafCapAnchor | undefined;
+        if (capOptions?.extractCap) {
+            const { synthesis, cap } = resolvePlacementNormalAndCap(
+                mesh,
+                upHit.point,
+                raw,
+                {
+                    ...(synthesisOptions ?? { mode: 'raw', contactRadiusMm: 0.14 }),
+                    leafRimSlackDeg: capOptions.leafRimSlackDeg,
+                },
+                _surfaceSynthResult,
+                _surfaceCapDescriptor,
+            );
+            normal = { x: synthesis.normal.x, y: synthesis.normal.y, z: synthesis.normal.z };
+            if (cap.downwardTriCount > 0) {
+                capAnchor = buildLeafCapAnchor(upHit.point, cap, normal);
+            }
+        } else if (synthesisOptions && synthesisOptions.mode !== 'raw') {
             const synth = synthesizePlacementNormal(mesh, upHit.point, raw, synthesisOptions, _surfaceSynthResult);
             normal = { x: synth.normal.x, y: synth.normal.y, z: synth.normal.z };
         }
@@ -599,6 +636,7 @@ function resolveSurfaceNormal(
             point: { x: upHit.point.x, y: upHit.point.y, z: upHit.point.z },
             normal,
             hit: true,
+            ...(capAnchor ? { capAnchor } : {}),
         };
     }
 
@@ -615,6 +653,7 @@ function resolveSurfaceNormal(
             point: { x: downHit.point.x, y: downHit.point.y, z: downHit.point.z },
             normal: { x: -outward.x, y: -outward.y, z: -outward.z },
             hit: true,
+            capAnchor: undefined,
         };
     }
 
@@ -1618,6 +1657,10 @@ function placeOneCandidate(
 ): { kind: PlacementOutcomeKind; draft: SupportState; rejectedReason?: RejectReason; preset?: 'detail' | 'structure' | 'anchor'; entityId?: string; stickCount?: number; fanRefusal?: FanLeafRefusal; mergeRefusal?: 'noHost' | 'rejected'; cavityFanRefusal?: string; gridFallback?: boolean } {
     const supportSettings = getSettings();
     const auto: Partial<AutoSupportSettings> = autoSettings ?? supportSettings.autoSupport ?? {};
+    const effective = resolveEffectiveAutoNormalSynthesis(auto, {
+        enabled: supportSettings.devToolsEnabled,
+        leafRimSlackDeg: supportSettings.devTools?.leafRimSlackDeg,
+    });
     const gridEnabled = supportSettings.grid?.enabled === true && !ignoreGrid;
     const snapshot = draft;
     let d = draft;
@@ -1903,17 +1946,37 @@ function placeOneCandidate(
                             const cappedTip = candidate.tipDiameterMm !== undefined
                                 ? Math.max(MIN_CONTACT_TIP_DIAMETER_MM, candidate.tipDiameterMm)
                                 : undefined;
+                            const tipContactDia = cappedTip ?? activeSizingBand(auto).tipContactDiameterMm;
+                            let leafSurfaceNormal = tipNormal;
+                            let mergeCapAnchor: LeafCapAnchor | undefined;
+                            if (effective.leafCapOrbit && mesh && tipNormal.z <= LEAF_CAP_DOWNWARD_NZ_LIMIT) {
+                                const cap = extractSphericalCapDescriptor(
+                                    mesh,
+                                    tipPos,
+                                    tipNormal,
+                                    tipContactDia * 0.5,
+                                    effective.leafRimSlackDeg,
+                                    _surfaceCapDescriptor,
+                                );
+                                if (cap.downwardTriCount > 0) {
+                                    mergeCapAnchor = buildLeafCapAnchor(tipPos, cap, tipNormal);
+                                    if (mergeCapAnchor) {
+                                        leafSurfaceNormal = orbitLeafCapAnchorTowardKnot(tipPos, parentKnot.pos, mergeCapAnchor);
+                                    }
+                                }
+                            }
                             const { leaf, supportData: sd } = buildLeafData({
                                 tipPos,
-                                surfaceNormal: tipNormal,
+                                surfaceNormal: leafSurfaceNormal,
                                 modelId: candidate.modelId,
                                 parentKnot,
                                 // Cone body = the HOST shaft, not the knot —
                                 // otherwise the cone's wide base swallows the
                                 // junction ball and the knot stays invisible.
                                 hostDiameterMm: knotDiameter,
-                                tipContactDiameterMm: cappedTip ?? activeSizingBand(auto).tipContactDiameterMm,
+                                tipContactDiameterMm: tipContactDia,
                                 mesh,
+                                ...(mergeCapAnchor ? { capAnchor: mergeCapAnchor } : {}),
                             });
                             if (cappedTip !== undefined) {
                                 leaf.contactCone = applyExplicitTipCapToCone(leaf.contactCone, cappedTip)!;
@@ -2313,7 +2376,7 @@ function placeOneCandidate(
                 // `ignoreGrid`, which leaves `gridEnabled` false inside.
                 const fallback = placeOneCandidate(
                     candidate, draft, autoSettings, gridHostIds, mesh, sizingCtx, true, preResolvedCandidates,
-                    false, cavity,
+                    false, cavity, synthesisOptions,
                 );
                 logPlacement(fallback.kind === 'reject'
                     ? `Grid fallback failed ${candidate.id}: ${fallback.rejectedReason}`
@@ -4096,19 +4159,30 @@ export function fanLeafToHost(
         ? [...rankedCandidates, ...rescue.slice(0, 6)]
         : (rankedCandidates.length > 0 ? rankedCandidates : rescue);
 
+    const appSettings = getSettings();
+    const effective = resolveEffectiveAutoNormalSynthesis(autoSettings ?? appSettings.autoSupport, {
+        enabled: appSettings.devToolsEnabled,
+        leafRimSlackDeg: appSettings.devTools?.leafRimSlackDeg,
+    });
     type ResolvedSurfaceNormal = ReturnType<typeof resolveSurfaceNormal>;
     let cachedSurfaceNormal: ResolvedSurfaceNormal | null = null;
     const getResolvedSurfaceNormal = (): ResolvedSurfaceNormal => {
         if (!cachedSurfaceNormal) {
             const fanSynthesisOpts = buildPlacementNormalSynthesisOptions(
-                resolveEffectiveAutoNormalSynthesis(autoSettings ?? getSettings().autoSupport).mode,
+                effective.mode,
                 fanBand.tipContactDiameterMm,
             );
-            const resolved = resolveSurfaceNormal(target, mesh ?? undefined, fanSynthesisOpts);
+            const resolved = resolveSurfaceNormal(
+                target,
+                mesh ?? undefined,
+                fanSynthesisOpts,
+                { extractCap: effective.leafCapOrbit, leafRimSlackDeg: effective.leafRimSlackDeg },
+            );
             cachedSurfaceNormal = {
                 point: { x: resolved.point.x, y: resolved.point.y, z: resolved.point.z },
                 normal: { x: resolved.normal.x, y: resolved.normal.y, z: resolved.normal.z },
                 hit: resolved.hit,
+                ...(resolved.capAnchor ? { capAnchor: resolved.capAnchor } : {}),
             };
         }
         return cachedSurfaceNormal;
@@ -4142,6 +4216,9 @@ export function fanLeafToHost(
              * tip, because its own collision test runs after it is built.
              */
             const isBranchAttempt = allowBranch && !isBranchHost && spanMm > leafSpanCeilingMm;
+            const leafSurfaceNormal = !isBranchAttempt && effective.leafCapOrbit && resolved.capAnchor
+                ? orbitLeafCapAnchorTowardKnot(resolved.point, sp.pos, resolved.capAnchor)
+                : resolved.normal;
             if (mesh) {
                 const toTip = {
                     x: target.x - sp.pos.x,
@@ -4157,7 +4234,15 @@ export function fanLeafToHost(
                 };
                 const blocked = isBranchAttempt
                     ? isShaftBlocked(sp.pos, shortOfTip, 0.2, mesh)
-                    : contactConeCollides(sp.pos, { pos: target, normal: resolved.normal }, mesh);
+                    : contactConeCollides(
+                        sp.pos,
+                        {
+                            pos: effective.leafCapOrbit && resolved.capAnchor ? resolved.point : target,
+                            surfaceNormal: leafSurfaceNormal,
+                            normal: leafSurfaceNormal,
+                        },
+                        mesh,
+                    );
                 if (blocked) {
                     lastBlockedReason = 'blocked';
                     continue;
@@ -4253,12 +4338,13 @@ export function fanLeafToHost(
             try {
                 const built = buildLeafData({
                     tipPos: { ...resolved.point },
-                    surfaceNormal: { ...resolved.normal },
+                    surfaceNormal: { ...leafSurfaceNormal },
                     modelId,
                     parentKnot,
                     hostDiameterMm: sp.diameter,
                     tipContactDiameterMm: cappedTip ?? activeSizingBand(autoSettings).tipContactDiameterMm,
                     mesh: mesh ?? undefined,
+                    ...(effective.leafCapOrbit && resolved.capAnchor ? { capAnchor: resolved.capAnchor } : {}),
                 });
                 if (built.supportData.error) {
                     lastBlockedReason = 'build';
@@ -5133,12 +5219,16 @@ export function computeAutoSupportPlan(
     const definedOverrides = settingsOverride
         ? Object.fromEntries(Object.entries(settingsOverride).filter(([, v]) => v !== undefined))
         : {};
-    const liveAutoSupport = getSettings().autoSupport;
+    const appSettings = getSettings();
+    const liveAutoSupport = appSettings.autoSupport;
     const autoSettings: AutoSupportSettings = normalizeAutoSupportSettings({
         ...(liveAutoSupport ?? {}),
         ...definedOverrides,
     });
-    const effective = resolveEffectiveAutoNormalSynthesis(autoSettings);
+    const effective = resolveEffectiveAutoNormalSynthesis(autoSettings, {
+        enabled: appSettings.devToolsEnabled,
+        leafRimSlackDeg: appSettings.devTools?.leafRimSlackDeg,
+    });
     const synthesisOpts = buildPlacementNormalSynthesisOptions(
         effective.mode,
         activeSizingBand(autoSettings).tipContactDiameterMm,

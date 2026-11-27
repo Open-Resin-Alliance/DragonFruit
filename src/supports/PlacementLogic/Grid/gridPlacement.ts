@@ -3,6 +3,13 @@ import type { TrunkBuildResult } from '../../SupportTypes/Trunk/trunkBuilder';
 import type { SnappedTrunkRouteResult } from '../../SupportTypes/Trunk/trunkRouteTypes';
 import { buildBranchData } from '../../SupportTypes/Branch/branchBuilder';
 import { getSettings } from '../../Settings/state';
+import { resolveEffectiveAutoNormalSynthesis } from '../../autoSupport/settings';
+import type { LeafCapAnchor } from '../../SupportPrimitives/ContactCone/types';
+import {
+    buildLeafCapAnchor,
+    extractSphericalCapDescriptor,
+    orbitLeafCapAnchorTowardKnot,
+} from '../PlacementNormalSynthesis';
 import {
     getDefaultSnappedValidity,
     getResolvedSnappedNodeKey,
@@ -409,6 +416,38 @@ function getHostDiameterMmFromKnot(knot: Knot, settings: DecideGridPlacementArgs
     return Math.max(0.001, (knot.diameter ?? (settings.shaft.diameterMm + 0.1)) - 0.1);
 }
 
+const LEAF_CAP_DOWNWARD_NZ_LIMIT = Math.sin(THREE.MathUtils.degToRad(5));
+
+function resolveGridLeafCapAnchor(
+    mesh: THREE.Mesh | undefined,
+    tipPos: Vec3,
+    tipNormal: Vec3,
+    settings: DecideGridPlacementArgs['settings'],
+): LeafCapAnchor | undefined {
+    if (!mesh || settings.smoothContactNormals === false || tipNormal.z > LEAF_CAP_DOWNWARD_NZ_LIMIT) {
+        return undefined;
+    }
+    const appSettings = getSettings();
+    const devTools = (settings.devToolsEnabled ?? appSettings.devToolsEnabled) === true
+        ? (settings.devTools ?? appSettings.devTools)
+        : undefined;
+    const effective = resolveEffectiveAutoNormalSynthesis(settings.autoSupport ?? appSettings.autoSupport, {
+        enabled: Boolean(devTools),
+        leafRimSlackDeg: devTools?.leafRimSlackDeg,
+    });
+    if (!effective.leafCapOrbit) {
+        return undefined;
+    }
+    const cap = extractSphericalCapDescriptor(
+        mesh,
+        tipPos,
+        tipNormal,
+        (settings.tip.contactDiameterMm ?? 0.3) * 0.5,
+        effective.leafRimSlackDeg,
+    );
+    return cap.downwardTriCount > 0 ? buildLeafCapAnchor(tipPos, cap, tipNormal) : undefined;
+}
+
 function tryBuildAutoLeafDecision(args: {
     nodeKey: string;
     hostTypeId: SupportTypeId;
@@ -419,8 +458,9 @@ function tryBuildAutoLeafDecision(args: {
     modelId: string;
     settings: DecideGridPlacementArgs['settings'];
     mesh?: THREE.Mesh;
+    getCapAnchor?: () => LeafCapAnchor | undefined;
 }): GridPlacementDecision | null {
-    const { nodeKey, hostTypeId, hostId, knot, tipPos, tipNormal, modelId, settings, mesh } = args;
+    const { nodeKey, hostTypeId, hostId, knot, tipPos, tipNormal, modelId, settings, mesh, getCapAnchor } = args;
     const dx = tipPos.x - knot.pos.x;
     const dy = tipPos.y - knot.pos.y;
     const dz = tipPos.z - knot.pos.z;
@@ -436,14 +476,22 @@ function tryBuildAutoLeafDecision(args: {
     const maxAngleDeg = settings.shaft.maxAngleDeg ?? 80;
     if (angleFromUpDeg > maxAngleDeg) return null;
 
+    const capAnchor = getCapAnchor
+        ? getCapAnchor()
+        : resolveGridLeafCapAnchor(mesh, tipPos, tipNormal, settings);
+    const leafSurfaceNormal = capAnchor
+        ? orbitLeafCapAnchorTowardKnot(tipPos, knot.pos, capAnchor)
+        : tipNormal;
+
     const hostDiameterMm = getHostDiameterMmFromKnot(knot, settings);
     const { leaf, supportData } = buildLeafData({
         tipPos,
-        surfaceNormal: tipNormal,
+        surfaceNormal: leafSurfaceNormal,
         modelId,
         parentKnot: knot,
         hostDiameterMm,
         mesh,
+        ...(capAnchor ? { capAnchor } : {}),
     });
 
     return {
@@ -544,6 +592,15 @@ function selectAttachmentDecision(args: {
     // Iterate segments from top (last) to bottom (first).
     let best: GridPlacementDecision | null = null;
     let bestDepartureDeg = Number.POSITIVE_INFINITY;
+    let cachedCapAnchor: LeafCapAnchor | undefined;
+    let capAnchorResolved = false;
+    const getCapAnchor = (): LeafCapAnchor | undefined => {
+        if (!capAnchorResolved) {
+            capAnchorResolved = true;
+            cachedCapAnchor = resolveGridLeafCapAnchor(mesh, tipPos, tipNormal, settings);
+        }
+        return cachedCapAnchor;
+    };
     for (let segIndex = hostTrunk.segments.length - 1; segIndex >= 0; segIndex--) {
         const segment = hostTrunk.segments[segIndex];
         const endpoints = getTrunkSegmentEndpointsWithSettings(hostTrunk, hostRoot, segIndex, settings);
@@ -626,6 +683,8 @@ function selectAttachmentDecision(args: {
                 tipNormal,
                 modelId,
                 settings,
+                mesh,
+                getCapAnchor,
             });
             if (leafDecision) {
                 const departureDeg = memberDepartureAngleFromVerticalDeg(pos, tipPos);

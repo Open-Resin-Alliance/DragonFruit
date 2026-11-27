@@ -484,10 +484,19 @@ test('computeAutoSupportPlan --normal-synthesis raw matches Arm 0 placement/metr
         assert.ok(planNoopOverride.analytics.normalSynthesisMetrics);
 
         assert.equal(planDefault.analytics.normalSynthesisMetrics.mode, 'bisector');
-        assert.equal(planDefault.analytics.normalSynthesisMetrics.leafCapOrbit, false);
+        assert.equal(planDefault.analytics.normalSynthesisMetrics.leafCapOrbit, true);
+        assert.ok(planDefault.analytics.normalSynthesisMetrics.capSplit);
+        assert.equal(
+            planDefault.analytics.normalSynthesisMetrics.capSplit.flatOrSmooth.count +
+                planDefault.analytics.normalSynthesisMetrics.capSplit.ridgeOrCorner.count,
+            planDefault.analytics.normalSynthesisMetrics.byKind.leaf.count +
+                planDefault.analytics.normalSynthesisMetrics.byKind.consolidationLeaf.count,
+        );
 
         assert.equal(planRaw.analytics.normalSynthesisMetrics.mode, 'raw');
         assert.equal(planRaw.analytics.normalSynthesisMetrics.leafCapOrbit, false);
+        assert.equal(planRaw.analytics.normalSynthesisMetrics.capSplit, undefined);
+        assert.equal('capSplit' in planRaw.analytics.normalSynthesisMetrics, false);
         assert.ok(planRaw.analytics.normalSynthesisMetrics.overall.count > 0);
         assert.equal(
             planRaw.analytics.normalSynthesisMetrics.surfaceLeanFromDownDeg.downward0To30Count,
@@ -497,15 +506,19 @@ test('computeAutoSupportPlan --normal-synthesis raw matches Arm 0 placement/metr
 
         assert.equal(planUiOff.analytics.normalSynthesisMetrics.mode, 'raw');
         assert.equal(planUiOff.analytics.normalSynthesisMetrics.leafCapOrbit, false);
+        assert.equal(planUiOff.analytics.normalSynthesisMetrics.capSplit, undefined);
+        assert.equal('capSplit' in planUiOff.analytics.normalSynthesisMetrics, false);
         assert.deepEqual(planUiOff.result.placed, planRaw.result.placed);
         assert.deepEqual(planUiOff.analytics.normalSynthesisMetrics, planRaw.analytics.normalSynthesisMetrics);
 
         assert.equal(planNoopDefault.analytics.normalSynthesisMetrics.mode, 'bisector');
-        assert.equal(planNoopDefault.analytics.normalSynthesisMetrics.leafCapOrbit, false);
+        assert.equal(planNoopDefault.analytics.normalSynthesisMetrics.leafCapOrbit, true);
+        assert.ok(planNoopDefault.analytics.normalSynthesisMetrics.capSplit);
         assert.equal(planNoopDefault.analytics.normalSynthesisMetrics.overall.count, 0);
 
         assert.equal(planNoopOverride.analytics.normalSynthesisMetrics.mode, 'crease-lock');
         assert.equal(planNoopOverride.analytics.normalSynthesisMetrics.leafCapOrbit, true);
+        assert.ok(planNoopOverride.analytics.normalSynthesisMetrics.capSplit);
         assert.equal(planNoopOverride.analytics.normalSynthesisMetrics.overall.count, 0);
     } finally {
         setSettings(prevSettings);
