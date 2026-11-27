@@ -390,3 +390,64 @@ test('isContactConeBlocked clears cones tangent to their own surface, on flat an
     const ribCone = coneOn(ribbed, RIB_NORMAL, RIB_TIP);
     assert.equal(isContactConeBlocked(ribCone.sdf, ribCone.cone), true);
 });
+
+test('recomputeContactConeForMovedDisk converges uncollided disk-thickness fixpoint within 1e-12 mm for short and steep cones', () => {
+    const cases: Array<{
+        label: string;
+        tipPos: Vec3;
+        fixedSocketPos: Vec3;
+    }> = [
+        // Matches trunkBuildPlateBounds.test.ts:132-149 (3 fixed-point passes left ~4.478e-5 mm residual)
+        {
+            label: 'plate-bounds-case',
+            tipPos: { x: 0, y: 0, z: 5 },
+            fixedSocketPos: { x: 3, y: 0, z: 0.4 },
+        },
+        // Short 0.5 mm perpendicular socket offset (slow contraction regime)
+        {
+            label: 'perp-0.5mm-oblique',
+            tipPos: { x: 0, y: 0, z: 0 },
+            fixedSocketPos: { x: 0.5, y: 0, z: -0.5 },
+        },
+        // Short 0.5 mm 90-degree socket offset at maxStandoff
+        {
+            label: 'perp-0.5mm-90deg',
+            tipPos: { x: 0, y: 0, z: 0 },
+            fixedSocketPos: { x: 0.35, y: 0, z: -0.5 },
+        },
+    ];
+
+    const surfaceNormal: Vec3 = { x: 1, y: 0, z: 0 };
+    for (const c of cases) {
+        const baseCone: ContactCone = {
+            id: `fixpoint-${c.label}`,
+            pos: c.tipPos,
+            normal: { x: 0, y: 0, z: -1 },
+            surfaceNormal,
+            profile: {
+                type: 'disk',
+                contactDiameterMm: 0.2,
+                bodyDiameterMm: 2,
+                lengthMm: 0.5,
+                penetrationMm: 0,
+                diskThicknessMm: 0.1,
+                maxStandoffMm: 0.35,
+                standoffAngleThreshold: Math.PI / 4,
+            },
+        };
+        const recomputed = recomputeContactConeForMovedDisk(
+            baseCone,
+            c.tipPos,
+            surfaceNormal,
+            c.fixedSocketPos,
+        );
+        assert.equal(recomputed.diskLengthOverride, undefined, `${c.label}: diskLengthOverride omitted`);
+        const finalSocket = getFinalSocketPosition(recomputed);
+        const err = Math.hypot(
+            finalSocket.x - c.fixedSocketPos.x,
+            finalSocket.y - c.fixedSocketPos.y,
+            finalSocket.z - c.fixedSocketPos.z,
+        );
+        assert.ok(err < 1e-12, `${c.label}: expected socket error < 1e-12 mm, got ${err}`);
+    }
+});

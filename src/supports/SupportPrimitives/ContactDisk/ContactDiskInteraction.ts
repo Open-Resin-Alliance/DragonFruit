@@ -135,30 +135,84 @@ export function recomputeContactConeForMovedDisk(
     const al = Math.sqrt(ax * ax + ay * ay + az * az);
     ax /= al; ay /= al; az /= al;
 
-    // 3 scalar fixed-point iterations for (uncollidedAxis, uncollidedThickness)
+    // Scalar fixed-point iterations for (uncollidedAxis, uncollidedThickness),
+    // breaking once consecutive thicknesses agree within 1e-13 mm.
     let ux = ax;
     let uy = ay;
     let uz = az;
     let uncollidedThickness = 0;
-    for (let i = 0; i < 3; i++) {
+    const diskProfile = cone.profile.type === 'disk' ? cone.profile : null;
+    if (diskProfile) {
+        const setAxisScratchForOffset = (offset: number): void => {
+            let tx = socketX - (nextContactPos.x + nx * offset);
+            let ty = socketY - (nextContactPos.y + ny * offset);
+            let tz = socketZ - (nextContactPos.z + nz * offset);
+            let tLenSq = tx * tx + ty * ty + tz * tz;
+            if (tLenSq < 0.000001) {
+                tx = ax; ty = ay; tz = az;
+                tLenSq = 1;
+            }
+            const tl = Math.sqrt(tLenSq);
+            _uncollidedAxisScratch.x = tx / tl;
+            _uncollidedAxisScratch.y = ty / tl;
+            _uncollidedAxisScratch.z = tz / tl;
+        };
+
+        let converged = false;
+        for (let i = 0; i < 32; i++) {
+            _uncollidedAxisScratch.x = ux;
+            _uncollidedAxisScratch.y = uy;
+            _uncollidedAxisScratch.z = uz;
+            const nextThickness = calculateDiskThickness(surfaceNormal, _uncollidedAxisScratch, diskProfile);
+            const diff = Math.abs(nextThickness - uncollidedThickness);
+            uncollidedThickness = nextThickness;
+            setAxisScratchForOffset(uncollidedThickness);
+            ux = _uncollidedAxisScratch.x;
+            uy = _uncollidedAxisScratch.y;
+            uz = _uncollidedAxisScratch.z;
+            if (i > 0 && diff <= 1e-13) {
+                converged = true;
+                break;
+            }
+        }
+
+        // Bisection fallback for slow-contracting short oblique cones that do not hit 1e-13 in 32 Picard steps.
+        if (!converged) {
+            _uncollidedAxisScratch.x = -nx;
+            _uncollidedAxisScratch.y = -ny;
+            _uncollidedAxisScratch.z = -nz;
+            let lo = 0;
+            let hi = Math.max(
+                uncollidedThickness,
+                calculateDiskThickness(surfaceNormal, _uncollidedAxisScratch, diskProfile),
+            );
+            setAxisScratchForOffset(lo);
+            const fLo = calculateDiskThickness(surfaceNormal, _uncollidedAxisScratch, diskProfile) - lo;
+            setAxisScratchForOffset(hi);
+            const fHi = calculateDiskThickness(surfaceNormal, _uncollidedAxisScratch, diskProfile) - hi;
+            if (fLo >= 0 && fHi <= 0) {
+                for (let b = 0; b < 52; b++) {
+                    const mid = 0.5 * (lo + hi);
+                    setAxisScratchForOffset(mid);
+                    if (calculateDiskThickness(surfaceNormal, _uncollidedAxisScratch, diskProfile) - mid >= 0) {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                    if (hi - lo <= 1e-15) break;
+                }
+                setAxisScratchForOffset(0.5 * (lo + hi));
+                ux = _uncollidedAxisScratch.x;
+                uy = _uncollidedAxisScratch.y;
+                uz = _uncollidedAxisScratch.z;
+            }
+        }
+
+        // Re-evaluate on the final converged (ux, uy, uz) so uncollidedThickness matches finalAxis within < 1e-15 mm.
         _uncollidedAxisScratch.x = ux;
         _uncollidedAxisScratch.y = uy;
         _uncollidedAxisScratch.z = uz;
-        uncollidedThickness = cone.profile.type === 'disk'
-            ? calculateDiskThickness(surfaceNormal, _uncollidedAxisScratch, cone.profile)
-            : 0;
-        let tx = socketX - (nextContactPos.x + nx * uncollidedThickness);
-        let ty = socketY - (nextContactPos.y + ny * uncollidedThickness);
-        let tz = socketZ - (nextContactPos.z + nz * uncollidedThickness);
-        let tLenSq = tx * tx + ty * ty + tz * tz;
-        if (tLenSq < 0.000001) {
-            tx = ax; ty = ay; tz = az;
-            tLenSq = 1;
-        }
-        const tl = Math.sqrt(tLenSq);
-        ux = tx / tl;
-        uy = ty / tl;
-        uz = tz / tl;
+        uncollidedThickness = calculateDiskThickness(surfaceNormal, _uncollidedAxisScratch, diskProfile);
     }
 
     const socketTarget = new THREE.Vector3(socketX, socketY, socketZ);

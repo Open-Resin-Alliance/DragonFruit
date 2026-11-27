@@ -516,7 +516,7 @@ test('3. contactDiskDragController applies S-A3 (zero deadband + <=15° SLERP cl
     }
 });
 
-test('4. autoPlace resolveSurfaceNormal stays isolated on raw normals in 3C regardless of smoothContactNormals', () => {
+test('4. autoPlace resolveSurfaceNormal synthesizes bisector in 3D when enabled, honors raw overrides, and avoids PlacementUtils.calculateSmoothedNormal', () => {
     const prevSettings = getSettings();
     resetStore();
     resetKickstandsInState();
@@ -545,59 +545,86 @@ test('4. autoPlace resolveSurfaceNormal stays isolated on raw normals in 3C rega
         const defaults = createDefaultSettings();
         setSettings({
             ...defaults,
-            smoothContactNormals: true,
-            normalSynthesisPreset: 'bisector',
+            autoSupport: {
+                ...defaults.autoSupport,
+                smoothContactNormals: true,
+                normalSynthesisPreset: 'bisector',
+            },
         });
         const planSmoothOn = computeAutoSupportPlan(
             islands,
-            'auto-3c-iso',
+            'auto-3d-synth',
             { debugSkipAutoBracing: true },
+            undefined,
+            mesh,
+        );
+
+        const planCliRaw = computeAutoSupportPlan(
+            islands,
+            'auto-3d-synth',
+            { debugSkipAutoBracing: true, normalSynthesisMode: 'raw' },
             undefined,
             mesh,
         );
 
         setSettings({
             ...defaults,
-            smoothContactNormals: false,
-            normalSynthesisPreset: 'bisector',
+            autoSupport: {
+                ...defaults.autoSupport,
+                smoothContactNormals: false,
+                normalSynthesisPreset: 'bisector',
+            },
         });
         const planSmoothOff = computeAutoSupportPlan(
             islands,
-            'auto-3c-iso',
+            'auto-3d-synth',
             { debugSkipAutoBracing: true },
             undefined,
             mesh,
         );
 
-        assert.ok(planSmoothOn && planSmoothOff);
+        assert.ok(planSmoothOn && planCliRaw && planSmoothOff);
         const trunksOn = Object.values(planSmoothOn.support.trunks);
+        const trunksCliRaw = Object.values(planCliRaw.support.trunks);
         const trunksOff = Object.values(planSmoothOff.support.trunks);
         assert.equal(trunksOn.length, 1);
+        assert.equal(trunksCliRaw.length, 1);
         assert.equal(trunksOff.length, 1);
-        assert.deepEqual(
-            trunksOn[0].contactCone?.surfaceNormal,
-            { x: 0, y: 0, z: -1 },
-            'autoPlace must keep raw underside normal (0,0,-1) even when smoothContactNormals=true',
+
+        const expectedBisector = new THREE.Vector3(1, 0, -1).normalize();
+        const bisectorNormal = trunksOn[0].contactCone?.surfaceNormal;
+        assert.ok(bisectorNormal, 'bisector trunk must carry surfaceNormal');
+        assert.ok(
+            angleDeg(bisectorNormal, expectedBisector) < 1e-6,
+            `autoPlace must synthesize 45° edge bisector when smoothContactNormals=true, got (${bisectorNormal.x}, ${bisectorNormal.y}, ${bisectorNormal.z})`,
         );
+
         assert.deepEqual(
-            trunksOn[0].contactCone?.surfaceNormal,
             trunksOff[0].contactCone?.surfaceNormal,
+            { x: 0, y: 0, z: -1 },
+            'autoPlace must return exact raw underside normal (0,0,-1) when autoSupport.smoothContactNormals=false',
         );
         assert.deepEqual(
-            trunksOn[0].contactCone?.normal,
-            trunksOff[0].contactCone?.normal,
+            trunksCliRaw[0].contactCone?.surfaceNormal,
+            { x: 0, y: 0, z: -1 },
+            'autoPlace must return exact raw underside normal (0,0,-1) when settingsOverride.normalSynthesisMode=raw',
         );
 
         const autoPlaceSrc = readFileSync(new URL('../autoSupport/autoPlace.ts', import.meta.url), 'utf8');
         assert.equal(
             /\bcalculateSmoothedNormal\b/.test(autoPlaceSrc),
             false,
-            'autoPlace.ts must not call calculateSmoothedNormal in 3C',
+            'autoPlace.ts must not call PlacementUtils.calculateSmoothedNormal',
         );
         assert.match(
             autoPlaceSrc,
             /\bcalculateRawWorldNormal\b/,
-            'autoPlace.ts resolveSurfaceNormal must use calculateRawWorldNormal in 3C',
+            'autoPlace.ts resolveSurfaceNormal must use calculateRawWorldNormal',
+        );
+        assert.match(
+            autoPlaceSrc,
+            /\bsynthesizePlacementNormal\b/,
+            'autoPlace.ts must use synthesizePlacementNormal directly',
         );
     } finally {
         resetStore();
