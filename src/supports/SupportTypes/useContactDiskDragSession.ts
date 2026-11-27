@@ -14,6 +14,7 @@ import {
 import { setSupportPlacementGuideZ } from '@/components/scene/SceneCanvas/supportPlacementGuideStore';
 import { getSupportTypeDescriptor, type SupportTypeId } from '../supportTypeRegistry';
 import { moveTipLabel } from '@/supports/history/supportHistoryLabels';
+import { hasWarmSDFCache } from '../PlacementLogic/Pathfinding/SDFCachePool';
 import {
     beginConeDrag,
     clearConeDragSession,
@@ -94,6 +95,8 @@ export function useContactDiskDragSession<TPreview>(
     const beforeRef = React.useRef<SupportEditHistorySnapshot | null>(null);
     /** True while this hook owns the live cone session, so teardown clears only its own. */
     const coneDragRef = React.useRef(false);
+    const lastHitRef = React.useRef<ContactDiskDragHit | null>(null);
+    const lastHitSkippedColdMeshRef = React.useRef(false);
     const [, setTick] = React.useState(0);
 
     const handlersRef = React.useRef(handlers);
@@ -104,6 +107,8 @@ export function useContactDiskDragSession<TPreview>(
         sessionRef.current = null;
         previewRef.current = null;
         beforeRef.current = null;
+        lastHitRef.current = null;
+        lastHitSkippedColdMeshRef.current = false;
         // The controller's stop already ran `onEnd`; this is the hard teardown
         // for the case where it did not (no pointer ever released): a tip drag
         // must never leave instances or a hidden cone behind.
@@ -122,6 +127,8 @@ export function useContactDiskDragSession<TPreview>(
     const start = React.useCallback<ContactDiskDragSessionApi<TPreview>['start']>((options) => {
         beforeRef.current = captureSupportEditSnapshot();
         sessionRef.current?.stop();
+        lastHitRef.current = null;
+        lastHitSkippedColdMeshRef.current = false;
 
         const contact = options.contact;
         const coneFast = SUPPORT_INSTANCED_CONE_DRAG
@@ -147,8 +154,11 @@ export function useContactDiskDragSession<TPreview>(
             modelId: options.modelId,
             placementSurface: options.placementSurface,
             onHit: (hit: ContactDiskDragHit) => {
-                const next = handlersRef.current.onHit(hit);
+                const skipColdMesh = hit.mesh !== undefined && !hasWarmSDFCache(hit.mesh);
+                const next = handlersRef.current.onHit(skipColdMesh ? { ...hit, mesh: undefined } : hit);
                 if (next === null) return;
+                lastHitRef.current = hit;
+                lastHitSkippedColdMeshRef.current = skipColdMesh;
                 previewRef.current = next;
                 // The guide line follows the tip: it is the height the contact
                 // is being dragged to, and the line at that height is what tips
@@ -162,7 +172,17 @@ export function useContactDiskDragSession<TPreview>(
                 setTick((t) => t + 1);
             },
             onEnd: () => {
-                const preview = previewRef.current;
+                let preview = previewRef.current;
+                const lastHit = lastHitRef.current;
+                const skippedColdMesh = lastHitSkippedColdMeshRef.current;
+                lastHitRef.current = null;
+                lastHitSkippedColdMeshRef.current = false;
+                if (preview !== null && skippedColdMesh && lastHit !== null) {
+                    const resolved = handlersRef.current.onHit(lastHit);
+                    if (resolved !== null) {
+                        preview = resolved;
+                    }
+                }
                 // Before the commit: the release paint shows the committed cone
                 // through its detail renderer, with the batch emptied.
                 if (coneFast) {
