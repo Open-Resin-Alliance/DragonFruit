@@ -136,6 +136,14 @@ explicit v2 choice is important: Pulp's stock x86 dispatcher otherwise skips
 that native SSE fallback. Other architectures retain Pulp's native dispatcher
 and scalar fallback. Do not enable AVX2 or AVX512 globally in compiler flags;
 the x86-64-v2 build baseline remains unchanged.
+For codegen experiments, compare the same inputs under forced V2, V3, and V4
+in isolated benchmark builds and verify their lane counts before timing.
+`-C target-feature=-slow-unaligned-mem-32` is a separate LLVM tuning experiment,
+not a shipped flag or an ISA upgrade. Its unstable tuning interface and
+generated memory accesses need compiler- and CPU-specific validation. Keep
+baseline, packing, normalization, tuning, and combined arms separate; report
+each scene/printer/preset independently and retain unchanged Raw/Sharp controls.
+Inspect hot-loop placement as well as instructions before crediting a speedup.
 
 Call `Backend::detected()` outside pixel/vector loops and pass the result into
 work chunks. Call `Backend::dispatch` **inside the thread executing that work**,
@@ -170,6 +178,15 @@ partial-access APIs are reserved for incomplete vectors. Reuse row scratch and
 rings, preserving tail handling, cropped support and zero-row emission without
 adding full image buffers or changing pipeline memory/backpressure lifetimes.
 
+`store_u32s_as_u8` narrows already-clamped output through fixed lane arrays on
+four-, eight-, and sixteen-u32 backends. It writes exactly the lane count and
+returns whether those bytes are zero. BOX and both Z blur paths share this
+helper; uncovered dense-Z pixels are selected before packing. No full-frame
+scratch or alignment assumption is added.
+RLE row writers OR the clamped vectors and use `all_zero_u32s` once per row,
+including scalar tails, rather than rescanning the emitted byte row. Dense BOX
+normalization does not compute zero-row status when its caller does not use it.
+
 For Z blur, choose arithmetic once from the checked sum `W` of present-source
 weights. Checked `255 * W + floor(W / 2) <= u32::MAX` proves products, partial
 sums and normalization's rounding bias fit. Unit weights use addition only;
@@ -186,10 +203,20 @@ rounded numerator is at most one below the exact quotient; one remainder
 comparison corrects it. Denominator one is an identity. This is exact for the
 full u32 range, including rounding ties, and works with per-lane denominators
 through `divide_u32s`.
+`divide_u32s_nontrivial` applies the same quotient correction when every
+denominator is known greater than one. Uniform BOX and `U32Divider` select that
+case outside their vector loop; mixed border denominators retain identity
+selection. Do not use the nontrivial helper on unknown or unit divisors.
 
 BOX normalization caches the image-global horizontal denominator plateau and
-reuses it while the vertical count is unchanged. Boundary-vector metadata stays
-on the stack; no denominator matrix or additional image buffer is allocated.
+reuses it while the vertical count is unchanged. Separate left-border,
+uniform-interior, and right-border loops keep border metadata out of the
+interior. Zero minimum alpha selects a specialization without thresholding;
+nonzero thresholds retain the strict comparison. Boundary metadata stays on
+the stack; cropped offsets, tails, and debug overflow behavior are preserved.
+Touched-row BOX carries its zero-alpha policy as a constant through the SIMD
+gate. Dense column tasks specialize alpha handling before their row loop and
+reuse the divisor identity proof with their vertical plateau metadata.
 Z normalization constructs one divider from the weights of sources actually
 present in the layer, then reuses it across rows. Dense Z selects coverage in
 the vector before byte emission, preserving uncovered output pixels. These

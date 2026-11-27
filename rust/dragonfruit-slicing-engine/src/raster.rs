@@ -1334,7 +1334,7 @@ impl<'a> BoxNormalizeDenominators<'a> {
 }
 
 #[inline(always)]
-fn box_normalize_vector<S: pulp::Simd>(
+fn box_normalize_vector_impl<S: pulp::Simd, const APPLY_MIN_ALPHA: bool, const NONTRIVIAL_DIVISOR: bool>(
     simd: S, sum: S::u32s, denominators: (S::u32s, S::u32s, S::u32s), min_alpha: u8,
 ) -> S::u32s {
     let (denominator, multiplier, bias) = denominators;
@@ -1347,24 +1347,35 @@ fn box_normalize_vector<S: pulp::Simd>(
     }
     // Exact multiply-high/remainder correction replaces scalar (sum+d/2)/d;
     // rounding, byte clipping, and the strict min-alpha comparison are unchanged.
-    let raw = pulp_simd::divide_u32s(simd, simd.add_u32s(sum, bias), denominator, multiplier);
+    let rounded = simd.add_u32s(sum, bias);
+    let raw = if NONTRIVIAL_DIVISOR {
+        pulp_simd::divide_u32s_nontrivial(simd, rounded, denominator, multiplier)
+    } else {
+        pulp_simd::divide_u32s(simd, rounded, denominator, multiplier)
+    };
     let value = simd.min_u32s(raw, simd.splat_u32s(255));
-    simd.select_u32s(simd.less_than_u32s(value, simd.splat_u32s(min_alpha as u32)), simd.splat_u32s(0), value)
-}
-
-#[inline(always)]
-fn box_store_vector<S: pulp::Simd>(values: S::u32s, row: &mut [u8]) -> bool {
-    let values = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&values));
-    let mut all_zero = true;
-    for (out, &value) in row.iter_mut().zip(values) {
-        *out = value as u8;
-        all_zero &= value == 0;
+    if APPLY_MIN_ALPHA {
+        simd.select_u32s(simd.less_than_u32s(value, simd.splat_u32s(min_alpha as u32)), simd.splat_u32s(0), value)
+    } else {
+        value
     }
-    all_zero
+}
+
+
+#[inline(always)]
+fn box_normalize_row<S: pulp::Simd, const TRACK_ALL_ZERO: bool>(
+    simd: S, columns: &[u32], denominators: &mut BoxNormalizeDenominators<'_>,
+    v_denom: u32, min_alpha: u8, row: &mut [u8], x_offset: usize,
+) -> bool {
+    if min_alpha == 0 {
+        box_normalize_row_impl::<S, false, TRACK_ALL_ZERO>(simd, columns, denominators, v_denom, min_alpha, row, x_offset)
+    } else {
+        box_normalize_row_impl::<S, true, TRACK_ALL_ZERO>(simd, columns, denominators, v_denom, min_alpha, row, x_offset)
+    }
 }
 
 #[inline(always)]
-fn box_normalize_row<S: pulp::Simd>(
+fn box_normalize_row_impl<S: pulp::Simd, const APPLY_MIN_ALPHA: bool, const TRACK_ALL_ZERO: bool>(
     simd: S, columns: &[u32], denominators: &mut BoxNormalizeDenominators<'_>,
     v_denom: u32, min_alpha: u8, row: &mut [u8], x_offset: usize,
 ) -> bool {
@@ -1372,17 +1383,51 @@ fn box_normalize_row<S: pulp::Simd>(
     let lanes = pulp_simd::u32_lanes::<S>();
     let (vectors, tail) = S::as_simd_u32s(columns);
     let end = vectors.len() * lanes;
-    let mut all_zero = true;
-    for (x, &sum) in vectors.iter().enumerate() {
-        let x = x * lanes;
-        let value = box_normalize_vector(simd, sum, denominators.vectors(simd, x_offset + x), min_alpha);
-        all_zero &= box_store_vector::<S>(value, &mut row[x..x + lanes]);
+    let interior_start = denominators.uniform_start.saturating_sub(x_offset)
+        .div_ceil(lanes).min(vectors.len());
+    let interior_end = (denominators.uniform_end.saturating_sub(x_offset) / lanes)
+        .min(vectors.len()).max(interior_start);
+    let (row_vectors, row_tail) = row.split_at_mut(end);
+    let (row_left, row_rest) = row_vectors.split_at_mut(interior_start * lanes);
+    let (row_interior, row_right) = row_rest.split_at_mut((interior_end - interior_start) * lanes);
+    let mut nonzero = simd.splat_u32s(0);
+    for (index, (&sum, dst)) in vectors[..interior_start].iter().zip(row_left.chunks_exact_mut(lanes)).enumerate() {
+        let value = box_normalize_vector_impl::<S, APPLY_MIN_ALPHA, false>(
+            simd, sum, denominators.vectors(simd, x_offset + index * lanes), min_alpha);
+        pulp_simd::store_u32s_as_u8::<S>(value, dst);
+        if TRACK_ALL_ZERO { nonzero = simd.or_u32s(nonzero, value); }
     }
-    for (lane, (&sum, out)) in tail.iter().zip(&mut row[end..]).enumerate() {
+    let uniform = (
+        simd.splat_u32s(denominators.uniform.denominator),
+        simd.splat_u32s(denominators.uniform.multiplier),
+        simd.splat_u32s(denominators.uniform.denominator / 2),
+    );
+    if denominators.uniform.denominator == 1 {
+        for (&sum, dst) in vectors[interior_start..interior_end].iter().zip(row_interior.chunks_exact_mut(lanes)) {
+            let value = box_normalize_vector_impl::<S, APPLY_MIN_ALPHA, false>(simd, sum, uniform, min_alpha);
+            pulp_simd::store_u32s_as_u8::<S>(value, dst);
+            if TRACK_ALL_ZERO { nonzero = simd.or_u32s(nonzero, value); }
+        }
+    } else {
+        for (&sum, dst) in vectors[interior_start..interior_end].iter().zip(row_interior.chunks_exact_mut(lanes)) {
+            let value = box_normalize_vector_impl::<S, APPLY_MIN_ALPHA, true>(simd, sum, uniform, min_alpha);
+            pulp_simd::store_u32s_as_u8::<S>(value, dst);
+            if TRACK_ALL_ZERO { nonzero = simd.or_u32s(nonzero, value); }
+        }
+    }
+    for (index, (&sum, dst)) in vectors[interior_end..].iter().zip(row_right.chunks_exact_mut(lanes)).enumerate() {
+        let x = (interior_end + index) * lanes;
+        let value = box_normalize_vector_impl::<S, APPLY_MIN_ALPHA, false>(
+            simd, sum, denominators.vectors(simd, x_offset + x), min_alpha);
+        pulp_simd::store_u32s_as_u8::<S>(value, dst);
+        if TRACK_ALL_ZERO { nonzero = simd.or_u32s(nonzero, value); }
+    }
+    let mut all_zero = !TRACK_ALL_ZERO || pulp_simd::all_zero_u32s::<S>(nonzero);
+    for (lane, (&sum, out)) in tail.iter().zip(row_tail).enumerate() {
         let divider = denominators.divider(x_offset + end + lane);
         let value = divider.divide(sum + divider.denominator / 2).min(255) as u8;
-        *out = if value < min_alpha { 0 } else { value };
-        all_zero &= *out == 0;
+        *out = if APPLY_MIN_ALPHA && value < min_alpha { 0 } else { value };
+        if TRACK_ALL_ZERO { all_zero &= *out == 0; }
     }
     all_zero
 }
@@ -1448,7 +1493,7 @@ fn box_sequential_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool>(
             let dst_y = roi_min_y + out_row;
             let dst_row_start = dst_y * width + roi_min_x;
             let row_out = &mut mask[dst_row_start..dst_row_start + roi_w];
-            box_normalize_row(simd, &col_sums, &mut denominators, v_denom[out_row], min_alpha_u8, row_out, 0);
+            box_normalize_row::<S, false>(simd, &col_sums, &mut denominators, v_denom[out_row], min_alpha_u8, row_out, 0);
 
             if out_row >= radius {
                 let evict_start = ring_head * roi_w;
@@ -1477,46 +1522,65 @@ struct BoxVerticalColumns<'a> {
     v_denom: &'a [u32],
 }
 
+#[inline(always)]
+fn box_vertical_columns_simd<S: pulp::Simd, const APPLY_MIN_ALPHA: bool>(
+    operation: &BoxVerticalColumns<'_>, simd: S, denominators: &mut BoxNormalizeDenominators<'_>,
+) -> usize {
+    let lanes = pulp_simd::u32_lanes::<S>();
+    let mut x = operation.x_start;
+    while operation.radius <= 127 && x + lanes <= operation.x_end {
+        let mut sum = simd.splat_u32s(0);
+        for y in 0..=operation.radius.min(operation.roi_h - 1) {
+            sum = simd.add_u32s(sum, pulp_simd::load_u16_as_u32(simd, &operation.hpass[y * operation.roi_w + x..]));
+        }
+        let mut vertical = 0;
+        let mut metadata = (simd.splat_u32s(1), simd.splat_u32s(0), simd.splat_u32s(0));
+        let mut nontrivial = false;
+        for y in 0..operation.roi_h {
+            if vertical != operation.v_denom[y] {
+                vertical = operation.v_denom[y];
+                denominators.set_vertical(vertical);
+                let local_x = x - operation.x_start;
+                metadata = denominators.vectors(simd, local_x);
+                nontrivial = local_x >= denominators.uniform_start
+                    && local_x + lanes <= denominators.uniform_end
+                    && denominators.uniform.denominator > 1;
+            }
+            let value = if nontrivial {
+                box_normalize_vector_impl::<S, APPLY_MIN_ALPHA, true>(simd, sum, metadata, operation.min_alpha)
+            } else {
+                box_normalize_vector_impl::<S, APPLY_MIN_ALPHA, false>(simd, sum, metadata, operation.min_alpha)
+            };
+            // Each task owns disjoint columns; the horizontal pass is read-only.
+            let row = unsafe {
+                std::slice::from_raw_parts_mut((operation.mask_ptr as *mut u8)
+                    .add((operation.roi_min_y + y) * operation.width + operation.roi_min_x + x), lanes)
+            };
+            pulp_simd::store_u32s_as_u8::<S>(value, row);
+            let bot = y + operation.radius + 1;
+            if bot < operation.roi_h {
+                sum = simd.add_u32s(sum, pulp_simd::load_u16_as_u32(simd, &operation.hpass[bot * operation.roi_w + x..]));
+            }
+            if y >= operation.radius {
+                sum = simd.sub_u32s(sum, pulp_simd::load_u16_as_u32(simd, &operation.hpass[(y - operation.radius) * operation.roi_w + x..]));
+            }
+        }
+        x += lanes;
+    }
+    x
+}
+
 impl pulp::WithSimd for BoxVerticalColumns<'_> {
     type Output = ();
 
     #[inline(always)]
     fn with_simd<S: pulp::Simd>(self, simd: S) {
-        let lanes = pulp_simd::u32_lanes::<S>();
         let mut denominators = BoxNormalizeDenominators::new(&self.h_denom[self.x_start..self.x_end]);
-        let mut x = self.x_start;
-        while self.radius <= 127 && x + lanes <= self.x_end {
-            let mut sum = simd.splat_u32s(0);
-            for y in 0..=self.radius.min(self.roi_h - 1) {
-                sum = simd.add_u32s(sum, pulp_simd::load_u16_as_u32(simd, &self.hpass[y * self.roi_w + x..]));
-            }
-            let mut vertical = 0;
-            let mut metadata = (simd.splat_u32s(1), simd.splat_u32s(0), simd.splat_u32s(0));
-            for y in 0..self.roi_h {
-                if vertical != self.v_denom[y] {
-                    vertical = self.v_denom[y];
-                    denominators.set_vertical(vertical);
-                    // Reuse the complete tile's divisors down the vertical
-                    // plateau, including horizontal image-border lanes.
-                    metadata = denominators.vectors(simd, x - self.x_start);
-                }
-                let value = box_normalize_vector(simd, sum, metadata, self.min_alpha);
-                // Each task owns a disjoint column block; H-pass is read-only.
-                let row = unsafe {
-                    std::slice::from_raw_parts_mut((self.mask_ptr as *mut u8)
-                        .add((self.roi_min_y + y) * self.width + self.roi_min_x + x), lanes)
-                };
-                box_store_vector::<S>(value, row);
-                let bot = y + self.radius + 1;
-                if bot < self.roi_h {
-                    sum = simd.add_u32s(sum, pulp_simd::load_u16_as_u32(simd, &self.hpass[bot * self.roi_w + x..]));
-                }
-                if y >= self.radius {
-                    sum = simd.sub_u32s(sum, pulp_simd::load_u16_as_u32(simd, &self.hpass[(y - self.radius) * self.roi_w + x..]));
-                }
-            }
-            x += lanes;
-        }
+        let x = if self.min_alpha == 0 {
+            box_vertical_columns_simd::<S, false>(&self, simd, &mut denominators)
+        } else {
+            box_vertical_columns_simd::<S, true>(&self, simd, &mut denominators)
+        };
         for x in x..self.x_end {
             let mut sum = 0u32;
             for y in 0..=self.radius.min(self.roi_h - 1) {
@@ -4612,10 +4676,17 @@ fn box_rle_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool, const TOUCHED_
             // Denominators are still image-global; the slice offset must also
             // offset the SIMD boundary metadata and scalar-tail dividers.
             let row = &mut emit_buf[emit_start..emit_end];
-            let all_zero = box_normalize_row(
-                simd, &col_sums[emit_start..emit_end], &mut denominators,
-                v_denom_val, min_alpha_u8, row, emit_start,
-            );
+            let all_zero = if TOUCHED_ROWS {
+                box_normalize_row_impl::<S, false, true>(
+                    simd, &col_sums[emit_start..emit_end], &mut denominators,
+                    v_denom_val, 0, row, emit_start,
+                )
+            } else {
+                box_normalize_row::<S, true>(
+                    simd, &col_sums[emit_start..emit_end], &mut denominators,
+                    v_denom_val, min_alpha_u8, row, emit_start,
+                )
+            };
 
             if all_zero {
                 emit_zero_rows(&mut out_rle, 1, width);
@@ -6751,5 +6822,49 @@ mod tests {
         assert_eq!(super::blur_radius_px(1), 1);
         assert_eq!(super::blur_radius_px(4), 4);
         assert_eq!(super::blur_radius_px(64), 64);
+    }
+
+    #[test]
+    fn box_normalization_cropped_uniform_and_border_ranges_match_integer_reference() {
+        struct Check;
+        impl pulp::WithSimd for Check {
+            type Output = ();
+            fn with_simd<S: pulp::Simd>(self, simd: S) {
+                for width in [1usize, 2, 5, 17, 65, 257] {
+                    for radius in [0usize, 1, 4] {
+                        let horizontal: Vec<_> = (0..width).map(|x| {
+                            (1 + radius.min(x) + radius.min(width - 1 - x)) as u32
+                        }).collect();
+                        for offset in [0, width / 2, width - 1] {
+                            for count in [0, 1, width - offset] {
+                                for vertical in [1, 3, 9] {
+                                    for alpha in [0u8, 64, 255] {
+                                        let columns: Vec<_> = (0..count).map(|x| {
+                                            let d = horizontal[offset + x] * vertical;
+                                            ((x * 47 + offset * 13) % 300) as u32 * d
+                                        }).collect();
+                                        let expected: Vec<_> = columns.iter().enumerate().map(|(x, &sum)| {
+                                            let d = horizontal[offset + x] * vertical;
+                                            let value = ((sum + d / 2) / d).min(255) as u8;
+                                            if value < alpha { 0 } else { value }
+                                        }).collect();
+                                        let mut actual = vec![0xA5; count + 2];
+                                        let mut denominators = super::BoxNormalizeDenominators::new(&horizontal);
+                                        let zero = super::box_normalize_row::<S, true>(
+                                            simd, &columns, &mut denominators, vertical, alpha,
+                                            &mut actual[1..=count], offset,
+                                        );
+                                        assert_eq!(&actual[1..=count], expected.as_slice());
+                                        assert_eq!((actual[0], actual[count + 1]), (0xA5, 0xA5));
+                                        assert_eq!(zero, expected.iter().all(|&x| x == 0));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for backend in crate::pulp_simd::Backend::supported_for_tests() { backend.dispatch(Check); }
     }
 }

@@ -137,6 +137,43 @@ pub(crate) fn load_u16_as_u32<S: Simd>(_simd: S, src: &[u16]) -> S::u32s {
 }
 
 #[inline(always)]
+pub(crate) fn all_zero_u32s<S: Simd>(values: S::u32s) -> bool {
+    pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&values))
+        .iter()
+        .all(|&value| value == 0)
+}
+
+/// Store one complete vector of already-clamped byte values.
+#[inline(always)]
+pub(crate) fn store_u32s_as_u8<S: Simd>(values: S::u32s, dst: &mut [u8]) -> bool {
+    let dst = &mut dst[..S::U32_LANES];
+    if S::U32_LANES == 4 {
+        let values: [u32; 4] = pulp::bytemuck::cast(values);
+        let bytes = values.map(|value| value as u8);
+        dst.copy_from_slice(&bytes);
+        bytes.iter().all(|&value| value == 0)
+    } else if S::U32_LANES == 8 {
+        let values: [u32; 8] = pulp::bytemuck::cast(values);
+        let bytes = values.map(|value| value as u8);
+        dst.copy_from_slice(&bytes);
+        bytes.iter().all(|&value| value == 0)
+    } else if S::U32_LANES == 16 {
+        let values: [u32; 16] = pulp::bytemuck::cast(values);
+        let bytes = values.map(|value| value as u8);
+        dst.copy_from_slice(&bytes);
+        bytes.iter().all(|&value| value == 0)
+    } else {
+        let values = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&values));
+        let mut all_zero = true;
+        for (dst, &value) in dst.iter_mut().zip(values) {
+            *dst = value as u8;
+            all_zero &= value == 0;
+        }
+        all_zero
+    }
+}
+
+#[inline(always)]
 pub(crate) fn sat_add_u32<S: Simd>(simd: S, a: S::u32s, b: S::u32s) -> S::u32s {
     let sum = simd.add_u32s(a, b);
     simd.select_u32s(simd.less_than_u32s(sum, a), simd.splat_u32s(u32::MAX), sum)
@@ -183,7 +220,7 @@ impl U32Divider {
     #[inline(always)]
     pub(crate) fn divide_simd<S: Simd>(self, simd: S, numerator: S::u32s) -> S::u32s {
         if self.denominator == 1 { return numerator; }
-        divide_u32s(simd, numerator, simd.splat_u32s(self.denominator), simd.splat_u32s(self.multiplier))
+        divide_u32s_nontrivial(simd, numerator, simd.splat_u32s(self.denominator), simd.splat_u32s(self.multiplier))
     }
 }
 
@@ -197,13 +234,20 @@ pub(crate) fn divide_u32s<S: Simd>(
     // below it for every u32 numerator. Thus q*d cannot overflow, and this
     // integer correction preserves exact ties in (sum + d/2)/d. d=1 uses
     // multiplier=0 and is selected separately (2^32 does not fit in u32).
+    let corrected = divide_u32s_nontrivial(simd, numerator, denominator, multiplier);
+    simd.select_u32s(simd.equal_u32s(denominator, simd.splat_u32s(1)), numerator, corrected)
+}
+
+#[inline(always)]
+pub(crate) fn divide_u32s_nontrivial<S: Simd>(
+    simd: S, numerator: S::u32s, denominator: S::u32s, multiplier: S::u32s,
+) -> S::u32s {
     let (_, quotient) = simd.widening_mul_u32s(numerator, multiplier);
     let remainder = simd.sub_u32s(numerator, simd.mul_u32s(quotient, denominator));
-    let corrected = simd.select_u32s(
+    simd.select_u32s(
         simd.less_than_u32s(remainder, denominator), quotient,
         simd.add_u32s(quotient, simd.splat_u32s(1)),
-    );
-    simd.select_u32s(simd.equal_u32s(denominator, simd.splat_u32s(1)), numerator, corrected)
+    )
 }
 
 /// Gaussian emission needs only min(n/d, 255), not a full 64-bit quotient.
@@ -329,6 +373,51 @@ pub(crate) fn widening_mul_u32_to_u64<S: Simd>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packed_byte_stores_preserve_values_guards_and_zero_result() {
+        struct Check;
+        impl WithSimd for Check {
+            type Output = ();
+            fn with_simd<S: Simd>(self, simd: S) {
+                let count = u32_lanes::<S>();
+                let values = [0u32, 255, 1, 254, 127, 128, 2, 253,
+                    0, 255, 63, 192, 3, 252, 129, 126];
+                for offset in 0..values.len() {
+                    let input: [u32; 16] = std::array::from_fn(|i| values[(i + offset) % values.len()]);
+                    let mut dst = [0xa5; 18];
+                    let all_zero = store_u32s_as_u8::<S>(simd.partial_load_u32s(&input[..count]), &mut dst[1..]);
+                    let expected = input.map(|value| value as u8);
+                    assert_eq!(&dst[1..1 + count], &expected[..count]);
+                    assert_eq!(all_zero, input[..count].iter().all(|&value| value == 0));
+                    assert_eq!(dst[0], 0xa5);
+                    assert!(dst[1 + count..].iter().all(|&value| value == 0xa5));
+                }
+                assert!(all_zero_u32s::<S>(simd.splat_u32s(0)));
+                for lane in 0..count {
+                    for value in [1, 255, 256, 1 << 31, u32::MAX] {
+                        let mut input = [0u32; 16];
+                        input[lane] = value;
+                        assert!(!all_zero_u32s::<S>(simd.partial_load_u32s(&input[..count])));
+                    }
+                    let mut input = [0u32; 16];
+                    input[lane] = 255;
+                    let mut dst = [0xa5; 18];
+                    assert!(!store_u32s_as_u8::<S>(simd.partial_load_u32s(&input[..count]), &mut dst[1..]));
+                    let expected = input.map(|value| value as u8);
+                    assert_eq!(&dst[1..1 + count], &expected[..count]);
+                    assert_eq!(dst[0], 0xa5);
+                    assert!(dst[1 + count..].iter().all(|&value| value == 0xa5));
+                }
+                let mut dst = [0xa5; 18];
+                assert!(store_u32s_as_u8::<S>(simd.splat_u32s(0), &mut dst[1..]));
+                assert!(dst[1..1 + count].iter().all(|&value| value == 0));
+                assert_eq!(dst[0], 0xa5);
+                assert!(dst[1 + count..].iter().all(|&value| value == 0xa5));
+            }
+        }
+        for backend in Backend::supported_for_tests() { backend.dispatch(Check); }
+    }
 
     #[test]
     fn integer_dividers_preserve_quotient_boundaries_and_lane_order() {

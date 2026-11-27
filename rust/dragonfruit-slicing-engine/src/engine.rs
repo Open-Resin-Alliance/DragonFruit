@@ -11,7 +11,7 @@ use crate::geometry::{parse_triangles, project_triangles_inplace};
 use crate::index::build_layer_index;
 use crate::metrics::{add_elapsed, EncodeStageCounters, SlicingPerfV3};
 use crate::pipeline::{render_layers_bounded, render_layers_rle, render_layers_rle_encoded};
-use crate::pulp_simd::{load_u8_as_u32, sat_add_u32, sat_mul_u32, u32_lanes, Backend, U32Divider};
+use crate::pulp_simd::{all_zero_u32s, load_u8_as_u32, sat_add_u32, sat_mul_u32, store_u32s_as_u8, u32_lanes, Backend, U32Divider};
 use crate::raster::{
     apply_blur_postprocess_inplace_with_roi, blur_gray_rle_streaming,
     blur_gray_rle_streaming_3daa_with_bounds, downsample_binary_rle_to_gray_rle,
@@ -520,9 +520,10 @@ fn blur_z_rle_row<S: pulp::Simd, const UNIT_WEIGHT: bool, const BOUNDED_WEIGHT: 
     source_rows: &[Vec<u8>],
     divider: U32Divider,
     out_row: &mut [u8],
-) {
+) -> bool {
     let lanes = u32_lanes::<S>();
     let vector_end = out_row.len() - out_row.len() % lanes;
+    let mut nonzero = simd.splat_u32s(0);
     for x in (0..vector_end).step_by(lanes) {
         let mut accum = simd.splat_u32s(0);
         for ((weight, _, _), row) in sources.iter().zip(source_rows.iter()) {
@@ -530,11 +531,10 @@ fn blur_z_rle_row<S: pulp::Simd, const UNIT_WEIGHT: bool, const BOUNDED_WEIGHT: 
             accum = accumulate_z_blur::<S, UNIT_WEIGHT, BOUNDED_WEIGHT>(simd, accum, values, *weight);
         }
         let values = normalize_z_blur::<S, BOUNDED_WEIGHT>(simd, accum, divider);
-        let values = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&values));
-        for (dst, &value) in out_row[x..x + lanes].iter_mut().zip(values) {
-            *dst = value as u8;
-        }
+        nonzero = simd.or_u32s(nonzero, values);
+        store_u32s_as_u8::<S>(values, &mut out_row[x..x + lanes]);
     }
+    let mut all_zero = all_zero_u32s::<S>(nonzero);
     for x in vector_end..out_row.len() {
         let mut accum = 0u32;
         for ((weight, _, _), row) in sources.iter().zip(source_rows.iter()) {
@@ -548,7 +548,9 @@ fn blur_z_rle_row<S: pulp::Simd, const UNIT_WEIGHT: bool, const BOUNDED_WEIGHT: 
             }
         }
         out_row[x] = divider.divide(accum + divider.denominator / 2).min(255) as u8;
+        all_zero &= out_row[x] == 0;
     }
+    all_zero
 }
 
 struct RleZBlur<'a> {
@@ -680,15 +682,15 @@ fn apply_z_weighted_blur_to_rle_layer_with_simd<S: pulp::Simd>(
             decoder.decode_next_row_span(width, roi_min_x, row);
         }
 
-        if unit_weights {
-            blur_z_rle_row::<S, true, true>(simd, &sources, &source_rows, divider, &mut out_row);
+        let all_zero = if unit_weights {
+            blur_z_rle_row::<S, true, true>(simd, &sources, &source_rows, divider, &mut out_row)
         } else if bounded_weights {
-            blur_z_rle_row::<S, false, true>(simd, &sources, &source_rows, divider, &mut out_row);
+            blur_z_rle_row::<S, false, true>(simd, &sources, &source_rows, divider, &mut out_row)
         } else {
-            blur_z_rle_row::<S, false, false>(simd, &sources, &source_rows, divider, &mut out_row);
-        }
+            blur_z_rle_row::<S, false, false>(simd, &sources, &source_rows, divider, &mut out_row)
+        };
 
-        if out_row.iter().all(|&value| value == 0) {
+        if all_zero {
             emit_zero_rows(&mut out, 1, width);
         } else {
             if left_zeros > 0 {
@@ -1476,10 +1478,7 @@ fn finalize_z_dense_row<S: pulp::Simd, const BOUNDED_WEIGHT: bool>(
         // Preserve uncovered pixels with a vector selection, rather than
         // extracting each sum, branching on coverage and reinserting a quotient.
         let values = simd.select_u32s(simd.equal_u32s(hits, simd.splat_u32s(0)), previous, values);
-        let values = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&values));
-        for (dst, &value) in out_row[x..x + lanes].iter_mut().zip(values) {
-            *dst = value as u8;
-        }
+        store_u32s_as_u8::<S>(values, &mut out_row[x..x + lanes]);
     }
     for ((dst, &sum), &hit) in out_row[vector_end..].iter_mut().zip(tail).zip(&coverage[vector_end..]) {
         if hit != 0 {
