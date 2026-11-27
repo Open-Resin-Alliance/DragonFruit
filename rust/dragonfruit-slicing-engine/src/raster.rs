@@ -1808,18 +1808,32 @@ fn weighted_blur_axis_denom(index: usize, max_index: usize, radius: usize, weigh
     denom.max(1)
 }
 
-struct GaussianHorizontalRow<'a> {
+fn gaussian_weight_sum(weights: &[u32]) -> u128 {
+    weights[0] as u128 + 2 * weights[1..].iter().map(|&weight| weight as u128).sum::<u128>()
+}
+
+struct GaussianHorizontalRow<'a, const SATURATING: bool> {
     source: &'a [u8],
     output: &'a mut [u32],
     roi_min_x: usize,
     weights: &'a [u32],
 }
 
-impl pulp::WithSimd for GaussianHorizontalRow<'_> {
+impl<const SATURATING: bool> pulp::WithSimd for GaussianHorizontalRow<'_, SATURATING> {
     type Output = ();
 
     #[inline(always)]
     fn with_simd<S: pulp::Simd>(self, simd: S) {
+        let mul = |values: S::u32s, weight: S::u32s| if SATURATING {
+            pulp_simd::sat_mul_u32(simd, values, weight)
+        } else {
+            simd.mul_u32s(values, weight)
+        };
+        let add = |left: S::u32s, right: S::u32s| if SATURATING {
+            pulp_simd::sat_add_u32(simd, left, right)
+        } else {
+            simd.add_u32s(left, right)
+        };
         let radius = self.weights.len() - 1;
         let lanes = pulp_simd::u32_lanes::<S>();
         let mut local_x = 0;
@@ -1828,16 +1842,15 @@ impl pulp::WithSimd for GaussianHorizontalRow<'_> {
             if x >= radius && local_x + lanes <= self.output.len()
                 && x + lanes <= self.source.len().saturating_sub(radius)
             {
-                let mut sum = pulp_simd::sat_mul_u32(simd,
-                    pulp_simd::load_u8_as_u32(simd, &self.source[x..]), simd.splat_u32s(self.weights[0]));
+                let mut sum = mul(pulp_simd::load_u8_as_u32(simd, &self.source[x..]), simd.splat_u32s(self.weights[0]));
                 for dist in 1..=radius {
                     let weight = simd.splat_u32s(self.weights[dist]);
-                    let left = pulp_simd::sat_mul_u32(simd, pulp_simd::load_u8_as_u32(simd, &self.source[x - dist..]), weight);
-                    let right = pulp_simd::sat_mul_u32(simd, pulp_simd::load_u8_as_u32(simd, &self.source[x + dist..]), weight);
-                    sum = pulp_simd::sat_add_u32(simd, pulp_simd::sat_add_u32(simd, sum, left), right);
+                    let left = mul(pulp_simd::load_u8_as_u32(simd, &self.source[x - dist..]), weight);
+                    let right = mul(pulp_simd::load_u8_as_u32(simd, &self.source[x + dist..]), weight);
+                    sum = add(add(sum, left), right);
                 }
-                // All terms are nonnegative: saturating each u32 term/add is
-                // identical to the original u64 sum followed by the u32 clamp.
+                // Nonnegative terms: plain and saturating u32 arithmetic agree
+                // whenever the dispatch-time bound keeps the sum in range.
                 S::as_mut_simd_u32s(&mut self.output[local_x..local_x + lanes]).0[0] = sum;
                 local_x += lanes;
             } else {
@@ -1861,7 +1874,7 @@ impl pulp::WithSimd for GaussianHorizontalRow<'_> {
 }
 
 #[inline(always)]
-fn gaussian_normalize_vector<S: pulp::Simd>(
+fn gaussian_normalize_vector<S: pulp::Simd, const APPLY_MIN_ALPHA: bool>(
     simd: S, sum: S::u64s, x_denoms: &[u64], y_denom: u64,
     uniform: Option<pulp_simd::U64ByteDivider>, min_alpha: u8, output: &mut [u8],
 ) {
@@ -1891,14 +1904,15 @@ fn gaussian_normalize_vector<S: pulp::Simd>(
         }
         pulp_simd::divide_u64s_to_u8(simd, simd.add_u64s(sum, bias), denominator)
     };
-    let value = simd.select_u64s(simd.less_than_u64s(value, simd.splat_u64s(min_alpha as u64)), simd.splat_u64s(0), value);
-    let values = pulp::bytemuck::cast_slice::<S::u64s, u64>(std::slice::from_ref(&value));
-    for (out, &value) in output.iter_mut().zip(values) {
-        *out = value as u8;
-    }
+    let value = if APPLY_MIN_ALPHA {
+        simd.select_u64s(simd.less_than_u64s(value, simd.splat_u64s(min_alpha as u64)), simd.splat_u64s(0), value)
+    } else {
+        value
+    };
+    pulp_simd::store_u64s_as_u8::<S>(value, output);
 }
 
-struct GaussianVerticalRow<'a> {
+struct GaussianVerticalRow<'a, const APPLY_MIN_ALPHA: bool> {
     ring: &'a std::collections::VecDeque<(usize, Vec<u32>)>,
     output: &'a mut [u8],
     out_y: usize,
@@ -1911,7 +1925,7 @@ struct GaussianVerticalRow<'a> {
     min_alpha: u8,
 }
 
-impl pulp::WithSimd for GaussianVerticalRow<'_> {
+impl<const APPLY_MIN_ALPHA: bool> pulp::WithSimd for GaussianVerticalRow<'_, APPLY_MIN_ALPHA> {
     type Output = ();
 
     #[inline(always)]
@@ -1933,12 +1947,12 @@ impl pulp::WithSimd for GaussianVerticalRow<'_> {
             }
             let uniform_lo = (x >= self.uniform_start && x + wide_lanes <= self.uniform_end)
                 .then_some(self.uniform_divider);
-            gaussian_normalize_vector(simd, lo, &self.x_denoms[x..], self.y_denom,
+            gaussian_normalize_vector::<S, APPLY_MIN_ALPHA>(simd, lo, &self.x_denoms[x..], self.y_denom,
                 uniform_lo, self.min_alpha, &mut self.output[x..x + wide_lanes]);
             let high_x = x + wide_lanes;
             let uniform_hi = (high_x >= self.uniform_start && x + lanes <= self.uniform_end)
                 .then_some(self.uniform_divider);
-            gaussian_normalize_vector(simd, hi, &self.x_denoms[high_x..], self.y_denom,
+            gaussian_normalize_vector::<S, APPLY_MIN_ALPHA>(simd, hi, &self.x_denoms[high_x..], self.y_denom,
                 uniform_hi, self.min_alpha, &mut self.output[high_x..x + lanes]);
         }
         for x in end..self.output.len() {
@@ -1955,7 +1969,197 @@ impl pulp::WithSimd for GaussianVerticalRow<'_> {
                 pulp_simd::U64ByteDivider::new(self.x_denoms[x].saturating_mul(self.y_denom).max(1))
             };
             let blurred = divider.divide(sum + divider.denominator / 2);
-            self.output[x] = if blurred < self.min_alpha { 0 } else { blurred };
+            self.output[x] = if APPLY_MIN_ALPHA && blurred < self.min_alpha { 0 } else { blurred };
+        }
+    }
+}
+
+struct GaussianVerticalRow32<'a, const APPLY_MIN_ALPHA: bool> {
+    ring: &'a std::collections::VecDeque<(usize, Vec<u32>)>,
+    output: &'a mut [u8],
+    out_y: usize,
+    weights: &'a [u32],
+    x_denoms: &'a [u32],
+    y_denom: u32,
+    uniform_start: usize,
+    uniform_end: usize,
+    uniform_divider: pulp_simd::U32Divider,
+    min_alpha: u8,
+}
+
+impl<const APPLY_MIN_ALPHA: bool> pulp::WithSimd for GaussianVerticalRow32<'_, APPLY_MIN_ALPHA> {
+    type Output = ();
+
+    #[inline(always)]
+    fn with_simd<S: pulp::Simd>(self, simd: S) {
+        // Callers select this row only when the widest numerator and its
+        // rounding bias fit u32, so the whole pass stays at full lane width.
+        let lanes = pulp_simd::u32_lanes::<S>();
+        let end = if lanes == 1 { 0 } else { self.output.len() / lanes * lanes };
+        let bias = simd.splat_u32s(self.uniform_divider.denominator / 2);
+        for x in (0..end).step_by(lanes) {
+            let mut sum = simd.splat_u32s(0);
+            for (row_y, row) in self.ring {
+                let dist = row_y.abs_diff(self.out_y);
+                if dist < self.weights.len() {
+                    sum = simd.add_u32s(sum, simd.mul_u32s(
+                        S::as_simd_u32s(&row[x..x + lanes]).0[0],
+                        simd.splat_u32s(self.weights[dist])));
+                }
+            }
+            let values = if x >= self.uniform_start && x + lanes <= self.uniform_end {
+                let value = self.uniform_divider.divide_simd(simd, simd.add_u32s(sum, bias));
+                let value = simd.min_u32s(value, simd.splat_u32s(255));
+                if APPLY_MIN_ALPHA {
+                    simd.select_u32s(
+                        simd.less_than_u32s(value, simd.splat_u32s(self.min_alpha as u32)),
+                        simd.splat_u32s(0), value)
+                } else {
+                    value
+                }
+            } else {
+                let mut values = simd.splat_u32s(0);
+                let dst = pulp::bytemuck::cast_slice_mut::<S::u32s, u32>(std::slice::from_mut(&mut values));
+                let sums = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&sum));
+                for (lane, (dst, &sum)) in dst.iter_mut().zip(sums).enumerate() {
+                    let denominator = self.x_denoms[x + lane] * self.y_denom;
+                    let value = pulp_simd::U32Divider::new(denominator).divide(sum + denominator / 2).min(255);
+                    *dst = if APPLY_MIN_ALPHA && value < self.min_alpha as u32 { 0 } else { value };
+                }
+                values
+            };
+            pulp_simd::store_u32s_as_u8::<S>(values, &mut self.output[x..x + lanes]);
+        }
+        for x in end..self.output.len() {
+            let mut sum = 0u32;
+            for (row_y, row) in self.ring {
+                let dist = row_y.abs_diff(self.out_y);
+                if dist < self.weights.len() {
+                    sum += self.weights[dist] * row[x];
+                }
+            }
+            let denominator = self.x_denoms[x] * self.y_denom;
+            let value = pulp_simd::U32Divider::new(denominator).divide(sum + denominator / 2).min(255) as u8;
+            self.output[x] = if APPLY_MIN_ALPHA && value < self.min_alpha { 0 } else { value };
+        }
+    }
+}
+
+#[inline(always)]
+fn gaussian_accumulate_wide<S: pulp::Simd>(
+    simd: S, lo: S::u32s, hi: S::u32s, values: S::u32s, weight: S::u32s,
+) -> (S::u32s, S::u32s) {
+    let (product_lo, product_hi) = simd.widening_mul_u32s(values, weight);
+    let sum = simd.add_u32s(lo, product_lo);
+    let carry = simd.select_u32s(
+        simd.less_than_u32s(sum, product_lo), simd.splat_u32s(1), simd.splat_u32s(0));
+    (sum, simd.add_u32s(hi, simd.add_u32s(product_hi, carry)))
+}
+
+/// Eight restoring steps give min(floor(n / d), 255) for a 64-bit numerator
+/// held in two u32 vectors. Callers bound n below 256 * d.
+#[inline(always)]
+fn gaussian_divide_wide<S: pulp::Simd>(
+    simd: S, mut lo: S::u32s, mut hi: S::u32s,
+    bit_lo: &[S::u32s; 8], bit_hi: &[S::u32s; 8],
+) -> S::u32s {
+    let mut quotient = simd.splat_u32s(0);
+    for bit in (0..8).rev() {
+        let hi_gt = simd.greater_than_u32s(hi, bit_hi[bit]);
+        let hi_eq = simd.equal_u32s(hi, bit_hi[bit]);
+        let lo_ge = simd.greater_than_or_equal_u32s(lo, bit_lo[bit]);
+        let take = simd.or_m32s(hi_gt, simd.and_m32s(hi_eq, lo_ge));
+        let borrow = simd.select_u32s(
+            simd.less_than_u32s(lo, bit_lo[bit]), simd.splat_u32s(1), simd.splat_u32s(0));
+        let subtracted_lo = simd.sub_u32s(lo, bit_lo[bit]);
+        let subtracted_hi = simd.sub_u32s(simd.sub_u32s(hi, bit_hi[bit]), borrow);
+        lo = simd.select_u32s(take, subtracted_lo, lo);
+        hi = simd.select_u32s(take, subtracted_hi, hi);
+        quotient = simd.select_u32s(
+            take, simd.add_u32s(quotient, simd.splat_u32s(1 << bit)), quotient);
+    }
+    quotient
+}
+
+struct GaussianVerticalRowWide<'a, const APPLY_MIN_ALPHA: bool> {
+    ring: &'a std::collections::VecDeque<(usize, Vec<u32>)>,
+    output: &'a mut [u8],
+    out_y: usize,
+    weights: &'a [u32],
+    x_denoms: &'a [u32],
+    y_denom: u32,
+    uniform_start: usize,
+    uniform_end: usize,
+    min_alpha: u8,
+}
+
+impl<const APPLY_MIN_ALPHA: bool> pulp::WithSimd for GaussianVerticalRowWide<'_, APPLY_MIN_ALPHA> {
+    type Output = ();
+
+    #[inline(always)]
+    fn with_simd<S: pulp::Simd>(self, simd: S) {
+        // The denominator fits u32 while the numerator does not, so keep the
+        // 64-bit numerator in two full-width u32 vectors.
+        let lanes = pulp_simd::u32_lanes::<S>();
+        let end = if lanes == 1 { 0 } else { self.output.len() / lanes * lanes };
+        let denominator = self.x_denoms[self.uniform_start] * self.y_denom;
+        let bias = simd.splat_u32s(denominator / 2);
+        let mut bit_lo = [simd.splat_u32s(0); 8];
+        let mut bit_hi = [simd.splat_u32s(0); 8];
+        for bit in 0..8 {
+            let scaled = u64::from(denominator) << bit;
+            bit_lo[bit] = simd.splat_u32s(scaled as u32);
+            bit_hi[bit] = simd.splat_u32s((scaled >> 32) as u32);
+        }
+        for x in (0..end).step_by(lanes) {
+            let mut lo = simd.splat_u32s(0);
+            let mut hi = simd.splat_u32s(0);
+            for (row_y, row) in self.ring {
+                let dist = row_y.abs_diff(self.out_y);
+                if dist < self.weights.len() {
+                    (lo, hi) = gaussian_accumulate_wide(
+                        simd, lo, hi, S::as_simd_u32s(&row[x..x + lanes]).0[0],
+                        simd.splat_u32s(self.weights[dist]));
+                }
+            }
+            let values = if x >= self.uniform_start && x + lanes <= self.uniform_end {
+                let sum = simd.add_u32s(lo, bias);
+                let carry = simd.select_u32s(
+                    simd.less_than_u32s(sum, bias), simd.splat_u32s(1), simd.splat_u32s(0));
+                let value = gaussian_divide_wide(
+                    simd, sum, simd.add_u32s(hi, carry), &bit_lo, &bit_hi);
+                if APPLY_MIN_ALPHA {
+                    simd.select_u32s(
+                        simd.less_than_u32s(value, simd.splat_u32s(self.min_alpha as u32)),
+                        simd.splat_u32s(0), value)
+                } else {
+                    value
+                }
+            } else {
+                let lo = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&lo));
+                let hi = pulp::bytemuck::cast_slice::<S::u32s, u32>(std::slice::from_ref(&hi));
+                let mut values = [0u32; 16];
+                for (lane, value) in values[..lanes].iter_mut().enumerate() {
+                    let denominator = u64::from(self.x_denoms[x + lane] * self.y_denom);
+                    let numerator = (u64::from(hi[lane]) << 32) | u64::from(lo[lane]);
+                    let quotient = ((numerator + denominator / 2) / denominator).min(255) as u32;
+                    *value = if APPLY_MIN_ALPHA && quotient < self.min_alpha as u32 { 0 } else { quotient };
+                }
+                simd.partial_load_u32s(&values[..lanes])
+            };
+            pulp_simd::store_u32s_as_u8::<S>(values, &mut self.output[x..x + lanes]);
+        }
+        for x in end..self.output.len() {
+            let mut numerator = 0u64;
+            for (row_y, row) in self.ring {
+                let dist = row_y.abs_diff(self.out_y);
+                if dist < self.weights.len() {
+                    numerator += u64::from(row[x]) * u64::from(self.weights[dist]);
+                }
+            }
+            let denominator = u64::from(self.x_denoms[x] * self.y_denom);
+            let value = ((numerator + denominator / 2) / denominator).min(255) as u8;
+            self.output[x] = if APPLY_MIN_ALPHA && value < self.min_alpha { 0 } else { value };
         }
     }
 }
@@ -2007,6 +2211,17 @@ fn apply_edge_gaussian_blur_to_mask_in_roi_with_backend(
 
     let weights_x = gaussian_blur_weights(radius, sigma_x);
     let weights_y = gaussian_blur_weights(radius, sigma_y);
+    let weight_sum_x = gaussian_weight_sum(&weights_x);
+    let weight_sum_y = gaussian_weight_sum(&weights_y);
+    // Horizontal sums peak at 255 * Wx; the widest vertical numerator is
+    // 255 * Wx * Wy, and rounding adds at most half a denominator.
+    let horizontal_saturating = 255 * weight_sum_x > u32::MAX as u128;
+    let widest_denominator = weight_sum_x * weight_sum_y;
+    let use_u32 = 255 * widest_denominator + widest_denominator / 2 <= u32::MAX as u128;
+    let use_wide = !use_u32
+        && widest_denominator <= u32::MAX as u128
+        && !horizontal_saturating;
+    let use_32_bit_denoms = use_u32 || use_wide;
     let roi_w = roi_max_x - roi_min_x + 1;
     let roi_h = roi_max_y - roi_min_y + 1;
     let x_denoms: Vec<u64> = (roi_min_x..=roi_max_x)
@@ -2015,29 +2230,43 @@ fn apply_edge_gaussian_blur_to_mask_in_roi_with_backend(
     let y_denoms: Vec<u64> = (roi_min_y..=roi_max_y)
         .map(|y| weighted_blur_axis_denom(y, height - 1, radius, &weights_y))
         .collect();
+    let x_denoms32 = use_32_bit_denoms.then(|| x_denoms.iter().map(|&denom| denom as u32).collect::<Vec<_>>());
+    let y_denoms32 = use_32_bit_denoms.then(|| y_denoms.iter().map(|&denom| denom as u32).collect::<Vec<_>>());
     let largest_x_denom = *x_denoms.iter().max().unwrap();
     let uniform_start = x_denoms.iter().position(|&d| d == largest_x_denom).unwrap();
     let uniform_end = uniform_start + x_denoms[uniform_start..].iter()
         .take_while(|&&d| d == largest_x_denom).count();
     let mut last_y_denom = 0;
     let mut uniform_divider = pulp_simd::U64ByteDivider::new(1);
+    let mut uniform_divider32 = pulp_simd::U32Divider::new(1);
 
-    let source = mask.to_vec();
     let mut out = vec![0u8; mask.len()];
     let mut ring: std::collections::VecDeque<(usize, Vec<u32>)> =
         std::collections::VecDeque::with_capacity(radius.saturating_mul(2).saturating_add(1));
+    let mut recycled: Option<Vec<u32>> = None;
 
     for add_row in 0..roi_h + radius {
         if add_row < roi_h {
             let y = roi_min_y + add_row;
             let row_start = y * width;
-            let mut hrow = vec![0u32; roi_w];
-            backend.dispatch(GaussianHorizontalRow {
-                source: &source[row_start..row_start + width],
-                output: &mut hrow,
-                roi_min_x,
-                weights: &weights_x,
-            });
+            // The horizontal pass writes every scratch element, so a recycled
+            // row needs no clearing.
+            let mut hrow = recycled.take().unwrap_or_else(|| vec![0u32; roi_w]);
+            if horizontal_saturating {
+                backend.dispatch(GaussianHorizontalRow::<true> {
+                    source: &mask[row_start..row_start + width],
+                    output: &mut hrow,
+                    roi_min_x,
+                    weights: &weights_x,
+                });
+            } else {
+                backend.dispatch(GaussianHorizontalRow::<false> {
+                    source: &mask[row_start..row_start + width],
+                    output: &mut hrow,
+                    roi_min_x,
+                    weights: &weights_x,
+                });
+            }
             ring.push_back((y, hrow));
         }
 
@@ -2048,24 +2277,60 @@ fn apply_edge_gaussian_blur_to_mask_in_roi_with_backend(
                 last_y_denom = y_denom;
                 // Reuse the global horizontal/vertical plateau denominator
                 // across pixels and rows, retaining cropped-edge attenuation.
-                uniform_divider = pulp_simd::U64ByteDivider::new(largest_x_denom.saturating_mul(y_denom).max(1));
+                let denominator = largest_x_denom.saturating_mul(y_denom).max(1);
+                if use_u32 {
+                    uniform_divider32 = pulp_simd::U32Divider::new(denominator as u32);
+                } else if !use_wide {
+                    uniform_divider = pulp_simd::U64ByteDivider::new(denominator);
+                }
             }
             let row_start = out_y * width;
-            backend.dispatch(GaussianVerticalRow {
-                ring: &ring,
-                output: &mut out[row_start + roi_min_x..row_start + roi_min_x + roi_w],
-                out_y,
-                weights: &weights_y,
-                x_denoms: &x_denoms,
-                y_denom,
-                uniform_start,
-                uniform_end,
-                uniform_divider,
-                min_alpha: min_alpha_u8,
-            });
+            let output = &mut out[row_start + roi_min_x..row_start + roi_min_x + roi_w];
+            if let (Some(x_denoms32), Some(y_denoms32)) = (x_denoms32.as_ref(), y_denoms32.as_ref()) {
+                let y_denom = y_denoms32[out_y - roi_min_y];
+                if use_u32 {
+                    if min_alpha_u8 == 0 {
+                        backend.dispatch(GaussianVerticalRow32::<false> {
+                            ring: &ring, output, out_y, weights: &weights_y,
+                            x_denoms: x_denoms32, y_denom, uniform_start, uniform_end,
+                            uniform_divider: uniform_divider32, min_alpha: min_alpha_u8,
+                        });
+                    } else {
+                        backend.dispatch(GaussianVerticalRow32::<true> {
+                            ring: &ring, output, out_y, weights: &weights_y,
+                            x_denoms: x_denoms32, y_denom, uniform_start, uniform_end,
+                            uniform_divider: uniform_divider32, min_alpha: min_alpha_u8,
+                        });
+                    }
+                } else if min_alpha_u8 == 0 {
+                    backend.dispatch(GaussianVerticalRowWide::<false> {
+                        ring: &ring, output, out_y, weights: &weights_y,
+                        x_denoms: x_denoms32, y_denom, uniform_start, uniform_end,
+                        min_alpha: min_alpha_u8,
+                    });
+                } else {
+                    backend.dispatch(GaussianVerticalRowWide::<true> {
+                        ring: &ring, output, out_y, weights: &weights_y,
+                        x_denoms: x_denoms32, y_denom, uniform_start, uniform_end,
+                        min_alpha: min_alpha_u8,
+                    });
+                }
+            } else if min_alpha_u8 == 0 {
+                backend.dispatch(GaussianVerticalRow::<false> {
+                    ring: &ring, output, out_y, weights: &weights_y,
+                    x_denoms: &x_denoms, y_denom, uniform_start, uniform_end,
+                    uniform_divider, min_alpha: min_alpha_u8,
+                });
+            } else {
+                backend.dispatch(GaussianVerticalRow::<true> {
+                    ring: &ring, output, out_y, weights: &weights_y,
+                    x_denoms: &x_denoms, y_denom, uniform_start, uniform_end,
+                    uniform_divider, min_alpha: min_alpha_u8,
+                });
+            }
 
             if out_y >= radius {
-                ring.pop_front();
+                recycled = ring.pop_front().map(|(_, row)| row);
             }
         }
     }
@@ -6378,6 +6643,9 @@ mod tests {
             (1, 5, 3, 0.01, 1.1, (0, 0, 0, 4)),
             (3, 2, 4, 1.5, 0.3, (0, 2, 0, 1)),
             (37, 7, 2, 1.25, 1.8, (3, 35, 0, 5)),
+            // Sigma-wide kernels exceed the u32 numerator while their
+            // denominator still fits, exercising the split wide path.
+            (37, 7, 4, 3.0, 3.0, (3, 35, 0, 5)),
             (73, 9, 3, 2.4, 0.7, (1, 67, 0, 8)),
             // Oversized radii leave only image-border denominators, including
             // varying-denominator vectors and an odd scalar tail.
@@ -6431,6 +6699,38 @@ mod tests {
     }
 
     #[test]
+    fn gaussian_full_intensity_stays_exact_inside_the_u32_bound() {
+        let (width, height, radius) = (23, 7, 4);
+        let weights = super::gaussian_blur_weights(radius, 1.5);
+        let widest = super::gaussian_weight_sum(&weights);
+        assert!(255 * widest * widest + widest * widest / 2 <= u32::MAX as u128);
+        for backend in crate::pulp_simd::Backend::supported_for_tests() {
+            let mut actual = vec![255; width * height];
+            super::apply_edge_gaussian_blur_to_mask_in_roi_with_backend(
+                &mut actual, width, height, radius, 1.5, 1.5, 0, 0, width - 1, 0, height - 1, backend,
+            );
+            assert!(actual.iter().all(|&value| value == 255), "{backend:?}");
+        }
+    }
+
+    #[test]
+    fn gaussian_full_intensity_stays_exact_inside_the_wide_bound() {
+        let (width, height, radius) = (23, 7, 4);
+        let weights = super::gaussian_blur_weights(radius, 3.0);
+        let widest = super::gaussian_weight_sum(&weights);
+        assert!(255 * widest * widest + widest * widest / 2 > u32::MAX as u128);
+        assert!(widest * widest <= u32::MAX as u128);
+        assert!(255 * widest <= u32::MAX as u128);
+        for backend in crate::pulp_simd::Backend::supported_for_tests() {
+            let mut actual = vec![255; width * height];
+            super::apply_edge_gaussian_blur_to_mask_in_roi_with_backend(
+                &mut actual, width, height, radius, 3.0, 3.0, 0, 0, width - 1, 0, height - 1, backend,
+            );
+            assert!(actual.iter().all(|&value| value == 255), "{backend:?}");
+        }
+    }
+
+    #[test]
     fn gaussian_emission_preserves_saturation_large_denominators_and_alpha_ties() {
         let weight = u32::MAX;
         let weights = [weight, weight];
@@ -6454,7 +6754,7 @@ mod tests {
                     }).collect();
                     for backend in crate::pulp_simd::Backend::supported_for_tests() {
                         let mut actual = vec![0; width];
-                        backend.dispatch(super::GaussianVerticalRow {
+                        backend.dispatch(super::GaussianVerticalRow::<true> {
                             ring: &ring, output: &mut actual, out_y: 1, weights: &weights,
                             x_denoms: &x_denoms, y_denom: 1, uniform_start: 0,
                             uniform_end: if uniform { width } else { 1 },

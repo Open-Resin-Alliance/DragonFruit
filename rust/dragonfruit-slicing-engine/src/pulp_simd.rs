@@ -174,6 +174,26 @@ pub(crate) fn store_u32s_as_u8<S: Simd>(values: S::u32s, dst: &mut [u8]) -> bool
 }
 
 #[inline(always)]
+pub(crate) fn store_u64s_as_u8<S: Simd>(values: S::u64s, dst: &mut [u8]) {
+    let dst = &mut dst[..S::U64_LANES];
+    if S::U64_LANES == 2 {
+        let values: [u64; 2] = pulp::bytemuck::cast(values);
+        dst.copy_from_slice(&values.map(|value| value as u8));
+    } else if S::U64_LANES == 4 {
+        let values: [u64; 4] = pulp::bytemuck::cast(values);
+        dst.copy_from_slice(&values.map(|value| value as u8));
+    } else if S::U64_LANES == 8 {
+        let values: [u64; 8] = pulp::bytemuck::cast(values);
+        dst.copy_from_slice(&values.map(|value| value as u8));
+    } else {
+        let values = pulp::bytemuck::cast_slice::<S::u64s, u64>(std::slice::from_ref(&values));
+        for (dst, &value) in dst.iter_mut().zip(values) {
+            *dst = value as u8;
+        }
+    }
+}
+
+#[inline(always)]
 pub(crate) fn sat_add_u32<S: Simd>(simd: S, a: S::u32s, b: S::u32s) -> S::u32s {
     let sum = simd.add_u32s(a, b);
     simd.select_u32s(simd.less_than_u32s(sum, a), simd.splat_u32s(u32::MAX), sum)
@@ -414,6 +434,17 @@ mod tests {
                 assert!(dst[1..1 + count].iter().all(|&value| value == 0));
                 assert_eq!(dst[0], 0xa5);
                 assert!(dst[1 + count..].iter().all(|&value| value == 0xa5));
+                let count64 = u64_lanes::<S>();
+                let values64 = [0u64, 255, 1, 254, 127, 128, 2, 253];
+                for offset in 0..values64.len() {
+                    let input: [u64; 8] = std::array::from_fn(|i| values64[(i + offset) % values64.len()]);
+                    let mut dst = [0xa5; 10];
+                    store_u64s_as_u8::<S>(simd.partial_load_u64s(&input[..count64]), &mut dst[1..]);
+                    let expected = input.map(|value| value as u8);
+                    assert_eq!(&dst[1..1 + count64], &expected[..count64]);
+                    assert_eq!(dst[0], 0xa5);
+                    assert!(dst[1 + count64..].iter().all(|&value| value == 0xa5));
+                }
             }
         }
         for backend in Backend::supported_for_tests() { backend.dispatch(Check); }

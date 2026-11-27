@@ -182,10 +182,18 @@ adding full image buffers or changing pipeline memory/backpressure lifetimes.
 four-, eight-, and sixteen-u32 backends. It writes exactly the lane count and
 returns whether those bytes are zero. BOX and both Z blur paths share this
 helper; uncovered dense-Z pixels are selected before packing. No full-frame
-scratch or alignment assumption is added.
+scratch or alignment assumption is added. `store_u64s_as_u8` does the same for
+the Gaussian 64-bit quotient.
 RLE row writers OR the clamped vectors and use `all_zero_u32s` once per row,
 including scalar tails, rather than rescanning the emitted byte row. Dense BOX
 normalization does not compute zero-row status when its caller does not use it.
+
+Gaussian XY selects a full-width u32 row when
+`255 * Wx * Wy + floor(Wx * Wy / 2) <= u32::MAX` proves every weighted sum and
+its rounding bias fit. When only the numerator exceeds u32, a split row keeps
+it in two u32 vectors and divides through eight exact restoring steps;
+denominators wider than u32 keep the 64-bit row. All three compute the same
+integer quotient, and the min-alpha floor is chosen once at dispatch.
 
 For Z blur, choose arithmetic once from the checked sum `W` of present-source
 weights. Checked `255 * W + floor(W / 2) <= u32::MAX` proves products, partial
