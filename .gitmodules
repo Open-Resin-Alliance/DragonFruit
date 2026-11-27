@@ -26,3 +26,6 @@
 	path = plugins/lumen
 	url = https://github.com/Open-Resin-Alliance/LumenFormat.git
 	branch = main
+[submodule "plugins/freecure"]
+	path = plugins/freecure
+	url = https://gitlab.com/ailife8881/df-plugin-freecure.git
