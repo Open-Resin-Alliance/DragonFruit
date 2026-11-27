@@ -126,15 +126,15 @@ the mesh grown again on the next save. The renderer refines a copy it draws inst
 loaders still refined stores that refined mesh, and is read as it stores it.
 
 **The repair passes run on the native mesh store.** `stage_mesh_binary_set` and the
-`*_read_positions` commands share one process-wide buffer, so a stage/read window is
+commands that read staging share one process-wide buffer, so a stage/read window is
 only meaningful while nothing else stages. The VOXL import builds four models
 concurrently, and a model whose stored classification does not address its payload runs
 `classifyFromGeometry` inside its own build; two of those interleaved and each read back
 the other's soup, which rendered as one model's geometry standing in another's place.
 Classify, analyze, both path repairs, the path load, hollowing, hole punching, the organic
-cut and the island and overhang scans now put their mesh into the native mesh store and name
+cut, the island and overhang scans and the three surfacing modes now put their mesh into the native mesh store and name
 it by id, so concurrent passes each read their own (`dev/native-mesh-store.md`). The families
-still on the buffer (shrink-wrap, slicing) keep the hazard until they move.
+still on the buffer (slicing) keep the hazard until they move.
 
 ## What DFMX deliberately drops
 

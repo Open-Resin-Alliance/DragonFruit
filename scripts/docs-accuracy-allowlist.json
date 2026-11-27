@@ -103,7 +103,9 @@
             "mesh_hollow_apply",
             "_read_cavity_positions",
             "mesh_hollow_preview_capture_staged_source",
-            "hollowPreviewFromCapturedSource"
+            "hollowPreviewFromCapturedSource",
+            "mesh_repair_read_positions",
+            "_read_positions"
       ],
       "paths": [
             "src/supports/generatedSupportRegistrations.ts",
@@ -127,7 +129,7 @@
             "tauri test mocks": "mockIPC is exported by @tauri-apps/api/mocks; docs/dev/dom-tests.md names it as the way a DOM test fakes the native bridge, and no test uses it yet.",
             "schematic names": "registerX/subscribeX/getX* and the Gadget* family are invented stand-ins in walkthroughs (registration-seams.md, state-and-stores.md, support-type-extension.md), not real symbols.",
             "external symbols": "n_coords and n_indices are fields of the third-party LYS mesh format, cited by docs/dev/lys-mesh-extraction-spec.md. n_indices previously matched by coincidence inside pure_down_indices() in the retired dragonfruit-astar crate, which is why its removal exposed the gap; version_comparator is a tauri-plugin-updater API.",
-            "removed with the native mesh store": "withStagedMesh was the queue in src/utils/meshRepair.ts that serialised the repair passes on the staging register. ADR-0048 names it because the record IS its removal: the store made the queue unnecessary for the family it covered. The hollow preview's capture-and-read-back commands (mesh_hollow_preview_capture_staged_source, hollowPreviewFromCapturedSource and the _read_cavity_positions family, which ADR-0029 abbreviates as mesh_hollow_preview / mesh_hollow_apply) went when hollowing moved to store sessions. ADR-0029 records the transport it chose and its supersession note says what replaced it, and the two docs/dev/backlog.md entries are measurements of those commands, so rewriting them to today's names would misstate what was decided and measured.",
+            "removed with the native mesh store": "withStagedMesh was the queue in src/utils/meshRepair.ts that serialised the repair passes on the staging register. ADR-0048 names it because the record IS its removal: the store made the queue unnecessary for the family it covered. The hollow preview's capture-and-read-back commands (mesh_hollow_preview_capture_staged_source, hollowPreviewFromCapturedSource and the _read_cavity_positions family, which ADR-0029 abbreviates as mesh_hollow_preview / mesh_hollow_apply) went when hollowing moved to store sessions. ADR-0029 records the transport it chose and its supersession note says what replaced it, and the two docs/dev/backlog.md entries are measurements of those commands, so rewriting them to today's names would misstate what was decided and measured. mesh_repair_read_positions read the register back after a repair or a surfacing run and went when the surfacing modes moved to the store; ADR-0048 cites it as the transport it replaced, ADR-0029 abbreviates the family as _read_positions, and docs/dev/native-mesh-store.md names it to record that it is gone.",
             "deliberately removed": "kerf_mm is named in organic-cut-surface-redesign.md precisely to record that it is gone. satisfiesMinAngleFromHorizontal was the flat angle test in the grid attach path and auto-supports.md names it to record that the length-aware allowance replaced it.",
             "aspirational": "page-tsx-refactor-handoff.md is a refactor plan; its symbols name extractions not yet made. packageManager is a package.json key npm has not adopted here.",
             "generated at build time": "the paths are produced by scripts/generate-plugin-registry.mjs (generatedBuiltinSimplePlugins.ts by scripts/generate-builtin-simple-plugins.mjs) and are gitignored (**/generated*), so they are absent from a clean checkout, which is what CI checks.",

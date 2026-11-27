@@ -69,19 +69,6 @@ export function expandGeometryToTriangleSoup(geometry: THREE.BufferGeometry): Fl
   return soup;
 }
 
-/** Upload a geometry to the shared Rust staging buffer as a binary triangle soup. */
-export async function stageGeometryToStagedMesh(
-  invoke: TauriInvoke,
-  geometry: THREE.BufferGeometry,
-): Promise<void> {
-  const soup = expandGeometryToTriangleSoup(geometry);
-  const bytes = new Uint8Array(soup.buffer, soup.byteOffset, soup.byteLength);
-
-  await invoke('stage_mesh_binary_set', bytes, {
-    headers: { 'Content-Type': 'application/octet-stream' },
-  });
-}
-
 /**
  * Decode raw little-endian f32 bytes returned over IPC. `label` names the source
  * in the error message. The bytes are copied into an aligned buffer so the
@@ -102,18 +89,6 @@ export function decodeF32(bytes: ArrayBuffer | Uint8Array | number[], label: str
   const copy = new Uint8Array(u8.byteLength);
   copy.set(u8);
   return new Float32Array(copy.buffer);
-}
-
-/** Commands that return a raw little-endian f32 position payload. */
-export type MeshPositionReadCommand = 'mesh_repair_read_positions';
-
-/** Invoke a position-reading command and decode its f32 payload. */
-export async function readPositionsFromCommand(
-  invoke: TauriInvoke,
-  command: MeshPositionReadCommand,
-): Promise<Float32Array> {
-  const bytes = await invoke<ArrayBuffer | Uint8Array | number[]>(command);
-  return decodeF32(bytes, command);
 }
 
 /**
@@ -160,28 +135,33 @@ export interface ShrinkWrapProgress {
   index: number;
 }
 
+/** A surfacing report with the id of the stored result, which the caller collects. */
+export type StoredSurfacingReport<R> = R & { meshId: string };
+
 /**
- * Resample the staged mesh into a closed one and return the report.
+ * Resample the stored mesh `meshId` into a closed one and return the report.
  *
  * The command rebuilds the surface from a signed distance field, so the result
- * has no relation to the input beyond its shape — every triangle is new. It
- * replaces the staging buffer, so read the result back with
- * `mesh_repair_read_positions`.
+ * has no relation to the input beyond its shape — every triangle is new. The
+ * result goes into the store for the input's owner and its id comes back as
+ * `meshId`; the input stays for the caller to drop.
  *
  * When `progressToken` is given, the engine announces each phase on the
  * `mesh-shrinkwrap-progress` event carrying that token, and the same token can be
  * passed to `mesh_repair_cancel` to stop the run at a phase boundary.
  */
-export async function shrinkwrapStagedMesh(
+export async function shrinkwrapStoredMesh(
   invoke: TauriInvoke,
+  meshId: string,
   options: ShrinkWrapOptions,
   progressToken?: string | null,
-): Promise<ShrinkWrapReport> {
+): Promise<StoredSurfacingReport<ShrinkWrapReport>> {
   const json = await invoke<string>('mesh_shrinkwrap_staged', {
     optionsJson: JSON.stringify(options),
+    meshId,
     progressToken: progressToken ?? null,
   });
-  return JSON.parse(json) as ShrinkWrapReport;
+  return JSON.parse(json) as StoredSurfacingReport<ShrinkWrapReport>;
 }
 
 /**
@@ -238,18 +218,6 @@ export interface TetWrapProgress {
 }
 
 /**
- * Resample the staged mesh by tetrahedralising its points and keeping the inside/outside boundary.
- *
- * Where the shrinkwrap command resamples onto a uniform lattice, this decomposition follows the
- * model's own points, so it keeps detail a voxel size would destroy; the boundary between two
- * labels is closed by construction, so it emits no debris. It replaces the staging buffer, so read
- * the result back with `mesh_repair_read_positions`.
- *
- * When `progressToken` is given, the engine announces each phase on the
- * `mesh-tet-surface-progress` event carrying that token, and the same token can be passed to
- * `mesh_repair_cancel` to stop the run at a phase boundary.
- */
-/**
  * How a shrink-wrap resolves a surface into a solid.
  *
  * `fill_holes_max_edges` caps the loops the hole pass will close; the pass reads zero as "no loop
@@ -296,35 +264,52 @@ export interface SolidRemeshProgress {
 }
 
 /**
- * Rebuild the staged mesh's surface by resolving it into a solid.
+ * Rebuild the stored mesh `meshId`'s surface by resolving it into a solid.
  *
  * This is the mode the reference implementation's shrinkwrap uses: close what is open, boolean the
  * mesh with itself so the result is resolved and retriangulated, then drop scrap shells. It moves
- * the surface, where the tetrahedral command conforms to it and hands it back. It replaces the
- * staging buffer, so read the result back with `mesh_repair_read_positions`.
+ * the surface, where the tetrahedral command conforms to it and hands it back. The result comes back
+ * by id as `meshId`, as with {@link shrinkwrapStoredMesh}.
  */
-export async function solidRemeshStagedMesh(
+export async function solidRemeshStoredMesh(
   invoke: TauriInvoke,
+  meshId: string,
   options: SolidRemeshOptions,
   progressToken?: string | null,
-): Promise<SolidRemeshReport> {
+): Promise<StoredSurfacingReport<SolidRemeshReport>> {
   const json = await invoke<string>('mesh_solid_remesh_staged', {
     optionsJson: JSON.stringify(options),
+    meshId,
     progressToken: progressToken ?? null,
   });
-  return JSON.parse(json) as SolidRemeshReport;
+  return JSON.parse(json) as StoredSurfacingReport<SolidRemeshReport>;
 }
 
-export async function tetSurfaceStagedMesh(
+/**
+ * Resample the stored mesh `meshId` by tetrahedralising its points and keeping the inside/outside
+ * boundary.
+ *
+ * Where the shrinkwrap command resamples onto a uniform lattice, this decomposition follows the
+ * model's own points, so it keeps detail a voxel size would destroy; the boundary between two
+ * labels is closed by construction, so it emits no debris. The result comes back by id as
+ * `meshId`, as with {@link shrinkwrapStoredMesh}.
+ *
+ * When `progressToken` is given, the engine announces each phase on the
+ * `mesh-tet-surface-progress` event carrying that token, and the same token can be passed to
+ * `mesh_repair_cancel` to stop the run at a phase boundary.
+ */
+export async function tetSurfaceStoredMesh(
   invoke: TauriInvoke,
+  meshId: string,
   options: TetWrapOptions,
   progressToken?: string | null,
-): Promise<TetWrapReport> {
+): Promise<StoredSurfacingReport<TetWrapReport>> {
   const json = await invoke<string>('mesh_tet_surface_staged', {
     optionsJson: JSON.stringify(options),
+    meshId,
     progressToken: progressToken ?? null,
   });
-  return JSON.parse(json) as TetWrapReport;
+  return JSON.parse(json) as StoredSurfacingReport<TetWrapReport>;
 }
 
 /**

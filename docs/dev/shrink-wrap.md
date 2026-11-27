@@ -20,7 +20,7 @@ dialog parameters, and its automatic repair path never calls it.
 | `ShrinkWrapOptions` | `voxel_mm`, `gap_fill_mm`, `thickness_mm`, `max_triangles` |
 | `ShrinkWrapOutcome` | the wrapped `mesh` plus a `ShrinkWrapReport` |
 | `ShrinkWrapReport` | input, isosurface and output triangle counts, voxel size, offset, band size, elapsed milliseconds |
-| `mesh_shrinkwrap_staged(options_json)` | the Tauri command. Resamples the staged mesh, replaces the staging buffer with the result and returns the report. It remains registered and callable; the app no longer reaches it, since the entry that did was removed. |
+| `mesh_shrinkwrap_staged(options_json, mesh_id, progress_token)` | the Tauri command. Resamples the stored mesh `mesh_id` names, stores the result for the input's owner and returns the report with its id as `meshId` (`dev/native-mesh-store.md`). It remains registered and callable; the app no longer reaches it, since the entry that did was removed. |
 
 In the app it is the **Remesh** entry in the repair flyout on the Editor menu. It is enabled only
 with an active model, and it asks for confirmation first, because the consequence is the whole
@@ -125,8 +125,9 @@ results, and a user choosing between them needs to know which one they asked for
 | `TetWrapOptions` | `switches`, `max_triangles`, `tolerance` |
 | `TetWrapOutcome` | the rebuilt `mesh` plus a `TetWrapReport` |
 | `TetWrapReport` | input and output triangle counts, decomposition size, inside-cell count, per-phase milliseconds, and `cancelled` |
-| `mesh_tet_surface_staged(options_json)` | the Tauri command. Resamples the staged mesh, replaces the staging buffer with the result and returns the report. |
-| `tetSurfaceFromGeometry(geometry, options)` | the frontend entry, in `src/utils/meshShrinkwrap.ts`. Stages the geometry, calls the command and reads the new positions back. |
+| `mesh_tet_surface_staged(options_json, mesh_id, progress_token)` | the Tauri command. Resamples the stored mesh `mesh_id` names and returns the report with the result's id as `meshId`. |
+| `tetSurfaceStoredMesh(invoke, meshId, options, token)` | the bridge call, in `src/utils/tauriMeshBridge.ts` |
+| `tetSurfaceFromGeometry(geometry, options)` | the frontend entry, in `src/utils/meshShrinkwrap.ts`. Puts the geometry into the native mesh store, runs the command on its id and collects the result by the id it returns. |
 | `tetSurfaceModelInPlace(modelId, options)` | the scene action. Swaps the rebuilt geometry in, records one undo step and reports the triangle counts. |
 
 In the app it is the **Remesh** entry in the repair flyout on the Editor menu. It is
@@ -278,8 +279,8 @@ drop the shells small enough to be scrap
 | `solid_remesh_with_progress(mesh, options, sink)` | the same run, announcing each phase |
 | `SolidRemeshOptions` | `fill_holes_max_edges`, `remove_noise_shells`, `tolerance` |
 | `SolidRemeshReport` | input and output triangle counts, shells before and after, holes filled, `non_manifold_resolved`, `declined`, `ms`, `cancelled` |
-| `mesh_solid_remesh_staged(options_json, progress_token)` | the Tauri command. Rebuilds the staged mesh and returns the report |
-| `solidRemeshStagedMesh(invoke, options, token)` | the bridge call, in `src/utils/tauriMeshBridge.ts` |
+| `mesh_solid_remesh_staged(options_json, mesh_id, progress_token)` | the Tauri command. Rebuilds the stored mesh `mesh_id` names and returns the report with the result's id as `meshId` |
+| `solidRemeshStoredMesh(invoke, meshId, options, token)` | the bridge call, in `src/utils/tauriMeshBridge.ts` |
 | `solidRemeshFromGeometry(geometry, options, sink)` | the frontend entry, in `src/utils/meshShrinkwrap.ts` |
 | `solidRemeshModelInPlace(modelId, options, sink)` | the scene action. Swaps the rebuilt geometry in, records one undo step and reports the triangle counts |
 
