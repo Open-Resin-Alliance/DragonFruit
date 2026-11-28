@@ -2005,49 +2005,6 @@ export function resetKickstandsInState() {
     notify();
 }
 
-/**
- * Transform kickstand shafts: those owned by `modelId`, plus any grafted onto a
- * support that moved. Roots and host knots are the main walk's, which already
- * moves them.
- */
-function transformKickstandsForModelInState(
-    modelId: string,
-    delta: SupportDeltaTransform,
-    touchedRootIds?: Set<string>,
-    touchedKnotIds?: Set<string>,
-    touchedSegmentIds?: Set<string>,
-): boolean {
-    let changed = false;
-    let nextKickstands = state.kickstands;
-
-    for (const kickstand of Object.values(state.kickstands)) {
-        const isConnectedToTouchedGraph = !!(
-            (touchedRootIds && touchedRootIds.has(kickstand.rootId))
-            || (touchedKnotIds && touchedKnotIds.has(kickstand.hostKnotId))
-            || (touchedSegmentIds && kickstand.segments.some((segment) => touchedSegmentIds.has(segment.id)))
-        );
-
-        if (kickstand.modelId !== modelId && !isConnectedToTouchedGraph) continue;
-
-        if (!changed) {
-            nextKickstands = { ...state.kickstands };
-            changed = true;
-        }
-
-        nextKickstands[kickstand.id] = transformSupportRecord(
-            'kickstand',
-            kickstand as unknown as Record<string, unknown>,
-            delta,
-        ) as unknown as Kickstand;
-    }
-
-    if (!changed) return false;
-
-    setState({ ...state, kickstands: nextKickstands });
-    notify();
-    return true;
-}
-
 function reassignAllKickstandModelIdsInState(modelId: string): boolean {
     if (!modelId) return false;
 
@@ -2109,6 +2066,7 @@ export function transformSupportsForModel(
     // own first write, so a caller holding the earlier snapshot keeps it.
     let nextRoots = state.roots;
     let nextTrunks = state.trunks;
+    let nextKickstands = state.kickstands;
     let nextKnots = state.knots;
 
     const touchedRootIds = new Set<string>();
@@ -2192,6 +2150,27 @@ export function transformSupportsForModel(
         nextTrunks[trunk.id] = nextTrunk;
     }
 
+    // A kickstand stands on its own root, so no edge reaches it and the walk
+    // below skips every root-owning type. It follows the model it names, or the
+    // graph the move touched: the root under it, the knot it hangs from, or a
+    // segment of its own shaft. Transformed here so the single commit at the end
+    // carries it, and so the stump band sees its final position.
+    for (const kickstand of Object.values(state.kickstands)) {
+        const ridesTouchedGraph = touchedRootIds.has(kickstand.rootId)
+            || touchedKnotIds.has(kickstand.hostKnotId)
+            || kickstand.segments.some((segment) => touchedSegmentIds.has(segment.id));
+        if (kickstand.modelId !== modelId && !ridesTouchedGraph) continue;
+
+        if (nextKickstands === state.kickstands) nextKickstands = { ...state.kickstands };
+        changed = true;
+
+        nextKickstands[kickstand.id] = transformSupportRecord(
+            'kickstand',
+            kickstand as unknown as Record<string, unknown>,
+            delta,
+        ) as unknown as Kickstand;
+    }
+
     // Which entities the transform reaches. Two declared rules cover every
     // type: a knot-hosted type follows its host knot or that knot's shaft; a
     // self-contained one follows a joint it shares with a moved segment.
@@ -2215,12 +2194,14 @@ export function transformSupportsForModel(
     };
 
     // A shaft on its own root is reached by no edge, so it claims its segments
-    // here or the knots riding them stay put when the model moves.
+    // here or the knots riding them stay put when the model moves. A root the
+    // model owns carries its shaft whatever the shaft's own `modelId` says.
     for (const descriptor of SUPPORT_TYPES) {
         if (!descriptor.ownsRoot) continue;
         const collection = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
         for (const entity of Object.values(collection)) {
-            if (entity.modelId === modelId) claimShaft(descriptor, entity);
+            const ridesMovedRoot = typeof entity.rootId === 'string' && touchedRootIds.has(entity.rootId);
+            if (entity.modelId === modelId || ridesMovedRoot) claimShaft(descriptor, entity);
         }
     }
 
@@ -2355,6 +2336,9 @@ export function transformSupportsForModel(
         ) as unknown as Knot;
     }
 
+    // Read before `setState` replaces `state`.
+    const kickstandsChanged = nextKickstands !== state.kickstands;
+
     if (changed) {
         // One entry per collection the loop touched; the rest carry through.
         const nextCollections: Record<string, unknown> = {};
@@ -2362,9 +2346,10 @@ export function transformSupportsForModel(
             const key = descriptor.location.key;
             nextCollections[key] = nextByCollection[key] ?? state[key];
         }
-        // The three this function computes itself win over the generic pass.
+        // The four this function computes itself win over the generic pass.
         nextCollections.roots = nextRoots;
         nextCollections.trunks = nextTrunks;
+        nextCollections.kickstands = nextKickstands;
         nextCollections.knots = nextKnots;
 
         // A pure Z move is what changes the gap a near-plate support spans.
@@ -2375,14 +2360,6 @@ export function transformSupportsForModel(
         setState({ ...state, ...nextCollections } as SupportState);
         notify();
     }
-
-    const kickstandsChanged = transformKickstandsForModelInState(
-        modelId,
-        delta,
-        touchedRootIds,
-        touchedKnotIds,
-        touchedSegmentIds,
-    );
 
     return {
         supportsChanged: changed,

@@ -19,7 +19,6 @@ fundamental architecture changes. Revisit when requirements change.
 |-----------|--------|
 | `transformSupportsForModel` | Requires delta Matrix4 from model transform change — the matrix is computed from the difference between before/after THREE.js Euler/Scale/Position, not available from file state alone |
 | `transformAllSupportsForSingleModel` | Same — needs live delta matrix |
-| `transformKickstandsForModel` / `transformAllKickstands` | Same — needs Matrix4 |
 | Raster layer ZIP export (`rasterLayerZipExport.ts`) | Requires THREE.js BufferGeometry for scanline rasterization — the Rust slicer does this natively via `slice run` |
 | Auto-lift Z / snap-to-platform with geometry | `useTransformManager.ts::getLowestWorldZForTransform` needs THREE.js geometry bounds computation. **Workaround:** `scene place-on-platform` loads STL and computes bbox directly |
 | `toggleSegmentCurve` straight→bezier | Needs `calculateBezierControlPoints` which requires THREE.js Vector3 math for control point placement. **Workaround:** `support straighten-segment` handles bezier→straight direction |
