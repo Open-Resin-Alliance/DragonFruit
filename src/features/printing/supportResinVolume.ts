@@ -14,6 +14,7 @@
  */
 
 import { contactEndpointsFor, SUPPORT_TYPES, type SupportCollectionKey } from '@/supports/supportTypeRegistry';
+import { rootOwnerEntities } from '@/supports/supportCollections';
 import { resolveSegmentEndpoints, type ShaftEntity } from '@/supports/SupportPrimitives/Knot/segmentEndpoints';
 import { raftBandTopMm } from '@/supports/Rafts/Crenelated/geometry/computeRaftFootprint';
 import { collectModelPlateFootprint, type PlateFootprintSource } from '@/supports/Rafts/Crenelated/geometry/modelPlateFootprint';
@@ -183,14 +184,9 @@ export function computeSupportAndRaftResinMl({
       topRadiusByRootId.set(rootId, Math.max(MIN_PRIMITIVE_RADIUS_MM, firstDiameter / 2));
     }
   };
-  for (const descriptor of SUPPORT_TYPES) {
-    if (!descriptor.ownsRoot) continue;
-    const owners = supportState[descriptor.location.key] as
-      | Record<string, { rootId: string; segments?: { diameter?: number }[] }>
-      | undefined;
-    for (const entity of Object.values(owners ?? {})) {
-      rememberRootShaft(entity.rootId, entity.segments?.[0]?.diameter);
-    }
+  type RootOwner = { rootId: string; segments?: { diameter?: number }[] };
+  for (const entity of rootOwnerEntities<RootOwner>(supportState)) {
+    rememberRootShaft(entity.rootId, entity.segments?.[0]?.diameter);
   }
 
   let supportMl = 0;

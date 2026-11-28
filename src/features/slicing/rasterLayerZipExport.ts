@@ -11,6 +11,7 @@ import {
 } from '@/components/settings/performancePreferences';
 import { getSnapshot as getSupportSnapshot } from '@/supports/state';
 import { SUPPORT_TYPES } from '@/supports/supportTypeRegistry';
+import { rootOwnerEntities } from '@/supports/supportCollections';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
 import { collectModelPlateFootprint, type PlateFootprintSource } from '@/supports/Rafts/Crenelated/geometry/modelPlateFootprint';
 import { raftBandTopMm } from '@/supports/Rafts/Crenelated/geometry/computeRaftFootprint';
@@ -834,15 +835,11 @@ export function buildSupportAndRaftWorldTriangles(
       })()
     : 0;
 
-  for (const descriptor of SUPPORT_TYPES) {
-    if (!descriptor.ownsRoot) continue;
-    const collection = supportState[descriptor.location.key] as Record<string, RootOwner> | undefined;
-    for (const entity of Object.values(collection ?? {})) {
-      if (!visibleModelIds.has(entity.modelId)) continue;
-      visibleRootIds.add(entity.rootId);
-      if (!rootModelKeyById.has(entity.rootId)) {
-        rootModelKeyById.set(entity.rootId, entity.modelId);
-      }
+  for (const entity of rootOwnerEntities<RootOwner>(supportState)) {
+    if (!visibleModelIds.has(entity.modelId)) continue;
+    visibleRootIds.add(entity.rootId);
+    if (!rootModelKeyById.has(entity.rootId)) {
+      rootModelKeyById.set(entity.rootId, entity.modelId);
     }
   }
 
@@ -854,14 +851,10 @@ export function buildSupportAndRaftWorldTriangles(
   };
 
   const rootTopRadiusByRootId = new Map<string, number>();
-  for (const descriptor of SUPPORT_TYPES) {
-    if (!descriptor.ownsRoot) continue;
-    const collection = supportState[descriptor.location.key] as Record<string, RootOwner> | undefined;
-    for (const entity of Object.values(collection ?? {})) {
-      const firstDiameter = entity.segments?.[0]?.diameter;
-      if (Number.isFinite(firstDiameter) && firstDiameter! > 0) {
-        rootTopRadiusByRootId.set(entity.rootId, Math.max(0.05, firstDiameter! * 0.5));
-      }
+  for (const entity of rootOwnerEntities<RootOwner>(supportState)) {
+    const firstDiameter = entity.segments?.[0]?.diameter;
+    if (Number.isFinite(firstDiameter) && firstDiameter! > 0) {
+      rootTopRadiusByRootId.set(entity.rootId, Math.max(0.05, firstDiameter! * 0.5));
     }
   }
 

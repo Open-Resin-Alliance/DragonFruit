@@ -1,4 +1,9 @@
-import { MODEL_ID_COLLECTION_KEYS, type SupportCollectionKey } from './supportTypeRegistry';
+import {
+    MODEL_ID_COLLECTION_KEYS,
+    SUPPORT_TYPES,
+    type SupportCollectionKey,
+    type SupportTypeDescriptor,
+} from './supportTypeRegistry';
 import type { DragonfruitImportFormat, SupportState } from './types';
 
 /**
@@ -16,6 +21,34 @@ export type SupportEntityCollections = Pick<SupportState, SupportEntityCollectio
 export interface SupportEntityLike {
     id: string;
     modelId?: string;
+}
+
+/** An entity reached by a registry walk, with the descriptor that found it. */
+export interface DescribedEntity<E> {
+    descriptor: SupportTypeDescriptor;
+    entity: E;
+}
+
+/** Every entity of every type matching `where`. A missing collection is skipped. */
+export function* describedEntities<E = Record<string, unknown>>(
+    collections: Partial<Record<SupportCollectionKey, Record<string, unknown>>>,
+    where: (descriptor: SupportTypeDescriptor) => boolean,
+): Generator<DescribedEntity<E>> {
+    for (const descriptor of SUPPORT_TYPES) {
+        if (!where(descriptor)) continue;
+        const record = collections[descriptor.location.key];
+        if (!record) continue;
+        for (const entity of Object.values(record)) {
+            yield { descriptor, entity: entity as E };
+        }
+    }
+}
+
+/** Every entity standing on a `Roots` record of its own. */
+export function* rootOwnerEntities<E = Record<string, unknown>>(
+    collections: Partial<Record<SupportCollectionKey, Record<string, unknown>>>,
+): Generator<E> {
+    for (const { entity } of describedEntities<E>(collections, (d) => d.ownsRoot)) yield entity;
 }
 
 /**

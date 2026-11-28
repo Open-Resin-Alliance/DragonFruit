@@ -22,7 +22,7 @@ import { resolveSegmentEndpoints, type ShaftEntity } from './SupportPrimitives/K
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { emitSupportInteractionReset } from './interaction/supportInteractionReset';
 import { getJointDiameter, JOINT_DIAMETER_OFFSET_MM } from './constants';
-import { mapImportPayloadEntities, mapSupportEntities } from './supportCollections';
+import { describedEntities, mapImportPayloadEntities, mapSupportEntities } from './supportCollections';
 import type { Kickstand, KickstandBuildResult } from './SupportTypes/Kickstand/types';
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -2147,11 +2147,8 @@ export function transformSupportsForModel(
         nextTrunks[trunk.id] = nextTrunk;
     }
 
-    // A kickstand stands on its own root, so no edge reaches it and the walk
-    // below skips every root-owning type. It follows the model it names, or the
-    // graph the move touched: the root under it, the knot it hangs from, or a
-    // segment of its own shaft. Transformed here so the single commit at the end
-    // carries it, and so the stump band sees its final position.
+    // The walk below skips root-owning types; trunk has its own loop above.
+    // In band so one commit carries it and the stump band sees it moved.
     for (const kickstand of Object.values(state.kickstands)) {
         const ridesTouchedGraph = touchedRootIds.has(kickstand.rootId)
             || touchedKnotIds.has(kickstand.hostKnotId)
@@ -2193,13 +2190,9 @@ export function transformSupportsForModel(
     // A shaft on its own root is reached by no edge, so it claims its segments
     // here or the knots riding them stay put when the model moves. A root the
     // model owns carries its shaft whatever the shaft's own `modelId` says.
-    for (const descriptor of SUPPORT_TYPES) {
-        if (!descriptor.ownsRoot) continue;
-        const collection = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
-        for (const entity of Object.values(collection)) {
-            const ridesMovedRoot = typeof entity.rootId === 'string' && touchedRootIds.has(entity.rootId);
-            if (entity.modelId === modelId || ridesMovedRoot) claimShaft(descriptor, entity);
-        }
+    for (const { descriptor, entity } of describedEntities(state, (candidate) => candidate.ownsRoot)) {
+        const ridesMovedRoot = typeof entity.rootId === 'string' && touchedRootIds.has(entity.rootId);
+        if (entity.modelId === modelId || ridesMovedRoot) claimShaft(descriptor, entity);
     }
 
     let expandedGraph = true;
