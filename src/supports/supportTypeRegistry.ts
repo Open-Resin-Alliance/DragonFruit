@@ -390,6 +390,8 @@ export interface SupportTypeDescriptor {
     lower: SupportEndpoint;
     /** What sits at the top of this type. */
     upper: SupportEndpoint;
+    /** The type this one becomes when its tip crosses the near-plate band. */
+    convertsAcrossAnchorBandTo?: SupportTypeId;
     /**
      * Whether every segment carries both its own joints, so a host resolves from
      * the segment alone.
@@ -598,6 +600,7 @@ export interface SupportTypeDescriptor {
 const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAdd' | 'historyRemove'>[] = [
     {
         id: 'trunk',
+        convertsAcrossAnchorBandTo: 'stump',
         sidebarTab: 'supportInfo',
         hasEditableSettings: true,
         offersSidebarPanel: true,
@@ -906,6 +909,7 @@ const SUPPORT_TYPE_DECLARATIONS: readonly Omit<SupportTypeDescriptor, 'historyAd
     },
     {
         id: 'stump',
+        convertsAcrossAnchorBandTo: 'trunk',
         // Written before the rename, so payloads saved then still load.
         renamedFrom: { ids: ['anchor'], collectionKeys: ['anchors'] },
         sidebarTab: 'supportInfo',
@@ -2484,6 +2488,16 @@ export function coneKnotHostType(): SupportTypeId {
         );
     }
     return typeId;
+}
+
+/** Where the cone-host type's entities live, for callers holding no type. */
+export function coneKnotHostCollectionKey(): SupportCollectionKey {
+    return getSupportTypeDescriptor(coneKnotHostType()).location.key;
+}
+
+/** Where the span-host type's entities live, for callers holding no type. */
+export function spanKnotHostCollectionKey(): SupportCollectionKey {
+    return getSupportTypeDescriptor(spanKnotHostType()).location.key;
 }
 
 /**

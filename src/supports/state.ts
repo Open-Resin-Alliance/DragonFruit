@@ -12,7 +12,7 @@ import { collectCascade, groupByCollection, ownedPrimitives, type EntityRef } fr
 import { modelCascadeSeeds } from './PlacementLogic/SupportModelLinker';
 import { pushSupportHistory } from './history/supportHistory';
 import { supportSettleFor } from './settle/seam';
-import { collectOwnedRootIds, hasSupportUpdater, hostKnotFieldsFor, typeIdForCollection, updateSupportEntity, JOINT_REMOVAL_TYPES, MODEL_ID_COLLECTION_KEYS, bundledSupportTypeId, parseKnotHostId, parsePrefixedSegmentId, isKnotHostId, isConeKnotHost, isSpanKnotHost, knotHostId, CONE_KNOT_HOST_TYPES, SPAN_KNOT_HOST_TYPES, SUPPORT_COLLECTION_KEYS, contactEndpointsFor, EDITABLE_SUPPORT_TYPES, hasSettingsInference, inferSupportSettings, isEditableSupportType, registerCollectionRestore, collectionsMissingRestore, registerSettingsInference, transformExtrasFor, type SupportTypeDescriptor, createEmptySupportCollections, getSupportTypeDescriptor, registerSupportUpdater, registerSupportTypeResolver, resolveKnotDiameter, resolveSupportTypeIdOf, type SupportEntityFor, SUPPORT_STATE_COLLECTIONS, SUPPORT_TYPES, type SupportTypeId, type JointRemovalTypeId } from './supportTypeRegistry';
+import { collectOwnedRootIds, hasSupportUpdater, hostKnotFieldsFor, typeIdForCollection, updateSupportEntity, JOINT_REMOVAL_TYPES, MODEL_ID_COLLECTION_KEYS, bundledSupportTypeId, coneKnotHostType, coneKnotHostCollectionKey, spanKnotHostCollectionKey, parseKnotHostId, parsePrefixedSegmentId, isKnotHostId, isConeKnotHost, isSpanKnotHost, knotHostId, CONE_KNOT_HOST_TYPES, SPAN_KNOT_HOST_TYPES, SUPPORT_COLLECTION_KEYS, contactEndpointsFor, EDITABLE_SUPPORT_TYPES, hasSettingsInference, inferSupportSettings, isEditableSupportType, registerCollectionRestore, collectionsMissingRestore, registerSettingsInference, transformExtrasFor, type SupportTypeDescriptor, createEmptySupportCollections, getSupportTypeDescriptor, registerSupportUpdater, registerSupportTypeResolver, resolveKnotDiameter, resolveSupportTypeIdOf, type SupportEntityFor, SUPPORT_STATE_COLLECTIONS, SUPPORT_TYPES, type SupportTypeId, type JointRemovalTypeId } from './supportTypeRegistry';
 import { typesMissingExportGroupBuilder } from './exportGeometry/seam';
 import { migrateLegacySupportPayload } from './importMigrations';
 import type { SupportCollectionKey } from './supportTypeRegistry';
@@ -76,6 +76,16 @@ const initialState: SupportState = {
 };
 
 let state: SupportState = { ...initialState };
+
+/** The live cone-host entities, without naming the type that hosts cones. */
+function coneHostCollection(): Record<string, Leaf> {
+    return state[coneKnotHostCollectionKey()] as unknown as Record<string, Leaf>;
+}
+
+/** The live span-host entities, without naming the type that spans. */
+function spanHostCollection(): Record<string, Brace> {
+    return state[spanKnotHostCollectionKey()] as unknown as Record<string, Brace>;
+}
 
 let supportSettingsHexCache: SupportSettingsHexCache = createEmptySettingsHexCache();
 
@@ -402,6 +412,10 @@ export function recomputeLeafContactConeAxisAndLength(
     };
 }
 
+/**
+ * Re-aims each cone-host entity's cone at the knot it hangs from, for the knots
+ * that moved. The host field comes from the type's declared knot edge.
+ */
 export function recomputeKnotDependentGeometry(
     leaves: Record<string, Leaf>,
     updatedKnotPosById: Record<string, Vec3>
@@ -409,11 +423,15 @@ export function recomputeKnotDependentGeometry(
     const knotIds = Object.keys(updatedKnotPosById);
     if (knotIds.length === 0) return leaves;
 
+    const knotField = hostKnotFieldsFor(coneKnotHostType())[0];
+    if (!knotField) return leaves;
+
     let changed = false;
     let nextLeaves = leaves;
 
     for (const leaf of Object.values(leaves)) {
-        const knotPos = updatedKnotPosById[leaf.parentKnotId];
+        const hostKnotId = (leaf as unknown as Record<string, unknown>)[knotField];
+        const knotPos = typeof hostKnotId === 'string' ? updatedKnotPosById[hostKnotId] : undefined;
         if (!knotPos) continue;
         if (!leaf.contactCone?.surfaceNormal) continue;
 
@@ -1032,8 +1050,11 @@ export function recomputeSpanHostKnotGeometry(
         const brace = braces[host.entityId];
         if (!brace) continue;
 
-        const startKnot = knots[brace.startKnotId];
-        const endKnot = knots[brace.endKnotId];
+        // The span's two ends, in the order the type declares them.
+        const [startField, endField] = hostKnotFieldsFor(host.typeId);
+        const spanEnds = brace as unknown as Record<string, string>;
+        const startKnot = startField ? knots[spanEnds[startField]] : undefined;
+        const endKnot = endField ? knots[spanEnds[endField]] : undefined;
         if (!startKnot || !endKnot) continue;
 
         if (knot.t === undefined) continue;
@@ -1775,18 +1796,31 @@ function seatInlineRootAfterTransform(stump: Stump, preserveRootZ: boolean, orig
     };
 }
 
-/** Whether a trunk carries anything that would be stranded by removing it. */
-function trunkHasHostedMembers(
-    trunk: Trunk,
+/**
+ * Whether a shaft carries anything that removing it would strand: a knot riding
+ * one of its segments, or an entity whose declared `segment` edge names one.
+ */
+function hasHostedMembers(
+    entity: { segments: Segment[] },
     knots: Record<string, Knot>,
-    kickstands: Record<string, Kickstand>,
+    collections: Record<string, unknown>,
 ): boolean {
-    const segmentIds = new Set(trunk.segments.map((segment) => segment.id));
+    const segmentIds = new Set(entity.segments.map((segment) => segment.id));
     for (const knot of Object.values(knots)) {
         if (segmentIds.has(knot.parentShaftId)) return true;
     }
-    for (const kickstand of Object.values(kickstands)) {
-        if (segmentIds.has(kickstand.hostSegmentId)) return true;
+
+    for (const descriptor of SUPPORT_TYPES) {
+        const fields = descriptor.edges.filter((edge) => edge.to === 'segment').map((edge) => edge.field);
+        if (fields.length === 0) continue;
+
+        const record = collections[descriptor.location.key] as Record<string, Record<string, unknown>> | undefined;
+        for (const member of Object.values(record ?? {})) {
+            for (const field of fields) {
+                const value = member[field];
+                if (typeof value === 'string' && segmentIds.has(value)) return true;
+            }
+        }
     }
     return false;
 }
@@ -1897,10 +1931,15 @@ function convertSupportsAcrossStumpBand(
     knots: Record<string, Knot>,
     modelId?: string,
 ): boolean {
-    const stumps = { ...(collections.stumps as Record<string, Stump> | undefined) };
-    const trunks = { ...(collections.trunks as Record<string, Trunk> | undefined) };
+    const inlineSide = SUPPORT_TYPES.find((descriptor) => (
+        descriptor.lower.kind === 'inlineRoot' && descriptor.convertsAcrossAnchorBandTo
+    ));
+    if (!inlineSide) return false;
+    const plateSide = getSupportTypeDescriptor(inlineSide.convertsAcrossAnchorBandTo!);
+
+    const stumps = { ...(collections[inlineSide.location.key] as Record<string, Stump> | undefined) };
+    const trunks = { ...(collections[plateSide.location.key] as Record<string, Trunk> | undefined) };
     const roots = { ...(collections.roots as Record<string, Roots> | undefined) };
-    const kickstands = (collections.kickstands as Record<string, Kickstand> | undefined) ?? {};
     let changed = false;
 
     for (const stump of Object.values(stumps)) {
@@ -1917,7 +1956,7 @@ function convertSupportsAcrossStumpBand(
     for (const trunk of Object.values(trunks)) {
         if (modelId && trunk.modelId !== modelId) continue;
         if (!trunk.contactCone || trunk.contactCone.pos.z >= ANCHOR_HEIGHT_THRESHOLD_MM) continue;
-        if (trunkHasHostedMembers(trunk, knots, kickstands)) continue;
+        if (hasHostedMembers(trunk, knots, collections)) continue;
         const converted = convertTrunkToStump(trunk, roots[trunk.rootId]);
         if (!converted) continue;
         delete trunks[trunk.id];
@@ -3185,9 +3224,9 @@ function applySupportEntityUpdate(
         }
 
         if (knotsChanged) {
-            nextLeaves = recomputeKnotDependentGeometry(state.leaves, movedKnotPosById);
+            nextLeaves = recomputeKnotDependentGeometry(coneHostCollection(), movedKnotPosById);
             const coneHost = recomputeConeHostKnotGeometry(nextLeaves, updatedKnots);
-            const spanHost = recomputeSpanHostKnotGeometry(state.braces, coneHost.knots);
+            const spanHost = recomputeSpanHostKnotGeometry(spanHostCollection(), coneHost.knots);
             nextKnots = spanHost.knots;
         }
     }
@@ -3324,7 +3363,7 @@ export function updateKnot(knot: Knot, options?: { skipDependentGeometry?: boole
     if (skipDependentGeometry) {
         // Drag-time fast path: keep knot + brace-segment knots responsive while
         // deferring expensive leaf-dependent geometry recomputes until commit.
-        const spanHost = recomputeSpanHostKnotGeometry(state.braces, baseKnots);
+        const spanHost = recomputeSpanHostKnotGeometry(spanHostCollection(), baseKnots);
         setState({ ...state, knots: spanHost.knots });
         notify();
         return;
@@ -3332,7 +3371,7 @@ export function updateKnot(knot: Knot, options?: { skipDependentGeometry?: boole
 
     const settled = settleKnotDependentGeometry(
         state.braces,
-        recomputeKnotDependentGeometry(state.leaves, { [knot.id]: knot.pos }),
+        recomputeKnotDependentGeometry(coneHostCollection(), { [knot.id]: knot.pos }),
         baseKnots,
     );
 
