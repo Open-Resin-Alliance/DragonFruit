@@ -66,6 +66,10 @@ fn default_dither_device_gamma() -> f64 {
     3.0
 }
 
+fn default_true() -> bool {
+    true
+}
+
 mod experiments;
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 mod mallinfo_shim;
@@ -683,6 +687,8 @@ struct SliceJobMetadata {
     #[serde(default = "default_z_blur_sigma")]
     z_blur_sigma: f64,
     aa_on_supports: bool,
+    #[serde(default = "default_true")]
+    aa_preserve_material_boundaries: bool,
     #[serde(default = "default_minimum_aa_alpha_percent")]
     minimum_aa_alpha_percent: f32,
     #[serde(default)]
@@ -1687,6 +1693,7 @@ async fn slice_solid_native_to_temp_path(
             z_blur_kernel: meta.z_blur_kernel,
             z_blur_sigma: meta.z_blur_sigma,
             aa_on_supports: meta.aa_on_supports,
+            aa_preserve_material_boundaries: meta.aa_preserve_material_boundaries,
             model_triangle_count: meta.model_triangle_count,
             tank_count: meta.tank_count,
             triangle_tank_index: meta.triangle_tank_index,

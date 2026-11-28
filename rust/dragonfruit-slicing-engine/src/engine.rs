@@ -4048,12 +4048,92 @@ pub fn slice_and_rasterize_rle_v3(
     Ok((rendered_layers, layer_area_stats, perf))
 }
 
+fn triangles_to_flat_xyz(triangles: &[crate::geometry::Triangle]) -> Vec<f32> {
+    let mut xyz = Vec::with_capacity(triangles.len() * 9);
+    for triangle in triangles {
+        for vertex in [triangle.a, triangle.b, triangle.c] {
+            xyz.extend_from_slice(&[vertex.x, vertex.y, vertex.z]);
+        }
+    }
+    xyz
+}
+
+fn accumulate_perf(total: &mut SlicingPerfV3, part: &SlicingPerfV3) {
+    total.index_build_ns = total.index_build_ns.saturating_add(part.index_build_ns);
+    total.render_wall_ns = total.render_wall_ns.saturating_add(part.render_wall_ns);
+    total.render_ns = total.render_ns.saturating_add(part.render_ns);
+    total.z_blend_backward_ns = total
+        .z_blend_backward_ns
+        .saturating_add(part.z_blend_backward_ns);
+    total.z_blend_forward_ns = total
+        .z_blend_forward_ns
+        .saturating_add(part.z_blend_forward_ns);
+    total.cross_blend_ns = total.cross_blend_ns.saturating_add(part.cross_blend_ns);
+    total.post_blur_ns = total.post_blur_ns.saturating_add(part.post_blur_ns);
+    total.support_merge_ns = total
+        .support_merge_ns
+        .saturating_add(part.support_merge_ns);
+    total.total_ns = total.total_ns.saturating_add(part.total_ns);
+}
+
+fn slice_single_tank_rle_layers(
+    job: &SliceJobV3,
+    compute_area_stats: bool,
+    on_rle_layer: impl FnMut(u32, Vec<crate::rle::RleRun>) -> Result<(), SlicerV3Error>,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
+    if is_vertical_aa_mode(&job.anti_aliasing_mode) {
+        let (_, stats, perf) = slice_and_rasterize_perturb_3daa_rle_v3(
+            job,
+            compute_area_stats,
+            on_rle_layer,
+            None,
+            None,
+            on_progress,
+            cancel_flag,
+        )?;
+        Ok((stats, perf))
+    } else {
+        let (_, stats, perf) = slice_and_rasterize_rle_v3(
+            job,
+            compute_area_stats,
+            on_rle_layer,
+            on_progress,
+            cancel_flag,
+        )?;
+        Ok((stats, perf))
+    }
+}
+
+fn collect_single_tank_rle_layers(
+    job: &SliceJobV3,
+    compute_area_stats: bool,
+    on_progress: Option<ProgressCallbackV3>,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<(Vec<Vec<crate::rle::RleRun>>, Vec<LayerAreaStatsV3>, SlicingPerfV3), SlicerV3Error> {
+    let mut layers = vec![Vec::new(); job.total_layers as usize];
+    let (stats, perf) = slice_single_tank_rle_layers(
+        job,
+        compute_area_stats,
+        |layer_idx, runs| {
+            if let Some(slot) = layers.get_mut(layer_idx as usize) {
+                *slot = runs;
+            }
+            Ok(())
+        },
+        on_progress,
+        cancel_flag,
+    )?;
+    Ok((layers, stats, perf))
+}
+
 /// Multi-tank RLE stage: every tank is sliced as its own job and its runs are
 /// delivered per (layer, tank), tank-major.
 ///
-/// Each tank's geometry is a self-contained triangle list, so the single-tank
-/// pipeline — with all of its AA, SSAA and support handling — runs unchanged for
-/// it. Supports are part of Tank 1 by construction (`tanks::partition_triangles_by_tank`).
+/// When `aa_preserve_material_boundaries` is enabled and AA produces grayscale
+/// output, touching boundaries between materials keep full interior exposure
+/// while outside material-to-void boundaries retain AA across XY and Z.
 pub fn slice_and_rasterize_rle_multi_tank_v3(
     job: &SliceJobV3,
     compute_area_stats: bool,
@@ -4078,70 +4158,256 @@ pub fn slice_and_rasterize_rle_multi_tank_v3(
     let mut layer_area_stats = vec![LayerAreaStatsV3::default(); total_layers as usize];
     let mut perf = SlicingPerfV3::default();
     let progress_units = total_layers.saturating_mul(tanks.len() as u32);
-
-    for (tank_position, tank) in tanks.iter().enumerate() {
+    let check_cancel = || {
         if cancel_flag
             .map(|flag| flag.load(Ordering::Relaxed))
             .unwrap_or(false)
         {
-            return Err(SlicerV3Error::Cancelled);
+            Err(SlicerV3Error::Cancelled)
+        } else {
+            Ok(())
         }
+    };
 
-        let mut triangles_xyz = Vec::with_capacity(tank.triangles.len() * 9);
-        for triangle in &tank.triangles {
-            for vertex in [triangle.a, triangle.b, triangle.c] {
-                triangles_xyz.extend_from_slice(&[vertex.x, vertex.y, vertex.z]);
+    if !job.aa_preserve_material_boundaries || job.produces_binary_output() {
+        for (tank_position, tank) in tanks.iter().enumerate() {
+            check_cancel()?;
+
+            let mut tank_job = job.clone();
+            tank_job.tank_count = 1;
+            tank_job.triangle_tank_index = Vec::new();
+            tank_job.triangles_xyz = triangles_to_flat_xyz(&tank.triangles);
+            // The partition keeps the job's order and supports only ever trail the
+            // model triangles, so the per-tank split is a plain count.
+            tank_job.model_triangle_count =
+                u32::try_from(tank.model_triangle_count).unwrap_or(u32::MAX);
+
+            let tank_index = tank.tank;
+            let base_done = (tank_position as u32).saturating_mul(total_layers);
+            let tank_progress = on_progress.as_ref().map(|callback| {
+                let callback = callback.clone();
+                Arc::new(move |update: SliceProgressUpdateV3| {
+                    callback(SliceProgressUpdateV3 {
+                        done: base_done.saturating_add(update.done),
+                        total: progress_units,
+                        phase: SliceProgressPhaseV3::Slicing,
+                    });
+                }) as ProgressCallbackV3
+            });
+
+            let (tank_stats, tank_perf) = slice_single_tank_rle_layers(
+                &tank_job,
+                compute_area_stats,
+                |layer, runs| on_rle_tank_layer(layer, tank_index, runs),
+                tank_progress,
+                cancel_flag,
+            )?;
+
+            for (index, stats) in tank_stats.iter().enumerate() {
+                if let Some(total) = layer_area_stats.get_mut(index) {
+                    accumulate_block_stats(total, stats);
+                }
             }
+            accumulate_perf(&mut perf, &tank_perf);
         }
 
-        let mut tank_job = job.clone();
-        tank_job.tank_count = 1;
-        tank_job.triangle_tank_index = Vec::new();
-        tank_job.triangles_xyz = triangles_xyz;
-        // The partition keeps the job's order and supports only ever trail the
-        // model triangles, so the per-tank split is a plain count.
-        tank_job.model_triangle_count = u32::try_from(tank.model_triangle_count).unwrap_or(u32::MAX);
+        perf.layers = total_layers;
+        return Ok((layer_area_stats, perf));
+    }
 
-        let tank_index = tank.tank;
-        let base_done = (tank_position as u32).saturating_mul(total_layers);
-        let tank_progress = on_progress.as_ref().map(|callback| {
+    let model_triangle_count = (job.model_triangle_count as usize).min(triangles.len());
+    let has_raw_supports =
+        !job.aa_on_supports && model_triangle_count > 0 && model_triangle_count < triangles.len();
+
+    let mut pre_aa_job = job.clone();
+    pre_aa_job.tank_count = 1;
+    pre_aa_job.triangle_tank_index = Vec::new();
+    pre_aa_job.triangles_xyz = Vec::new();
+    pre_aa_job.model_triangle_count = 0;
+    pre_aa_job.aa_on_supports = true;
+    pre_aa_job.minimum_aa_alpha_percent = 0.0;
+    pre_aa_job.z_blend_minimum_alpha_percent = 0.0;
+    pre_aa_job.z_blend_custom_lut = None;
+    pre_aa_job.dither_enabled = false;
+    pre_aa_job.dither_bit_depth = None;
+
+    let mut binary_job = pre_aa_job.clone();
+    binary_job.anti_aliasing_level = "Off".to_string();
+    binary_job.anti_aliasing_mode = "Coverage".to_string();
+    binary_job.blur_brush_radius_px = 0;
+    binary_job.z_blur_radius_layers = 0;
+
+    let total_passes = 1 + 2 * tanks.len() + usize::from(has_raw_supports);
+    let raster_progress_span = (progress_units * 9 / 10).max(1).min(progress_units);
+    let last_progress_done = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let make_pass_progress = |pass_idx: usize| -> Option<ProgressCallbackV3> {
+        on_progress.as_ref().map(|callback| {
             let callback = callback.clone();
+            let last_done = Arc::clone(&last_progress_done);
             Arc::new(move |update: SliceProgressUpdateV3| {
+                let total_pass_layers = (total_passes as u64).saturating_mul(total_layers as u64);
+                let completed = (pass_idx as u64)
+                    .saturating_mul(total_layers as u64)
+                    .saturating_add(update.done.min(total_layers) as u64);
+                let scaled = if total_pass_layers == 0 {
+                    0
+                } else {
+                    ((completed * raster_progress_span as u64) / total_pass_layers) as u32
+                };
+                let monotonic = last_done.fetch_max(scaled, Ordering::Relaxed).max(scaled);
                 callback(SliceProgressUpdateV3 {
-                    done: base_done.saturating_add(update.done),
+                    done: monotonic.min(progress_units),
                     total: progress_units,
                     phase: SliceProgressPhaseV3::Slicing,
                 });
             }) as ProgressCallbackV3
-        });
+        })
+    };
 
-        let (_, tank_stats, tank_perf) = slice_and_rasterize_rle_v3(
-            &tank_job,
-            compute_area_stats,
-            |layer, runs| on_rle_tank_layer(layer, tank_index, runs),
-            tank_progress,
+    check_cancel()?;
+    let union_model_tris = if has_raw_supports {
+        &triangles[..model_triangle_count]
+    } else {
+        &triangles[..]
+    };
+    let mut union_job = pre_aa_job.clone();
+    union_job.triangles_xyz = triangles_to_flat_xyz(union_model_tris);
+    let (union_aa, _, union_perf) = collect_single_tank_rle_layers(
+        &union_job,
+        false,
+        make_pass_progress(0),
+        cancel_flag,
+    )?;
+    accumulate_perf(&mut perf, &union_perf);
+
+    let mut tank_binary: Vec<Vec<Vec<crate::rle::RleRun>>> = Vec::with_capacity(tanks.len());
+    let mut tank_aa: Vec<Vec<Vec<crate::rle::RleRun>>> = Vec::with_capacity(tanks.len());
+    for (tank_pos, tank) in tanks.iter().enumerate() {
+        check_cancel()?;
+        let model_tris = if has_raw_supports {
+            &tank.triangles[..tank.model_triangle_count.min(tank.triangles.len())]
+        } else {
+            &tank.triangles[..]
+        };
+        let flat_xyz = triangles_to_flat_xyz(model_tris);
+
+        let mut bin_pass_job = binary_job.clone();
+        bin_pass_job.triangles_xyz = flat_xyz.clone();
+        let (bin_layers, _, bin_perf) = collect_single_tank_rle_layers(
+            &bin_pass_job,
+            false,
+            make_pass_progress(1 + tank_pos * 2),
             cancel_flag,
         )?;
+        accumulate_perf(&mut perf, &bin_perf);
+        tank_binary.push(bin_layers);
 
+        check_cancel()?;
+        let mut aa_pass_job = pre_aa_job.clone();
+        aa_pass_job.triangles_xyz = flat_xyz;
+        let (aa_layers, tank_stats, aa_perf) = collect_single_tank_rle_layers(
+            &aa_pass_job,
+            compute_area_stats,
+            make_pass_progress(2 + tank_pos * 2),
+            cancel_flag,
+        )?;
         for (index, stats) in tank_stats.iter().enumerate() {
             if let Some(total) = layer_area_stats.get_mut(index) {
                 accumulate_block_stats(total, stats);
             }
         }
+        accumulate_perf(&mut perf, &aa_perf);
+        tank_aa.push(aa_layers);
+    }
 
-        perf.index_build_ns = perf.index_build_ns.saturating_add(tank_perf.index_build_ns);
-        perf.render_wall_ns = perf.render_wall_ns.saturating_add(tank_perf.render_wall_ns);
-        perf.render_ns = perf.render_ns.saturating_add(tank_perf.render_ns);
-        perf.z_blend_backward_ns = perf
-            .z_blend_backward_ns
-            .saturating_add(tank_perf.z_blend_backward_ns);
-        perf.z_blend_forward_ns = perf
-            .z_blend_forward_ns
-            .saturating_add(tank_perf.z_blend_forward_ns);
-        perf.cross_blend_ns = perf.cross_blend_ns.saturating_add(tank_perf.cross_blend_ns);
-        perf.post_blur_ns = perf.post_blur_ns.saturating_add(tank_perf.post_blur_ns);
-        perf.support_merge_ns = perf.support_merge_ns.saturating_add(tank_perf.support_merge_ns);
-        perf.total_ns = perf.total_ns.saturating_add(tank_perf.total_ns);
+    let support_binary = if has_raw_supports {
+        check_cancel()?;
+        let mut support_job = binary_job;
+        support_job.triangles_xyz = triangles_to_flat_xyz(&triangles[model_triangle_count..]);
+        let (support_layers, _, support_perf) = collect_single_tank_rle_layers(
+            &support_job,
+            false,
+            make_pass_progress(1 + 2 * tanks.len()),
+            cancel_flag,
+        )?;
+        accumulate_perf(&mut perf, &support_perf);
+        Some(support_layers)
+    } else {
+        None
+    };
+
+    let is_3daa = is_vertical_aa_mode(&job.anti_aliasing_mode);
+    let tail_cure_lut = job.normalized_tail_cure_lut();
+    let dither_palette = if is_3daa {
+        job.effective_dither_bit_depth().map(|bit_depth| {
+            let active_lut = tail_cure_lut.unwrap_or_else(|| {
+                let mut identity = [0u8; 256];
+                for (i, v) in identity.iter_mut().enumerate() {
+                    *v = i as u8;
+                }
+                identity
+            });
+            crate::dither::DitherPaletteV3::new(&active_lut, job.dither_device_gamma, bit_depth)
+        })
+    } else {
+        None
+    };
+    let width = job.effective_render_width_px() as usize;
+    let height = job.source_height_px as usize;
+
+    let mut bin_refs: Vec<&[crate::rle::RleRun]> = Vec::with_capacity(tanks.len());
+    let mut aa_refs: Vec<&[crate::rle::RleRun]> = Vec::with_capacity(tanks.len());
+    for (tank_pos, tank) in tanks.iter().enumerate() {
+        for layer_idx in 0..(total_layers as usize) {
+            check_cancel()?;
+            bin_refs.clear();
+            aa_refs.clear();
+            for t in 0..tanks.len() {
+                bin_refs.push(&tank_binary[t][layer_idx]);
+                aa_refs.push(&tank_aa[t][layer_idx]);
+            }
+
+            let mut runs = crate::tanks::combine_tank_boundary_aa_rle(
+                &union_aa[layer_idx],
+                &bin_refs,
+                &aa_refs,
+                tank_pos,
+            );
+
+            if let Some(ref palette) = dither_palette {
+                runs = crate::dither::dither_rle_layer_with_lut_and_gamma(
+                    &runs, palette, width, height,
+                );
+            } else if let Some(ref lut) = tail_cure_lut {
+                runs = remap_gray_rle_with_lut(&runs, lut);
+            }
+
+            if tank_pos == 0 {
+                if let Some(ref supports) = support_binary {
+                    runs = merge_rle_max(runs, &supports[layer_idx]);
+                }
+            }
+
+            on_rle_tank_layer(layer_idx as u32, tank.tank, runs)?;
+
+            if let Some(ref cb) = on_progress {
+                let emit_step = (tank_pos as u64)
+                    .saturating_mul(total_layers as u64)
+                    .saturating_add(layer_idx as u64 + 1);
+                let tail_span = progress_units.saturating_sub(raster_progress_span) as u64;
+                let scaled = raster_progress_span.saturating_add(
+                    ((emit_step * tail_span) / (progress_units.max(1) as u64)) as u32,
+                );
+                let monotonic = last_progress_done
+                    .fetch_max(scaled, Ordering::Relaxed)
+                    .max(scaled);
+                cb(SliceProgressUpdateV3 {
+                    done: monotonic.min(progress_units),
+                    total: progress_units,
+                    phase: SliceProgressPhaseV3::Slicing,
+                });
+            }
+        }
     }
 
     perf.layers = total_layers;
@@ -7505,5 +7771,309 @@ mod tests {
         assert!(matches!(result, Err(super::SlicerV3Error::UnsupportedOutput(_))));
     }
 
+    fn run_multi_tank_masks(job: &SliceJobV3) -> Vec<Vec<Vec<u8>>> {
+        let width = job.effective_render_width_px() as usize;
+        let height = job.source_height_px as usize;
+        let tanks = job.tank_count as usize;
+        let layers = job.total_layers as usize;
+        let mut out = vec![vec![Vec::new(); layers]; tanks];
+        let mut delivered_order: Vec<(u32, u32)> = Vec::new();
+        super::slice_and_rasterize_rle_multi_tank_v3(
+            job,
+            false,
+            |layer, tank, runs| {
+                delivered_order.push((tank, layer));
+                out[tank as usize][layer as usize] = expand_rle_to_mask(&runs, width * height);
+                Ok(())
+            },
+            None,
+            None,
+        )
+        .expect("multi-tank slice");
+        let mut expected_order = Vec::new();
+        for t in 0..job.tank_count {
+            for l in 0..job.total_layers {
+                expected_order.push((t, l));
+            }
+        }
+        assert_eq!(delivered_order, expected_order, "delivery must be tank-major");
+        out
+    }
 
+    #[test]
+    fn multi_tank_blur_preserves_touching_seam_and_aa_outer_edges() {
+        // 64x64 plate (origin at center, 1 mm/px -> px = x + 32, py = y + 32).
+        // Tank 0: [-20, 0] x [-12, 12] (with a T-junction along y = +-12 at x = 0).
+        // Tank 1: [0, 20] x [-12, 12].
+        let mut xyz = Vec::new();
+        push_box_xyz(&mut xyz, -20.0, -12.0, 0.0, 0.0, 12.0, 2.0);
+        push_box_xyz(&mut xyz, 0.0, -12.0, 0.0, 20.0, 12.0, 2.0);
+        let mut tank_index = vec![0u32; 12];
+        tank_index.extend(vec![1u32; 12]);
+
+        let mut job = SliceJobV3 {
+            output_format: ".test".to_string(),
+            source_width_px: 64,
+            source_height_px: 64,
+            width_px: 64,
+            height_px: 64,
+            build_width_mm: 64.0,
+            build_depth_mm: 64.0,
+            layer_height_mm: 1.0,
+            total_layers: 2,
+            anti_aliasing_level: "4x".to_string(),
+            anti_aliasing_mode: "Blur".to_string(),
+            blur_brush_radius_px: 2,
+            minimum_aa_alpha_percent: 0.0,
+            tank_count: 2,
+            triangle_tank_index: tank_index,
+            model_triangle_count: 24,
+            aa_preserve_material_boundaries: true,
+            triangles_xyz: xyz,
+            metadata_json: "{}".to_string(),
+            ..Default::default()
+        };
+
+        let masks = run_multi_tank_masks(&job);
+        let m0 = &masks[0][0];
+        let m1 = &masks[1][0];
+        let idx = |px: usize, py: usize| py * 64 + px;
+
+        // Touching seam at x=0 (px=31.5 -> Tank 0 ends at px=30, Tank 1 starts at px=31),
+        // well inside y (py=32): both sides of the seam must be 255 in their own tank and 0 in the other.
+        for dx in 0..3 {
+            assert_eq!(m0[idx(30 - dx, 32)], 255, "Tank 0 seam interior eroded at dx={dx}");
+            assert_eq!(m1[idx(30 - dx, 32)], 0, "Tank 1 bled across seam at dx={dx}");
+            assert_eq!(m1[idx(31 + dx, 32)], 255, "Tank 1 seam interior eroded at dx={dx}");
+            assert_eq!(m0[idx(31 + dx, 32)], 0, "Tank 0 bled across seam at dx={dx}");
+        }
+
+        // Outside edges (left of Tank 0 around px=11, right of Tank 1 around px=51)
+        // must have grayscale AA.
+        let outer_left = m0[idx(11, 32)];
+        let outer_right = m1[idx(51, 32)];
+        assert!(outer_left > 0 && outer_left < 255, "Tank 0 outer edge should be AA'd, got {outer_left}");
+        assert!(outer_right > 0 && outer_right < 255, "Tank 1 outer edge should be AA'd, got {outer_right}");
+
+        // T-junction along the top outer edge (py=20 is outer edge):
+        // At px=30 (Tank 0 at seam), Tank 0 gets uniform outer edge AA matching px=25, and Tank 1 stays 0.
+        assert_eq!(m0[idx(30, 20)], m0[idx(25, 20)], "T-junction outer edge should have no notch");
+        assert_eq!(m1[idx(30, 20)], 0, "Tank 1 must not bleed into Tank 0 at T-junction");
+
+        // With boundary preservation disabled, the seam IS blurred (< 255 and > 0 bleed).
+        job.aa_preserve_material_boundaries = false;
+        let unpreserved = run_multi_tank_masks(&job);
+        assert!(unpreserved[0][0][idx(30, 32)] < 255, "unpreserved seam should erode");
+        assert!(unpreserved[1][0][idx(30, 32)] > 0, "unpreserved seam should bleed");
+    }
+
+    #[test]
+    fn multi_tank_coverage_ssaa_preserves_angled_seam() {
+        // Two touching boxes with fractional seam at x=0.3 and outer fractional edges at x=-8.3, x=8.5.
+        let mut xyz = Vec::new();
+        push_box_xyz(&mut xyz, -8.3, -8.0, 0.0, 0.3, 8.0, 1.0);
+        push_box_xyz(&mut xyz, 0.3, -8.0, 0.0, 8.5, 8.0, 1.0);
+        let mut tank_index = vec![0u32; 12];
+        tank_index.extend(vec![1u32; 12]);
+
+        let job = SliceJobV3 {
+            output_format: ".test".to_string(),
+            source_width_px: 32,
+            source_height_px: 32,
+            width_px: 32,
+            height_px: 32,
+            build_width_mm: 32.0,
+            build_depth_mm: 32.0,
+            layer_height_mm: 1.0,
+            total_layers: 1,
+            anti_aliasing_level: "4x".to_string(),
+            anti_aliasing_mode: "Coverage".to_string(),
+            blur_brush_radius_px: 0,
+            minimum_aa_alpha_percent: 0.0,
+            tank_count: 2,
+            triangle_tank_index: tank_index,
+            model_triangle_count: 24,
+            aa_preserve_material_boundaries: true,
+            triangles_xyz: xyz,
+            metadata_json: "{}".to_string(),
+            ..Default::default()
+        };
+
+        let masks = run_multi_tank_masks(&job);
+        let m0 = &masks[0][0];
+        let m1 = &masks[1][0];
+        let idx = |px: usize, py: usize| py * 32 + px;
+
+        // Every pixel along the fractional seam row py=16 near px=15..16 must be strictly 0 or 255
+        // (no sub-pixel partial gray on the internal touching boundary!).
+        for px in 10..22 {
+            let v0 = m0[idx(px, 16)];
+            let v1 = m1[idx(px, 16)];
+            assert!(v0 == 0 || v0 == 255, "Tank 0 seam pixel px={px} got partial gray {v0}");
+            assert!(v1 == 0 || v1 == 255, "Tank 1 seam pixel px={px} got partial gray {v1}");
+            assert!(!(v0 > 0 && v1 > 0), "Tanks overlapped gray at px={px}");
+        }
+
+        // Outer fractional edges (x=-8.3 -> px=7, x=8.5 -> super_px=97.2 -> px=24) must have SSAA gray.
+        let left_aa = m0[idx(7, 16)];
+        let right_aa = m1[idx(24, 16)];
+        assert!(left_aa > 0 && left_aa < 255, "Tank 0 outer fractional edge should be SSAA'd, got {left_aa}");
+        assert!(right_aa > 0 && right_aa < 255, "Tank 1 outer fractional edge should be SSAA'd, got {right_aa}");
+    }
+
+    #[test]
+    fn multi_tank_3daa_preserves_xy_and_z_boundaries() {
+        // Test A: Side-by-side touching boxes with 3DAA (XY seam).
+        let mut xyz_xy = Vec::new();
+        push_box_xyz(&mut xyz_xy, -12.0, -8.0, 0.0, 0.0, 8.0, 4.0);
+        push_box_xyz(&mut xyz_xy, 0.0, -8.0, 0.0, 12.0, 8.0, 4.0);
+        let mut tank_xy = vec![0u32; 12];
+        tank_xy.extend(vec![1u32; 12]);
+
+        let job_xy = SliceJobV3 {
+            output_format: ".test".to_string(),
+            source_width_px: 32,
+            source_height_px: 32,
+            width_px: 32,
+            height_px: 32,
+            build_width_mm: 32.0,
+            build_depth_mm: 32.0,
+            layer_height_mm: 1.0,
+            total_layers: 6,
+            anti_aliasing_level: "4x".to_string(),
+            anti_aliasing_mode: "Vertical2".to_string(),
+            blur_brush_radius_px: 1,
+            z_blur_radius_layers: 1,
+            z_blend_minimum_alpha_percent: 0.0,
+            tank_count: 2,
+            triangle_tank_index: tank_xy,
+            model_triangle_count: 24,
+            aa_preserve_material_boundaries: true,
+            triangles_xyz: xyz_xy,
+            metadata_json: "{}".to_string(),
+            ..Default::default()
+        };
+        let masks_xy = run_multi_tank_masks(&job_xy);
+        let idx = |px: usize, py: usize| py * 32 + px;
+        // Layer 1 (z=1.5) inside height: x=0.0 -> px=15.5, so Tank 0 ends at px=14, Tank 1 starts at px=15.
+        assert_eq!(masks_xy[0][1][idx(14, 16)], 255);
+        assert_eq!(masks_xy[1][1][idx(14, 16)], 0);
+        assert_eq!(masks_xy[1][1][idx(15, 16)], 255);
+        assert_eq!(masks_xy[0][1][idx(15, 16)], 0);
+        let outer = masks_xy[0][1][idx(3, 16)];
+        assert!(outer > 0 && outer < 255, "3DAA outer XY edge should have AA, got {outer}");
+
+        // Test B: Vertically stacked touching boxes with 3DAA (Z seam at z=3.0).
+        // Tank 0 occupies layers 0..3 (z in [0, 3]), Tank 1 occupies layers 3..6 (z in [3, 6]).
+        // Even with z_blur_radius_layers=1 and perturbation, the horizontal Z interface at layers 2 & 3
+        // must have zero Z-blur erosion and zero cross-tank bleed!
+        let mut xyz_z = Vec::new();
+        push_box_xyz(&mut xyz_z, -8.0, -8.0, 0.0, 8.0, 8.0, 3.0);
+        push_box_xyz(&mut xyz_z, -8.0, -8.0, 3.0, 8.0, 8.0, 6.0);
+        let mut tank_z = vec![0u32; 12];
+        tank_z.extend(vec![1u32; 12]);
+
+        let job_z = SliceJobV3 {
+            output_format: ".test".to_string(),
+            source_width_px: 32,
+            source_height_px: 32,
+            width_px: 32,
+            height_px: 32,
+            build_width_mm: 32.0,
+            build_depth_mm: 32.0,
+            layer_height_mm: 1.0,
+            total_layers: 8,
+            anti_aliasing_level: "4x".to_string(),
+            anti_aliasing_mode: "Vertical2".to_string(),
+            blur_brush_radius_px: 1,
+            z_blur_radius_layers: 1,
+            z_blend_minimum_alpha_percent: 0.0,
+            tank_count: 2,
+            triangle_tank_index: tank_z,
+            model_triangle_count: 24,
+            aa_preserve_material_boundaries: true,
+            triangles_xyz: xyz_z,
+            metadata_json: "{}".to_string(),
+            ..Default::default()
+        };
+        let masks_z = run_multi_tank_masks(&job_z);
+
+        // Layer 2 (top of Tank 0, touching bottom of Tank 1): Tank 0 interior is 255, Tank 1 is all-0.
+        assert_eq!(masks_z[0][2][idx(16, 16)], 255);
+        let t1_l2_nonzero: Vec<(usize, usize, u8)> = masks_z[1][2]
+            .iter()
+            .enumerate()
+            .filter(|(_, &v)| v > 0)
+            .map(|(i, &v)| (i % 32, i / 32, v))
+            .collect();
+        assert!(t1_l2_nonzero.is_empty(), "Tank 1 must not Z-blur into Tank 0 layer 2: {t1_l2_nonzero:?}");
+        // Layer 3 (bottom of Tank 1, touching top of Tank 0): Tank 1 interior is 255, Tank 0 is all-0.
+        assert_eq!(masks_z[1][3][idx(16, 16)], 255);
+        assert!(masks_z[0][3].iter().all(|&v| v == 0), "Tank 0 must not Z-blur into Tank 1 layer 3");
+        // Exposed top above Tank 1 (layer 6, z=6.5) receives Z-blur halo in Tank 1 while Tank 0 is all-0.
+        let top_halo = masks_z[1][6][idx(16, 16)];
+        assert!(top_halo > 0 && top_halo < 255, "Exposed top should receive 3DAA Z-blur, got {top_halo}");
+        assert!(masks_z[0][6].iter().all(|&v| v == 0));
+    }
+
+    #[test]
+    fn multi_tank_boundary_aa_applies_lut_and_keeps_supports_crisp_on_tank_one() {
+        // Two touching model boxes + 1 support box (assigned tank 1 in metadata, forced to Tank 0).
+        let mut xyz = Vec::new();
+        push_box_xyz(&mut xyz, -12.0, -8.0, 0.0, 0.0, 8.0, 1.0); // Tank 0 model
+        push_box_xyz(&mut xyz, 0.0, -8.0, 0.0, 12.0, 8.0, 1.0);  // Tank 1 model
+        push_box_xyz(&mut xyz, 16.0, -4.0, 0.0, 20.0, 4.0, 1.0); // Support (disjoint at x=[16,20])
+        let mut tank_index = vec![0u32; 12];
+        tank_index.extend(vec![1u32; 12]);
+        tank_index.extend(vec![1u32; 12]); // Support claims tank 1, must land on Tank 0
+
+        let mut custom_lut = vec![150u8; 256];
+        custom_lut[0] = 0;
+        custom_lut[255] = 255;
+
+        let job = SliceJobV3 {
+            output_format: ".test".to_string(),
+            source_width_px: 64,
+            source_height_px: 64,
+            width_px: 64,
+            height_px: 64,
+            build_width_mm: 64.0,
+            build_depth_mm: 64.0,
+            layer_height_mm: 1.0,
+            total_layers: 1,
+            anti_aliasing_level: "4x".to_string(),
+            anti_aliasing_mode: "Blur".to_string(),
+            blur_brush_radius_px: 2,
+            aa_on_supports: false,
+            z_blend_custom_lut: Some(custom_lut),
+            tank_count: 2,
+            triangle_tank_index: tank_index,
+            model_triangle_count: 24,
+            aa_preserve_material_boundaries: true,
+            triangles_xyz: xyz,
+            metadata_json: "{}".to_string(),
+            ..Default::default()
+        };
+
+        let masks = run_multi_tank_masks(&job);
+        let m0 = &masks[0][0];
+        let m1 = &masks[1][0];
+        let idx = |px: usize, py: usize| py * 64 + px;
+
+        // Touching seam stays 255 / 0 (px=30 Tank 0, px=31 Tank 1).
+        assert_eq!(m0[idx(30, 32)], 255);
+        assert_eq!(m1[idx(30, 32)], 0);
+        assert_eq!(m1[idx(31, 32)], 255);
+        assert_eq!(m0[idx(31, 32)], 0);
+
+        // Outer model AA pixels (x=-12.0 -> px=19.6875 -> px=19, x=12.0 -> px=43.3125 -> px=43) are LUT-remapped to 150.
+        assert_eq!(m0[idx(19, 32)], 150);
+        assert_eq!(m1[idx(43, 32)], 150);
+
+        // Support at x=[16,20] (px=[47.25, 51.1875]) is crisp binary 255 on Tank 0 and 0 on Tank 1,
+        // with no AA halo outside (px=53 is 0).
+        assert_eq!(m0[idx(49, 32)], 255);
+        assert_eq!(m0[idx(53, 32)], 0);
+        assert_eq!(m1[idx(49, 32)], 0);
+    }
 }

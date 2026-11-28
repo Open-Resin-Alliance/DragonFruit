@@ -37,7 +37,7 @@ Important fields:
 - packing mode: `x_packing_mode` (`none`, `rgb8_div3`, `gray3_div2`)
 - build volume: `build_width_mm`, `build_depth_mm`
 - output selection: `output_format`
-- AA controls: `anti_aliasing_level`, `minimum_aa_alpha_percent`, `aa_on_supports`
+- AA controls: `anti_aliasing_level`, `minimum_aa_alpha_percent`, `aa_on_supports`, `aa_preserve_material_boundaries`
 - transforms: `mirror_x`, `mirror_y`
 - encode hints: `png_compression_strategy`, `container_compression_level`
 - metadata passthrough: `metadata_json`
@@ -49,6 +49,9 @@ A job with `tank_count > 1` draws one film per tank. `triangle_tank_index` is
 aligned with `triangles_xyz` and names the tank each model triangle prints from
 (`0` = Tank 1). An empty vector means every triangle is in Tank 1, which is what
 a single-material job sends, so the field is additive for existing callers.
+`aa_preserve_material_boundaries` defaults to `true` on deserialization and keeps
+touching boundaries between materials unaffected by anti-aliasing across 2D Blur,
+Coverage/SSAA, and 3DAA while keeping outside edges anti-aliased.
 
 Support geometry — triangles at or after `model_triangle_count`, when that count
 is non-zero — always prints from Tank 1 (index `0`) whatever the assignment

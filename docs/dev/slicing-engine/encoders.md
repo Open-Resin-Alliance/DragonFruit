@@ -35,6 +35,12 @@ refuses a multi-tank job on a format that does not, and never falls back to
 painting every tank as Tank 1. Support geometry is part of Tank 1's stream by
 construction.
 
+When `aa_preserve_material_boundaries` is enabled (the default) and anti-aliasing
+produces grayscale output (2D Blur, Coverage/SSAA, or 3DAA), `slice_and_rasterize_rle_multi_tank_v3`
+uses `combine_tank_boundary_aa_rle` to apply AA only on outside material-to-void
+boundaries while keeping touching interfaces between different materials crisp
+in both XY and Z.
+
 ## Registry behavior
 
 Registry initialization is lazy (`OnceLock`) and sourced from generated plugin encoder wiring.

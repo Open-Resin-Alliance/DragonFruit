@@ -1337,6 +1337,7 @@ fn cmd_slice_run(
             z_blur_kernel: z_blur_kernel.to_string(),
             z_blur_sigma: z_blur_sigma as f64,
             aa_on_supports,
+            aa_preserve_material_boundaries: true,
             model_triangle_count: model_tri_count,
             mirror_x,
             mirror_y,

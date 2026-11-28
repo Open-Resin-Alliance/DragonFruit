@@ -57,6 +57,10 @@ fn default_false() -> bool {
     false
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_x_packing_mode() -> String {
     "none".to_string()
 }
@@ -191,6 +195,11 @@ pub struct SliceJobV3 {
     /// metadata is available.
     #[serde(default)]
     pub aa_on_supports: bool,
+    /// Keep internal boundaries between touching materials unaffected by
+    /// anti-aliasing in multi-tank jobs, applying AA only on outside
+    /// (material-to-void) boundaries.
+    #[serde(default = "default_true")]
+    pub aa_preserve_material_boundaries: bool,
     /// How many resin tanks the machine feeds this job from.
     ///
     /// `1` is a single-material machine and the historical behaviour. A job with
