@@ -1,4 +1,4 @@
-import type { Branch, Knot, Roots, SupportCollectionByType, SupportCollectionName, SupportEntityAny, SupportEntityByCollection, SupportFieldsByType, SupportRemovedEntityByCollection, SupportState, Trunk } from './types';
+import type { Knot, Roots, SupportCollectionByType, SupportCollectionName, SupportEntityAny, SupportEntityByCollection, SupportFieldsByType, SupportRemovedEntityByCollection, SupportState } from './types';
 import { SUPPORT_UPDATE_TRUNK, SUPPORT_UPDATE_BRANCH } from './history/actionTypes';
 import type { SupportHistoryActionType } from './history/actionTypes';
 import { ANCHOR_HEIGHT_THRESHOLD_MM } from './autoSupport/constants';
@@ -1031,6 +1031,30 @@ export const SUPPORT_TYPES: readonly SupportTypeDescriptor[] = SUPPORT_TYPE_DECL
 );
 
 /**
+ * The one member of `matches`, or a throw naming what it found instead.
+ *
+ * A rule only one type may claim is asserted rather than assumed, so a second
+ * claimant fails at the call instead of silently changing which type answers.
+ */
+function theOnly<T extends string>(matches: readonly T[], what: string): T {
+    const [only, ...rest] = matches;
+    if (!only || rest.length > 0) {
+        throw new Error(`expected exactly one ${what}, found: ${matches.join(', ') || 'none'}.`);
+    }
+    return only;
+}
+
+/**
+ * The ids a per-type boolean table marks true, in registry order.
+ *
+ * The table stays declared per type: its literals are what narrow each
+ * `*TypeId` union, which a list derived from `SupportTypeId` cannot do.
+ */
+function typesFlagged<K extends SupportTypeId>(table: Record<SupportTypeId, boolean>): readonly K[] {
+    return SUPPORT_TYPES.filter((descriptor) => table[descriptor.id]).map((descriptor) => descriptor.id as K);
+}
+
+/**
  * The store's update function for a type, filled in by state.ts at load.
  *
  * A slot rather than an import: state.ts calls into this module while building
@@ -1852,17 +1876,11 @@ export type SupportOriginId = keyof typeof SUPPORT_ORIGINS;
  * Origin keys are their own vocabulary and do not follow `SupportTypeId`, so
  * callers compare against this rather than spelling the name.
  */
-export const NEAR_PLATE_ORIGIN: SupportOriginId = (() => {
-    const matches = (Object.keys(SUPPORT_ORIGINS) as SupportOriginId[])
-        .filter((origin) => SUPPORT_TYPES.some((descriptor) => descriptor.id === origin));
-    const [origin, ...rest] = matches;
-    if (!origin || rest.length > 0) {
-        throw new Error(
-            `expected exactly one origin named after a support type, found: ${matches.join(', ') || 'none'}.`,
-        );
-    }
-    return origin;
-})();
+export const NEAR_PLATE_ORIGIN: SupportOriginId = theOnly(
+    (Object.keys(SUPPORT_ORIGINS) as SupportOriginId[])
+        .filter((origin) => SUPPORT_TYPES.some((descriptor) => descriptor.id === origin)),
+    'origin named after a support type',
+);
 
 /** Whether a trunk with this origin may be converted into a tree. */
 export function isOriginConvertibleToTree(origin: string | undefined): boolean {
@@ -1978,8 +1996,7 @@ export type AutoPlacedTypeId = {
 
 /** Every type that pass can place, in registry order. */
 export const AUTO_PLACED_TYPE_IDS: readonly AutoPlacedTypeId[] =
-    (Object.keys(AUTO_PLACED_BY_TYPE) as SupportTypeId[])
-        .filter((id): id is AutoPlacedTypeId => AUTO_PLACED_BY_TYPE[id]);
+    typesFlagged<AutoPlacedTypeId>(AUTO_PLACED_BY_TYPE);
 
 /** Whether a placed kind is one the ledger reports. */
 export function isAutoPlacedType(kind: SupportTypeId | 'reject'): kind is AutoPlacedTypeId {
@@ -2228,8 +2245,7 @@ export type PlacementModeOwnerTypeId = {
 }[SupportTypeId];
 
 export const PLACEMENT_MODE_OWNER_TYPES: readonly PlacementModeOwnerTypeId[] =
-    (Object.keys(PLACEMENT_MODE_OWNER_BY_TYPE) as SupportTypeId[])
-        .filter((id): id is PlacementModeOwnerTypeId => PLACEMENT_MODE_OWNER_BY_TYPE[id]);
+    typesFlagged<PlacementModeOwnerTypeId>(PLACEMENT_MODE_OWNER_BY_TYPE);
 
 /** How `PLACEMENT_MODE_OWNER_BY_TYPE` and the descriptor flags disagree. */
 export function placementModeOwnerDrift(): readonly string[] {
@@ -2317,8 +2333,7 @@ export type JointDragPreviewTypeId = {
 }[SupportTypeId];
 
 export const JOINT_DRAG_PREVIEW_TYPES: readonly JointDragPreviewTypeId[] =
-    (Object.keys(JOINT_DRAG_PREVIEW_BY_TYPE) as SupportTypeId[])
-        .filter((id): id is JointDragPreviewTypeId => JOINT_DRAG_PREVIEW_BY_TYPE[id]);
+    typesFlagged<JointDragPreviewTypeId>(JOINT_DRAG_PREVIEW_BY_TYPE);
 
 /** Whether an untrusted `kind` off a preview event names such a type. */
 export function isJointDragPreviewType(kind: string): kind is JointDragPreviewTypeId {
@@ -2453,29 +2468,12 @@ export function isConeKnotHost(typeId: SupportTypeId): boolean {
  * span host, and this asserts that rather than assuming it silently.
  */
 export function spanKnotHostType(): SupportTypeId {
-    const [typeId, ...rest] = SPAN_KNOT_HOST_TYPES;
-    if (!typeId || rest.length > 0) {
-        throw new Error(
-            `expected exactly one span knot host, found: ${SPAN_KNOT_HOST_TYPES.join(', ') || 'none'}. `
-            + 'A caller builds these ids without holding a type; give it the type instead.',
-        );
-    }
-    return typeId;
+    return theOnly(SPAN_KNOT_HOST_TYPES, 'span knot host');
 }
 
-/**
- * The single type whose knot host is a contact cone. Same contract as
- * `spanKnotHostType`: it asserts the "exactly one" rather than assuming it.
- */
+/** The single type whose knot host is a contact cone. */
 export function coneKnotHostType(): SupportTypeId {
-    const [typeId, ...rest] = CONE_KNOT_HOST_TYPES;
-    if (!typeId || rest.length > 0) {
-        throw new Error(
-            `expected exactly one cone knot host, found: ${CONE_KNOT_HOST_TYPES.join(', ') || 'none'}. `
-            + 'A caller builds these ids without holding a type; give it the type instead.',
-        );
-    }
-    return typeId;
+    return theOnly(CONE_KNOT_HOST_TYPES, 'cone knot host');
 }
 
 /** Where the cone-host type's entities live, for callers holding no type. */
@@ -2491,20 +2489,12 @@ export function spanKnotHostCollectionKey(): SupportCollectionKey {
 /**
  * The single type that is the default placement tool -- the one whose preview
  * yields to every other mode, and which auto-placement's fallback builds.
- *
- * Same contract as `coneKnotHostType`: it asserts the "exactly one" rather than
- * assuming it, so a second type claiming the flag fails loudly at the call
- * instead of silently widening what "not the default" excludes.
  */
 export function defaultPlacementToolTypeId(): SupportTypeId {
-    const matches = SUPPORT_TYPES.filter((descriptor) => descriptor.previewYieldsToOtherModes).map((d) => d.id);
-    const [typeId, ...rest] = matches;
-    if (!typeId || rest.length > 0) {
-        throw new Error(
-            `expected exactly one default placement tool, found: ${matches.join(', ') || 'none'}.`,
-        );
-    }
-    return typeId;
+    return theOnly(
+        SUPPORT_TYPES.filter((descriptor) => descriptor.previewYieldsToOtherModes).map((d) => d.id),
+        'default placement tool',
+    );
 }
 
 /**
@@ -2519,22 +2509,12 @@ export function typeIdForCollection(key: SupportCollectionKey): SupportTypeId {
     return descriptor.id;
 }
 
-/**
- * The single type serialised as a bundle with the root and host knot it owns.
- *
- * Same contract as `coneKnotHostType`: it asserts the "exactly one" rather than
- * assuming it, so a second bundled type is a loud failure instead of a silent
- * change to whose primitives a caller reads.
- */
+/** The single type serialised as a bundle with the root and host knot it owns. */
 export function bundledSupportTypeId(): SupportTypeId {
-    const matches = SUPPORT_TYPES.filter((descriptor) => descriptor.serialisedAsBundle).map((d) => d.id);
-    const [typeId, ...rest] = matches;
-    if (!typeId || rest.length > 0) {
-        throw new Error(
-            `expected exactly one bundled support type, found: ${matches.join(', ') || 'none'}.`,
-        );
-    }
-    return typeId;
+    return theOnly(
+        SUPPORT_TYPES.filter((descriptor) => descriptor.serialisedAsBundle).map((d) => d.id),
+        'bundled support type',
+    );
 }
 
 /**
@@ -2630,9 +2610,7 @@ export function parsePrefixedSegmentId(
 }
 
 export const MODEL_SURFACE_GESTURE_TYPES: readonly ModelSurfaceGestureTypeId[] =
-    SUPPORT_TYPES
-        .filter((descriptor) => descriptor.claimsModelSurfaceGestures)
-        .map((descriptor) => descriptor.id as ModelSurfaceGestureTypeId);
+    typesFlagged<ModelSurfaceGestureTypeId>(MODEL_SURFACE_GESTURE_BY_TYPE);
 
 /**
  * Types that own their edit-history entry but declare no update action.
@@ -2675,8 +2653,7 @@ export type KickstandHostTypeId = {
 }[SupportTypeId];
 
 export const KICKSTAND_HOST_TYPES: readonly KickstandHostTypeId[] =
-    (Object.keys(KICKSTAND_HOST_BY_TYPE) as SupportTypeId[])
-        .filter((id): id is KickstandHostTypeId => KICKSTAND_HOST_BY_TYPE[id]);
+    typesFlagged<KickstandHostTypeId>(KICKSTAND_HOST_BY_TYPE);
 
 /**
  * The types leaf sprouting may hang a knot on.
@@ -2717,5 +2694,4 @@ export type JointRemovalTypeId = {
 
 /** The same set at runtime, for the scan that answers which entity holds a joint. */
 export const JOINT_REMOVAL_TYPES: readonly JointRemovalTypeId[] =
-    (Object.keys(JOINT_REMOVAL_BY_TYPE) as SupportTypeId[])
-        .filter((id): id is JointRemovalTypeId => JOINT_REMOVAL_BY_TYPE[id]);
+    typesFlagged<JointRemovalTypeId>(JOINT_REMOVAL_BY_TYPE);
