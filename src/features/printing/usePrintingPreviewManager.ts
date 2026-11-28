@@ -1,5 +1,4 @@
 import React from 'react';
-import JSZip from 'jszip';
 import type { useSceneCollectionManager } from '@/features/scene/useSceneCollectionManager';
 import {
   getProfileStoreServerSnapshot,
@@ -7,7 +6,7 @@ import {
   subscribeToProfileStore,
   type PrinterProfile,
 } from '@/features/profiles/profileStore';
-import { readPrintArtifactBytesFromPath } from '@/features/slicing/tauri/nativeSlicerBridge';
+import { readPrintLayerTankPreviewPngsFromPath } from '@/features/slicing/tauri/nativeSlicerBridge';
 import type { SliceExportArtifact } from '@/features/slicing/sliceExportOrchestrator';
 
 type SceneManager = ReturnType<typeof useSceneCollectionManager>;
@@ -52,6 +51,19 @@ async function composeMultiTankLayerPreview(
   entries: Array<{ tankIndex: number; blob: Blob }>,
   colours: readonly string[],
 ): Promise<string> {
+  if (entries.length === 0) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('the preview canvas is unavailable');
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, 1, 1);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('the preview could not be encoded');
+    return URL.createObjectURL(blob);
+  }
+
   const decoded = await Promise.all(entries.map(async (entry) => {
     const url = URL.createObjectURL(entry.blob);
     const image = new Image();
@@ -67,6 +79,8 @@ async function composeMultiTankLayerPreview(
     canvas.height = height;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('the preview canvas is unavailable');
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, width, height);
 
     for (const tank of decoded) {
       const tinted = document.createElement('canvas');
@@ -155,7 +169,10 @@ export function usePrintingPreviewManager({
   /** Composite preview of the displayed layer for a multi-tank slice, and its URL. */
   const [multiTankPreview, setMultiTankPreview] = React.useState<{ layer: number; url: string } | null>(null);
   const multiTankPreviewRef = React.useRef<{ layer: number; url: string } | null>(null);
-  const multiTankZipRef = React.useRef<{ path: string; zip: JSZip } | null>(null);
+  const multiTankCacheOwnerRef = React.useRef<{ artifact: SliceExportArtifact | null; colourKey: string }>({
+    artifact: null,
+    colourKey: '',
+  });
   /** Composed layer URLs, so scrubbing back over a layer is instant. */
   const multiTankPreviewCacheRef = React.useRef(new Map<number, string>());
   const printingPreviewSettleTimeoutRef = React.useRef<number | null>(null);
@@ -296,19 +313,25 @@ export function usePrintingPreviewManager({
     : null;
 
   React.useEffect(() => {
-    if (!multiTankArtifactPath) {
-      if (multiTankPreviewRef.current) {
-        URL.revokeObjectURL(multiTankPreviewRef.current.url);
-        multiTankPreviewRef.current = null;
-      }
-      multiTankZipRef.current = null;
+    const colourKey = tankPreviewColours.join(',');
+    const ownerChanged = (
+      printingArtifact !== multiTankCacheOwnerRef.current.artifact
+      || colourKey !== multiTankCacheOwnerRef.current.colourKey
+    );
+    if (!multiTankArtifactPath || !printingArtifact || ownerChanged) {
+      for (const url of multiTankPreviewCacheRef.current.values()) URL.revokeObjectURL(url);
+      multiTankPreviewCacheRef.current.clear();
+      multiTankPreviewRef.current = null;
+      multiTankCacheOwnerRef.current = { artifact: printingArtifact, colourKey };
       setMultiTankPreview(null);
-      return;
+      if (!multiTankArtifactPath || !printingArtifact) return;
     }
 
     const layer = printingDisplayedLayer;
     const cached = multiTankPreviewCacheRef.current.get(layer);
     if (cached) {
+      multiTankPreviewCacheRef.current.delete(layer);
+      multiTankPreviewCacheRef.current.set(layer, cached);
       if (multiTankPreviewRef.current?.url !== cached) {
         multiTankPreviewRef.current = { layer, url: cached };
       }
@@ -316,47 +339,42 @@ export function usePrintingPreviewManager({
       return;
     }
     // While the pointer is moving the GPU cross-section is the preview; composing
-    // images for every intermediate layer is what made scrubbing stutter. The
-    // settled layer is composed once, when the scrub ends.
-    if (isPrintingLayerScrubbing || !isPrintingPreviewSettled) return;
+    // images for every intermediate layer is what made scrubbing stutter.
+    if (scene.mode !== 'printing' || isPrintingLayerScrubbing) return;
 
+    const targetArtifact = printingArtifact;
+    const targetColourKey = colourKey;
     let cancelled = false;
     void (async () => {
       try {
-        let zip = multiTankZipRef.current?.path === multiTankArtifactPath
-          ? multiTankZipRef.current.zip
-          : null;
-        if (!zip) {
-          const bytes = await readPrintArtifactBytesFromPath(multiTankArtifactPath);
-          zip = await JSZip.loadAsync(bytes);
-          multiTankZipRef.current = { path: multiTankArtifactPath, zip };
-        }
-        const prefix = `layer_${String(layer).padStart(5, '0')}_tank_`;
-        const entries = Object.values(zip.files)
-          .filter((file) => !file.dir && file.name.startsWith(prefix) && file.name.endsWith('.png'))
-          .map((file) => ({
-            tankIndex: Number(file.name.slice(prefix.length, -4)) - 1,
-            file,
-          }))
-          .filter((entry) => Number.isFinite(entry.tankIndex) && entry.tankIndex >= 0)
-          .sort((a, b) => a.tankIndex - b.tankIndex);
-        if (entries.length === 0) {
-          if (!cancelled) setMultiTankPreview(null);
-          return;
-        }
-        const blobs = await Promise.all(entries.map(async (entry) => ({
-          tankIndex: entry.tankIndex,
-          blob: await entry.file.async('blob'),
-        })));
+        const tankPngs = await readPrintLayerTankPreviewPngsFromPath(
+          multiTankArtifactPath,
+          layer,
+          targetArtifact.outputFormat,
+        );
+        if (cancelled) return;
+        const blobs = tankPngs.map((entry) => {
+          const copy = new Uint8Array(entry.pngBytes);
+          return {
+            tankIndex: entry.tankIndex,
+            blob: new Blob([copy.buffer], { type: 'image/png' }),
+          };
+        });
         const url = await composeMultiTankLayerPreview(blobs, tankPreviewColours);
-        if (cancelled) {
+        const staleOwner = (
+          multiTankCacheOwnerRef.current.artifact !== targetArtifact
+          || multiTankCacheOwnerRef.current.colourKey !== targetColourKey
+        );
+        if (cancelled || staleOwner) {
           URL.revokeObjectURL(url);
           return;
         }
-        if (multiTankPreviewRef.current) URL.revokeObjectURL(multiTankPreviewRef.current.url);
         const next = { layer, url };
         multiTankPreviewRef.current = next;
         const cache = multiTankPreviewCacheRef.current;
+        const existing = cache.get(layer);
+        if (existing && existing !== url) URL.revokeObjectURL(existing);
+        cache.delete(layer);
         cache.set(layer, url);
         if (cache.size > 12) {
           const oldest = cache.keys().next().value;
@@ -377,9 +395,10 @@ export function usePrintingPreviewManager({
     };
   }, [
     isPrintingLayerScrubbing,
-    isPrintingPreviewSettled,
     multiTankArtifactPath,
+    printingArtifact,
     printingDisplayedLayer,
+    scene.mode,
     tankPreviewColours,
   ]);
 

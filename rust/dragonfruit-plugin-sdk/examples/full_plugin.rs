@@ -451,6 +451,21 @@ impl PluginCapabilities for FullCapabilities {
         png.extend_from_slice(format!("full-plugin-preview:{}:{layer}", archive.display()).as_bytes());
         Ok(png)
     }
+
+    fn preview_tanks(
+        &self,
+        archive: &Path,
+        layer: u32,
+    ) -> Result<Option<Vec<dragonfruit_plugin_sdk::PreviewTank>>, String> {
+        let make = |tank: u32| {
+            let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+            png.extend_from_slice(
+                format!("full-plugin-preview:{}:{layer}:tank:{tank}", archive.display()).as_bytes(),
+            );
+            dragonfruit_plugin_sdk::PreviewTank { tank, png }
+        };
+        Ok(Some(vec![make(0), make(1)]))
+    }
 }
 
 fn main() {

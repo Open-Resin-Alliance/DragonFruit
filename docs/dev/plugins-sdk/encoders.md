@@ -205,6 +205,23 @@ Three habits keep this fast:
 Implement `PluginCapabilities::preview`. The default answers "no previews", and
 the host shows the layer without a thumbnail rather than failing the slice.
 
+For multi-tank containers, the host sends `previewTanks` and expects
+`previewTankPngs` with one header entry and bulk PNG frame per active tank on that
+layer:
+
+```json
+→ {"type":"previewTanks","id":9,"path":"job.zip","layer":42}
+← {"type":"previewTankPngs","id":9,"tanks":[{"tank":0,"bytes":182344},{"tank":1,"bytes":95120}]}
+← (bulk frame) Tank 1 PNG bytes
+← (bulk frame) Tank 2 PNG bytes
+```
+
+Implement `PluginCapabilities::preview_tanks` returning `Ok(Some(Vec<PreviewTank>))`:
+
+- Each `PreviewTank` pairs the 0-based `tank` index with that tank's PNG bytes.
+- Return `Ok(Some(vec![]))` when a layer has no exposed pixels on any tank so the host displays an empty black layer instead of treating the request as an error.
+- Leaving the default `Ok(None)` falls back to `PluginCapabilities::preview` as Tank 1 (`tank: 0`).
+
 ## Cancellation and failure
 
 - **Cancellation is not a message yet.** The engine aborts the session and the

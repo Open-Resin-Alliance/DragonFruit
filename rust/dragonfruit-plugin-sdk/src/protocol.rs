@@ -95,6 +95,15 @@ pub enum HostMessage {
         path: String,
         layer: u32,
     },
+    /// Asks for one layer's per-tank preview PNGs from a multi-tank file.
+    /// The answer is a `previewTankPngs` header followed by one bulk frame per
+    /// declared tank entry.
+    #[serde(rename_all = "camelCase")]
+    PreviewTanks {
+        id: u64,
+        path: String,
+        layer: u32,
+    },
     /// Open a file the manifest declares. `output` is a path the host created;
     /// write the scene container there.
     #[serde(rename_all = "camelCase")]
@@ -103,6 +112,13 @@ pub enum HostMessage {
         input: String,
         output: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewTankEntry {
+    pub tank: u32,
+    pub bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -138,6 +154,11 @@ pub enum PluginMessage {
     ImportDone { id: u64, path: String },
     #[serde(rename_all = "camelCase")]
     PreviewPng { id: u64, bytes: u64 },
+    #[serde(rename_all = "camelCase")]
+    PreviewTankPngs {
+        id: u64,
+        tanks: Vec<PreviewTankEntry>,
+    },
     #[serde(rename_all = "camelCase")]
     Error { code: String, message: String },
 }
@@ -243,6 +264,31 @@ mod tests {
         assert_eq!(
             json,
             r#"{"type":"ready","pluginId":"printbio.multimaterial","version":"0.1.0-p0","capabilities":["slicerEncoder"],"formats":[{"ext":".pbm"}]}"#
+        );
+    }
+
+    #[test]
+    fn preview_tanks_messages_use_the_wire_casing() {
+        let req = HostMessage::PreviewTanks {
+            id: 9,
+            path: "job.zip".to_string(),
+            layer: 12,
+        };
+        assert_eq!(
+            serde_json::to_string(&req).expect("serialize"),
+            r#"{"type":"previewTanks","id":9,"path":"job.zip","layer":12}"#
+        );
+
+        let resp = PluginMessage::PreviewTankPngs {
+            id: 9,
+            tanks: vec![
+                PreviewTankEntry { tank: 0, bytes: 128 },
+                PreviewTankEntry { tank: 1, bytes: 256 },
+            ],
+        };
+        assert_eq!(
+            serde_json::to_string(&resp).expect("serialize"),
+            r#"{"type":"previewTankPngs","id":9,"tanks":[{"tank":0,"bytes":128},{"tank":1,"bytes":256}]}"#
         );
     }
 }

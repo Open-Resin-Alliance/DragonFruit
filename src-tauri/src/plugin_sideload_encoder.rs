@@ -214,6 +214,21 @@ impl FormatEncoder for SideloadedEncoder {
         .map_err(SlicerV3Error::LayerPreview)
     }
 
+    fn read_layer_preview_tank_pngs(
+        &self,
+        path: &Path,
+        layer_number: u32,
+    ) -> Result<Vec<(u32, Vec<u8>)>, SlicerV3Error> {
+        plugin_sideload_runtime::preview_tanks_with_plugin(
+            &self.root,
+            &self.manifest.id,
+            &self.manifest,
+            path,
+            layer_number,
+        )
+        .map_err(SlicerV3Error::LayerPreview)
+    }
+
     fn create_rle_stream_encoder(
         &self,
         job: &SliceJobV3,

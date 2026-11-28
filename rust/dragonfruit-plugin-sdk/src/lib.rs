@@ -42,9 +42,9 @@ pub const PROTOCOL_VERSION: u32 = 2;
 pub use frame::{read_frame, write_frame, Frame, FrameError, FrameKind, MAX_FRAME_BYTES};
 pub use harness::{
     serve, EncodeStart, Encoder, Importer, LayerRef, NoCapabilities, PluginCapabilities,
-    PluginIdentity,
+    PluginIdentity, PreviewTank,
 };
-pub use protocol::{Capability, FormatDecl, HostMessage, PluginMessage, Transport};
+pub use protocol::{Capability, FormatDecl, HostMessage, PluginMessage, PreviewTankEntry, Transport};
 pub use runs::{decode_runs, encode_runs, write_runs, Run, Runs, RUN_BYTES};
 pub use ring::{
     claim_slot, init_ring, publish_slot, read_layout, release_slot, slot_state, slot_view, RingError,

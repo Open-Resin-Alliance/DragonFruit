@@ -3903,6 +3903,44 @@ async fn read_print_layer_pngs(
     Ok(Response::new(packed))
 }
 
+#[tauri::command]
+async fn read_print_layer_tank_pngs(
+    source_path: String,
+    layer_number: u32,
+    format_hint: String,
+) -> Result<Response, String> {
+    let packed = tauri::async_runtime::spawn_blocking(move || {
+        if layer_number == 0 {
+            return Err("Layer number must be >= 1".to_string());
+        }
+
+        let source = std::path::PathBuf::from(source_path.trim());
+        if !source.exists() {
+            return Err("Source print file no longer exists on disk".to_string());
+        }
+
+        let tanks = dragonfruit_slicing_engine::engine::read_layer_preview_tank_pngs_by_format_hint(
+            &source,
+            layer_number,
+            &format_hint,
+        )
+        .map_err(|err| err.to_string())?;
+
+        let capacity: usize = tanks.iter().map(|(_, bytes)| 8 + bytes.len()).sum();
+        let mut packed = Vec::with_capacity(capacity);
+        for (tank_index, bytes) in tanks {
+            packed.extend_from_slice(&tank_index.to_le_bytes());
+            packed.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            packed.extend_from_slice(&bytes);
+        }
+        Ok(packed)
+    })
+    .await
+    .map_err(|err| format!("Read tank layers task failed to join: {err}"))??;
+
+    Ok(Response::new(packed))
+}
+
 /// Which of these paths already exist on disk.
 ///
 /// For a caller about to write files over them: a batch of plate outputs lands in a folder the
@@ -4732,6 +4770,7 @@ fn main() {
             read_print_file_chunk,
             read_print_layer_png,
             read_print_layer_pngs,
+            read_print_layer_tank_pngs,
             existing_paths,
             delete_print_temp_file,
             cleanup_stale_print_temp_files,

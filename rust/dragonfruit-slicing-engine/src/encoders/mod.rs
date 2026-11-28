@@ -217,6 +217,18 @@ pub trait FormatEncoder: Send + Sync {
         )))
     }
 
+    /// Decodes one 1-based layer's per-tank PNGs as `(tank_index, png_bytes)`.
+    /// Formats without per-tank previews fall back to `read_layer_preview_png`
+    /// mapped to Tank 1 (`0`).
+    fn read_layer_preview_tank_pngs(
+        &self,
+        path: &Path,
+        layer_number: u32,
+    ) -> Result<Vec<(u32, Vec<u8>)>, SlicerV3Error> {
+        self.read_layer_preview_png(path, layer_number)
+            .map(|png| vec![(0, png)])
+    }
+
     /// Capability-aware encode entrypoint.
     ///
     /// Default implementation preserves backwards compatibility by routing to

@@ -5855,6 +5855,34 @@ pub fn read_layer_preview_png_by_format_hint(
     encoder.read_layer_preview_png(source_path, layer_number)
 }
 
+/// Decodes one 1-based layer's per-tank preview PNGs as `(tank_index, png_bytes)`.
+pub fn read_layer_preview_tank_pngs_by_format_hint(
+    source_path: &Path,
+    layer_number: u32,
+    format_hint: &str,
+) -> Result<Vec<(u32, Vec<u8>)>, SlicerV3Error> {
+    let Some(encoder) = find_encoder_by_hint_or_source(format_hint, source_path) else {
+        let requested = format_hint.trim();
+        let requested_display = if requested.is_empty() {
+            source_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| format!(".{}", ext.trim_start_matches('.')))
+                .unwrap_or_else(|| "(unknown)".to_string())
+        } else {
+            requested.to_string()
+        };
+
+        return Err(SlicerV3Error::UnsupportedOutput(format!(
+            "{} (supported: {})",
+            requested_display,
+            supported_output_formats().join(", ")
+        )));
+    };
+
+    encoder.read_layer_preview_tank_pngs(source_path, layer_number)
+}
+
 /// Encode rendered layers through a registered format encoder.
 pub fn dispatch_encode_by_format(
     job: &SliceJobV3,

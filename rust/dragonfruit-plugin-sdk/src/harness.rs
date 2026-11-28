@@ -65,6 +65,13 @@ pub trait Importer {
     fn import(&mut self, input: &Path, output: &Path) -> Result<(), String>;
 }
 
+/// One tank's layer preview PNG returned by [`PluginCapabilities::preview_tanks`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewTank {
+    pub tank: u32,
+    pub png: Vec<u8>,
+}
+
 /// What a plugin can answer after the handshake. Capabilities are opt-in per
 /// method, so a plugin that only encodes does not have to know the network
 /// vocabulary, and vice versa.
@@ -95,6 +102,13 @@ pub trait PluginCapabilities {
     /// the default says so, and the host shows the preview it can get.
     fn preview(&self, _archive: &Path, _layer: u32) -> Result<Vec<u8>, String> {
         Err("this plugin does not provide layer previews".to_string())
+    }
+
+    /// Decodes one layer's per-tank preview PNGs from a multi-tank file.
+    /// Returning `Ok(None)` falls back to `preview` as Tank 1 (`tank: 0`);
+    /// returning `Ok(Some(vec![]))` represents an empty layer with no exposed pixels.
+    fn preview_tanks(&self, _archive: &Path, _layer: u32) -> Result<Option<Vec<PreviewTank>>, String> {
+        Ok(None)
     }
 }
 
@@ -250,6 +264,30 @@ pub fn serve<R: Read, W: Write, C: PluginCapabilities>(
                             .map_err(to_io)?;
                     }
                     Err(message) => return fail(&mut output, "preview-unsupported", &message),
+                }
+            }
+            HostMessage::PreviewTanks { id, path, layer } => {
+                let archive = Path::new(&path);
+                let tanks = match capabilities.preview_tanks(archive, layer) {
+                    Ok(Some(tanks)) => tanks,
+                    Ok(None) => match capabilities.preview(archive, layer) {
+                        Ok(png) => vec![PreviewTank { tank: 0, png }],
+                        Err(message) => return fail(&mut output, "preview-unsupported", &message),
+                    },
+                    Err(message) => return fail(&mut output, "preview-unsupported", &message),
+                };
+                let entries = tanks
+                    .iter()
+                    .map(|item| crate::protocol::PreviewTankEntry {
+                        tank: item.tank,
+                        bytes: item.png.len() as u64,
+                    })
+                    .collect();
+                write_json(&mut output, &PluginMessage::PreviewTankPngs { id, tanks: entries })
+                    .map_err(to_io)?;
+                for item in tanks {
+                    crate::frame::write_frame(&mut output, FrameKind::Bulk, &item.png)
+                        .map_err(to_io)?;
                 }
             }
             HostMessage::EncodeEnd { id, output: target } => {
@@ -858,5 +896,109 @@ mod tests {
             crate::ring::slot_state(&buffer.0, &LAYOUT, 0).expect("state"),
             crate::ring::SlotState::Free
         );
+    }
+
+    struct MultiPreviewPlugin;
+
+    impl PluginCapabilities for MultiPreviewPlugin {
+        fn preview_tanks(&self, _archive: &Path, layer: u32) -> Result<Option<Vec<PreviewTank>>, String> {
+            if layer == 2 {
+                return Ok(Some(Vec::new()));
+            }
+            Ok(Some(vec![
+                PreviewTank { tank: 0, png: vec![0x89, b'P', b'N', b'G', layer as u8, 0] },
+                PreviewTank { tank: 2, png: vec![0x89, b'P', b'N', b'G', layer as u8, 2] },
+            ]))
+        }
+    }
+
+    struct SinglePreviewPlugin;
+
+    impl PluginCapabilities for SinglePreviewPlugin {
+        fn preview(&self, _archive: &Path, layer: u32) -> Result<Vec<u8>, String> {
+            Ok(vec![0x89, b'P', b'N', b'G', layer as u8])
+        }
+    }
+
+    #[test]
+    fn preview_tanks_streams_declared_tanks_empty_layers_and_single_fallback() {
+        let mut bytes = hello(2);
+        write_json(
+            &mut bytes,
+            &HostMessage::PreviewTanks { id: 1, path: "a.zip".to_string(), layer: 5 },
+        )
+        .expect("req1");
+        write_json(
+            &mut bytes,
+            &HostMessage::PreviewTanks { id: 2, path: "a.zip".to_string(), layer: 2 },
+        )
+        .expect("req2");
+        write_json(&mut bytes, &HostMessage::Shutdown).expect("shutdown");
+
+        let mut input = std::io::Cursor::new(bytes);
+        let mut output = Vec::new();
+        serve(&mut input, &mut output, &TestPlugin, &MultiPreviewPlugin, None).expect("serve");
+
+        let mut cursor = std::io::Cursor::new(output);
+        let ready = read_frame(&mut cursor).unwrap().unwrap();
+        assert!(matches!(
+            serde_json::from_slice::<PluginMessage>(&ready.payload).unwrap(),
+            PluginMessage::Ready { .. }
+        ));
+
+        let hdr1 = read_frame(&mut cursor).unwrap().unwrap();
+        assert_eq!(hdr1.kind, FrameKind::Json);
+        assert_eq!(
+            serde_json::from_slice::<PluginMessage>(&hdr1.payload).unwrap(),
+            PluginMessage::PreviewTankPngs {
+                id: 1,
+                tanks: vec![
+                    crate::protocol::PreviewTankEntry { tank: 0, bytes: 6 },
+                    crate::protocol::PreviewTankEntry { tank: 2, bytes: 6 },
+                ],
+            }
+        );
+        let b0 = read_frame(&mut cursor).unwrap().unwrap();
+        let b1 = read_frame(&mut cursor).unwrap().unwrap();
+        assert_eq!(b0.kind, FrameKind::Bulk);
+        assert_eq!(b0.payload, vec![0x89, b'P', b'N', b'G', 5, 0]);
+        assert_eq!(b1.kind, FrameKind::Bulk);
+        assert_eq!(b1.payload, vec![0x89, b'P', b'N', b'G', 5, 2]);
+
+        let hdr2 = read_frame(&mut cursor).unwrap().unwrap();
+        assert_eq!(
+            serde_json::from_slice::<PluginMessage>(&hdr2.payload).unwrap(),
+            PluginMessage::PreviewTankPngs { id: 2, tanks: Vec::new() }
+        );
+        assert!(read_frame(&mut cursor).unwrap().is_none());
+
+        let mut fallback_in = hello(2);
+        write_json(
+            &mut fallback_in,
+            &HostMessage::PreviewTanks { id: 3, path: "b.apf".to_string(), layer: 7 },
+        )
+        .expect("req3");
+        write_json(&mut fallback_in, &HostMessage::Shutdown).expect("shutdown");
+        let mut fallback_out = Vec::new();
+        serve(
+            &mut std::io::Cursor::new(fallback_in),
+            &mut fallback_out,
+            &TestPlugin,
+            &SinglePreviewPlugin,
+            None,
+        )
+        .expect("serve fallback");
+        let mut fc = std::io::Cursor::new(fallback_out);
+        let _ready = read_frame(&mut fc).unwrap().unwrap();
+        let fhdr = read_frame(&mut fc).unwrap().unwrap();
+        assert_eq!(
+            serde_json::from_slice::<PluginMessage>(&fhdr.payload).unwrap(),
+            PluginMessage::PreviewTankPngs {
+                id: 3,
+                tanks: vec![crate::protocol::PreviewTankEntry { tank: 0, bytes: 5 }],
+            }
+        );
+        let fbulk = read_frame(&mut fc).unwrap().unwrap();
+        assert_eq!(fbulk.payload, vec![0x89, b'P', b'N', b'G', 7]);
     }
 }

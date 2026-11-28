@@ -132,6 +132,14 @@ the host cannot route.
 An unknown message is an error, never a skip: silently ignoring one is how a
 plugin and a host end up disagreeing about what a session is doing.
 
+### Preview
+
+Single-image formats answer `preview` with `previewPng` + one bulk PNG frame;
+multi-tank containers answer `previewTanks` with `previewTankPngs` carrying
+`tanks: [{ tank, bytes }]` followed by one bulk PNG frame per entry (an empty
+`tanks` array indicates a blank layer). Older plugins that return
+`malformed-message` for `previewTanks` fall back to `preview` as tank `0`.
+
 ## The pipe transport
 
 `transport: "pipe"` creates no ring and maps no memory. Each `encodeLayer`

@@ -1030,6 +1030,50 @@ export async function readPrintLayerPreviewPngsFromPath(
   return layers;
 }
 
+export interface TankLayerPreviewPng {
+  tankIndex: number;
+  pngBytes: Uint8Array;
+}
+
+/** Unpacks `[u32 LE tankIndex][u32 LE byteLength][pngBytes...]` pairs from `read_print_layer_tank_pngs`. */
+export function unpackTankLayerPreviewPngs(packed: Uint8Array): TankLayerPreviewPng[] {
+  const tanks: TankLayerPreviewPng[] = [];
+  const view = new DataView(packed.buffer, packed.byteOffset, packed.byteLength);
+  let offset = 0;
+  while (offset + 8 <= packed.byteLength) {
+    const tankIndex = view.getUint32(offset, true);
+    const length = view.getUint32(offset + 4, true);
+    offset += 8;
+    if (offset + length > packed.byteLength) break;
+    tanks.push({
+      tankIndex,
+      pngBytes: packed.slice(offset, offset + length),
+    });
+    offset += length;
+  }
+  return tanks;
+}
+
+export async function readPrintLayerTankPreviewPngsFromPath(
+  sourcePath: string,
+  layerNumber: number,
+  formatHint: string,
+): Promise<TankLayerPreviewPng[]> {
+  const core = await loadTauriCore();
+  if (!core) {
+    throw new Error('Native slicer is only available in DragonFruit Desktop (Tauri runtime).');
+  }
+
+  const safeLayerNumber = Math.max(1, Math.floor(layerNumber));
+  const packed = new Uint8Array(await core.invoke<ArrayBuffer>('read_print_layer_tank_pngs', {
+    sourcePath,
+    layerNumber: safeLayerNumber,
+    formatHint,
+  }));
+
+  return unpackTankLayerPreviewPngs(packed);
+}
+
 /**
  * Which of these paths already exist on disk, for a caller about to write over them. Without the
  * desktop runtime nothing is on disk, so nothing exists.

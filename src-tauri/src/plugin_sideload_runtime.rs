@@ -471,6 +471,72 @@ pub fn preview_with_plugin(
     result
 }
 
+enum PreviewTanksOutcome {
+    Tanks(Vec<(u32, Vec<u8>)>),
+    FallbackLegacy,
+}
+
+/// Decodes one layer's per-tank preview PNGs through the plugin's own container reader.
+pub fn preview_tanks_with_plugin(
+    root: &Path,
+    plugin_id: &str,
+    manifest: &package::Manifest,
+    archive: &Path,
+    layer: u32,
+) -> Result<Vec<(u32, Vec<u8>)>, String> {
+    let session_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    let mut plugin = start(root, plugin_id, manifest)?;
+    let result = (|| -> Result<PreviewTanksOutcome, String> {
+        send(
+            &mut plugin,
+            &sdk::HostMessage::PreviewTanks {
+                id: session_id,
+                path: archive.to_string_lossy().to_string(),
+                layer,
+            },
+        )?;
+
+        let deadline = Instant::now() + PREVIEW_TIMEOUT;
+        let header = recv_frame(&mut plugin, deadline)?;
+        let entries = match serde_json::from_slice::<sdk::PluginMessage>(&header.payload) {
+            Ok(sdk::PluginMessage::PreviewTankPngs { id, tanks }) if id == session_id => tanks,
+            Ok(sdk::PluginMessage::Error { code, .. }) if code == "malformed-message" => {
+                return Ok(PreviewTanksOutcome::FallbackLegacy);
+            }
+            Ok(sdk::PluginMessage::Error { code, message }) => {
+                return Err(format!("preview error {code}: {message}"));
+            }
+            Ok(other) => return Err(format!("unexpected preview message: {other:?}")),
+            Err(error) => return Err(format!("unreadable preview message: {error}")),
+        };
+
+        let mut out = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let png = recv_frame(&mut plugin, deadline)?;
+            if png.kind != sdk::FrameKind::Bulk {
+                return Err("the preview payload was not a bulk frame".to_string());
+            }
+            if png.payload.len() as u64 != entry.bytes {
+                return Err(format!(
+                    "the preview announced {} bytes and sent {}",
+                    entry.bytes,
+                    png.payload.len()
+                ));
+            }
+            out.push((entry.tank, png.payload));
+        }
+        Ok(PreviewTanksOutcome::Tanks(out))
+    })();
+    stop(&mut plugin);
+    match result? {
+        PreviewTanksOutcome::Tanks(tanks) => Ok(tanks),
+        PreviewTanksOutcome::FallbackLegacy => {
+            preview_with_plugin(root, plugin_id, manifest, archive, layer)
+                .map(|png| vec![(0, png)])
+        }
+    }
+}
+
 /// Opens a file the package declares and returns the scene container it wrote.
 ///
 /// The source bytes arrive from the renderer (a dropped `File` has no path worth
@@ -1235,6 +1301,55 @@ mod tests {
             String::from_utf8_lossy(&png).contains(":42"),
             "the layer number reached the plugin"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reads_per_tank_layer_previews_from_a_real_plugin_process() {
+        let root = temp_dir("preview-tanks");
+        let mut manifest = package::Manifest {
+            id: "example.full".to_string(),
+            capabilities: vec![
+                package::Capability::SlicerEncoder,
+                package::Capability::NetworkOperations,
+                package::Capability::FileType,
+            ],
+            formats: vec![package::FormatDecl {
+                id: "exf".to_string(),
+                extensions: vec![".exf".to_string()],
+                display_name: None,
+                layers: None,
+                requires_area_stats: false,
+                multi_tank: true,
+                format_versions: Vec::new(),
+                file_extension_from_version: false,
+            }],
+            file_types: vec![package::FileTypeDecl {
+                extension: ".echo".to_string(),
+                display_name: "Echo project".to_string(),
+                is_scene_file: true,
+            }],
+            ..manifest(vec![
+                package::Capability::SlicerEncoder,
+                package::Capability::NetworkOperations,
+                package::Capability::FileType,
+            ])
+        };
+        let _ = &mut manifest;
+        install_reference_plugin(&root, "full_plugin", &manifest);
+
+        let archive = root.join("job.exf");
+        std::fs::write(&archive, b"container").expect("archive");
+
+        let tanks = preview_tanks_with_plugin(&root, "example.full", &manifest, &archive, 17)
+            .expect("preview tanks");
+        assert_eq!(tanks.len(), 2);
+        assert_eq!(tanks[0].0, 0);
+        assert_eq!(tanks[1].0, 1);
+        assert!(tanks[0].1.starts_with(b"\x89PNG"));
+        assert!(String::from_utf8_lossy(&tanks[0].1).contains(":17:tank:0"));
+        assert!(String::from_utf8_lossy(&tanks[1].1).contains(":17:tank:1"));
 
         let _ = std::fs::remove_dir_all(&root);
     }
