@@ -23,6 +23,7 @@ import {
   getActivePrinterProfile,
   DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
   type MaterialProfile,
+  type RemoteMaterialProcessField,
   getProfileStoreServerSnapshot,
   getProfileStoreSnapshot,
   subscribeToProfileStore,
@@ -1001,21 +1002,26 @@ export function SlicingPanel({
     const selectedBottomLayerCount = Number(activePrinterProfile.networkConnection?.selectedMaterialBottomLayerCount);
     const selectedMaterialName = activePrinterProfile.networkConnection?.selectedMaterialName?.trim() ?? '';
 
+    const hasLayerHeight = Number.isFinite(selectedLayerHeightMm) && selectedLayerHeightMm > 0;
+    const hasNormalExposure = Number.isFinite(selectedNormalExposureSec) && selectedNormalExposureSec > 0;
+    const hasBottomExposure = Number.isFinite(selectedBottomExposureSec) && selectedBottomExposureSec > 0;
+    const hasBottomLayerCount = Number.isFinite(selectedBottomLayerCount) && selectedBottomLayerCount >= 0;
+    // which values come from the printer's material: those win over the output's local per-format
+    // settings when the job metadata is assembled (mergeMetadataOverridesIntoMetadata)
+    const remoteProcessFields: RemoteMaterialProcessField[] = [];
+    if (hasLayerHeight) remoteProcessFields.push('layerHeightMm');
+    if (hasNormalExposure) remoteProcessFields.push('normalExposureSec');
+    if (hasBottomExposure) remoteProcessFields.push('bottomExposureSec');
+    if (hasBottomLayerCount) remoteProcessFields.push('bottomLayerCount');
+
     return {
       ...activeMaterialProfile,
       name: selectedMaterialName || activeMaterialProfile.name,
-      layerHeightMm: Number.isFinite(selectedLayerHeightMm) && selectedLayerHeightMm > 0
-        ? selectedLayerHeightMm
-        : activeMaterialProfile.layerHeightMm,
-      normalExposureSec: Number.isFinite(selectedNormalExposureSec) && selectedNormalExposureSec > 0
-        ? selectedNormalExposureSec
-        : activeMaterialProfile.normalExposureSec,
-      bottomExposureSec: Number.isFinite(selectedBottomExposureSec) && selectedBottomExposureSec > 0
-        ? selectedBottomExposureSec
-        : activeMaterialProfile.bottomExposureSec,
-      bottomLayerCount: Number.isFinite(selectedBottomLayerCount) && selectedBottomLayerCount >= 0
-        ? selectedBottomLayerCount
-        : activeMaterialProfile.bottomLayerCount,
+      layerHeightMm: hasLayerHeight ? selectedLayerHeightMm : activeMaterialProfile.layerHeightMm,
+      normalExposureSec: hasNormalExposure ? selectedNormalExposureSec : activeMaterialProfile.normalExposureSec,
+      bottomExposureSec: hasBottomExposure ? selectedBottomExposureSec : activeMaterialProfile.bottomExposureSec,
+      bottomLayerCount: hasBottomLayerCount ? selectedBottomLayerCount : activeMaterialProfile.bottomLayerCount,
+      remoteProcessFields,
     };
   }, [activeMaterialProfile, activePrinterProfile, networkUiAdapter, printerReachabilityByDeviceId]);
 

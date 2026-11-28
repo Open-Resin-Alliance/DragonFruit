@@ -64,3 +64,47 @@ for (const printer of PRINTERS) {
     });
   }
 }
+
+/**
+ * A material picked from a network printer (the slicing panel's effective profile, with
+ * `remoteProcessFields`) is what the file is sliced with: its values win over the per-format
+ * settings stored on the local material, which otherwise replace the material's own.
+ */
+test('a remote material\'s process values win over the stored per-format settings', () => {
+  const printer = PRINTERS.find((entry) => entry.label.startsWith('Saturn 4 (.goo'));
+  assert.ok(printer, 'the .goo printer fixture');
+  const printerProfile = printer.appPrinter();
+  const local = appMaterial(printerProfile, material({ label: 'remote', ditherEnabled: false, perFormatSettings: true }));
+  const scene = { totalLayers: 200, tallestObjectHeightMm: 10, models: [describeSliceJobModel(cubeModel('remote-cube', 10))] };
+  const materialOf = (job: ReturnType<typeof assembleSliceJob>) =>
+    (JSON.parse(job.metadataJson) as { material: Record<string, unknown> }).material;
+
+  const stored = materialOf(assembleSliceJob({ printerProfile, materialProfile: local, scene }));
+  assert.equal(stored.normalExposureSec, 3.3, 'without a remote material the stored setting wins');
+  assert.equal(stored.bottomLayerCount, 7);
+
+  const remote = materialOf(assembleSliceJob({
+    printerProfile,
+    materialProfile: {
+      ...local,
+      layerHeightMm: 0.05,
+      normalExposureSec: 2.5,
+      bottomExposureSec: 30,
+      bottomLayerCount: 4,
+      remoteProcessFields: ['layerHeightMm', 'normalExposureSec', 'bottomExposureSec', 'bottomLayerCount'],
+    },
+    scene,
+  }));
+  assert.equal(remote.layerHeightMm, 0.05);
+  assert.equal(remote.normalExposureSec, 2.5);
+  assert.equal(remote.bottomExposureSec, 30);
+  assert.equal(remote.bottomLayerCount, 4);
+
+  const partial = materialOf(assembleSliceJob({
+    printerProfile,
+    materialProfile: { ...local, normalExposureSec: 2.5, remoteProcessFields: ['normalExposureSec'] },
+    scene,
+  }));
+  assert.equal(partial.normalExposureSec, 2.5, 'a field the remote material supplied');
+  assert.equal(partial.bottomExposureSec, 41, 'a field it did not supply keeps the stored setting');
+});
