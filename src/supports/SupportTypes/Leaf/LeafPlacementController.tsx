@@ -18,7 +18,7 @@ import { clearSupportSelection } from '../../interaction/shared/selection/select
 import { canResolveSupportPlacementBindingFromModifierState, getSupportPlacementModifierState, isSupportPlacementBindingSatisfiedByModifierState } from '../../interaction/shared/placement/hotkeys/supportPlacementHotkeyResolver';
 import { usePlacementSnappingSession } from '../../interaction/shared/placement/snapping/usePlacementSnappingSession';
 import { buildKickstandPathSnapTargets, buildPrimarySnapTargetIndex, ALL_SNAP_TYPES, buildSupportPathSnapTargets } from '../../interaction/shared/placement/snapping/supportPathTargets';
-import { cascadeExtras, getSupportTypeDescriptor, LEAF_SPROUT_HOST_TYPES, parseSegmentSelectionId, resolveSupportTypeIdOf, type SupportCollectionKey } from '../../supportTypeRegistry';
+import { cascadeExtras, getSupportTypeDescriptor, LEAF_SPROUT_HOST_TYPES, parsePrefixedSegmentId, resolveSupportTypeIdOf, type SupportCollectionKey } from '../../supportTypeRegistry';
 import { LEAF_PLACEMENT_OWNER } from '../../interaction/shared/placement/hotkeys/supportPlacementRouting';
 import { projectPointToSnapTargetPath, projectRayToSnapTargetPath, selectNearestPathTarget } from '../../interaction/shared/placement/snapping/pathProjection';
 import { isSupportEditInteractionActive } from '../../interaction/gizmoInteractionLock';
@@ -272,7 +272,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                 }
 
                 // If snapped to a brace, compute local tapered host diameter.
-                const spanTarget = parseSegmentSelectionId(resolvedSnap.targetId);
+                const spanTarget = parsePrefixedSegmentId(resolvedSnap.targetId);
                 if (spanTarget) {
                     const braceId = spanTarget.entityId;
                     const brace = supportState.braces[braceId];
@@ -330,7 +330,7 @@ export function LeafPlacementController({ activeModelId }: LeafPlacementControll
                         t = projected.t;
                         hostDiameterMm = hoveredTarget.pathSegment.radius * 2;
 
-                        const spanSegment = parseSegmentSelectionId(segmentId);
+                        const spanSegment = parsePrefixedSegmentId(segmentId);
                         if (spanSegment) {
                             const braceId = spanSegment.entityId;
                             const brace = supportState.braces[braceId];

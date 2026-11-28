@@ -2326,9 +2326,9 @@ export function isJointDragPreviewType(kind: string): kind is JointDragPreviewTy
 }
 
 /**
- * Mirrors each descriptor's `claimsModelSurfaceGestures` with the literals kept,
- * so the owner union narrows instead of widening to every type.
- * `supportPlacementRouting.test.ts` holds the two in step.
+ * `claimsModelSurfaceGestures` with the literals kept, so the owner union
+ * narrows instead of widening to every type. `satisfies` holds it to the flag's
+ * shape; the runtime list derives from the flag itself.
  */
 export const MODEL_SURFACE_GESTURE_BY_TYPE = {
     trunk: false,
@@ -2418,18 +2418,6 @@ export function parseInlineRootId(primitiveId: string): string | null {
     return primitiveId.endsWith(INLINE_ROOT_SUFFIX)
         ? primitiveId.slice(0, -INLINE_ROOT_SUFFIX.length)
         : null;
-}
-
-/** Split a segment selection id into its type and entity id, or null for a real segment. */
-export function parseSegmentSelectionId(
-    segmentId: string,
-): { typeId: SupportTypeId; entityId: string } | null {
-    for (const descriptor of SUPPORT_TYPES) {
-        const prefix = descriptor.segmentSelectionPrefix;
-        if (!prefix || !segmentId.startsWith(prefix)) continue;
-        return { typeId: descriptor.id, entityId: segmentId.slice(prefix.length) };
-    }
-    return null;
 }
 
 /**
@@ -2642,8 +2630,9 @@ export function parsePrefixedSegmentId(
 }
 
 export const MODEL_SURFACE_GESTURE_TYPES: readonly ModelSurfaceGestureTypeId[] =
-    (Object.keys(MODEL_SURFACE_GESTURE_BY_TYPE) as SupportTypeId[])
-        .filter((id): id is ModelSurfaceGestureTypeId => MODEL_SURFACE_GESTURE_BY_TYPE[id]);
+    SUPPORT_TYPES
+        .filter((descriptor) => descriptor.claimsModelSurfaceGestures)
+        .map((descriptor) => descriptor.id as ModelSurfaceGestureTypeId);
 
 /**
  * Types that own their edit-history entry but declare no update action.

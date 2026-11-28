@@ -6,7 +6,7 @@ import { useHotkeyConfig } from '@/hotkeys/HotkeyContext';
 import { addSupportEntityWithHistory, asOneSupportEdit, subscribe, getSnapshot, addKnot } from '../../state';
 import type { SnapTarget } from '../../interaction/SnappingManager';
 import type { Brace, Knot, Segment, Vec3 } from '../../types';
-import { braceSnapConeType, knotHostId, parseSegmentSelectionId, SUPPORT_TYPES, type SupportTypeId } from '../../supportTypeRegistry';
+import { braceSnapConeType, knotHostId, parsePrefixedSegmentId, SUPPORT_TYPES, type SupportTypeId } from '../../supportTypeRegistry';
 import { getSettings, getAutoBracingSettings } from '../../Settings/state';
 import { bracePlacementStore, useBracePlacementState } from './bracePlacementState';
 import { branchPlacementStore } from '../Branch/branchPlacementState';
@@ -553,7 +553,7 @@ export function BracePlacementController() {
                 } else {
                     const target = resolveNearestPathTarget(resolvedSnap.targetId, resolvedSnap.snappedPos) ?? getTarget(resolvedSnap.targetId);
                     let hostDia = target?.pathSegment?.radius !== undefined ? target.pathSegment.radius * 2 : fallbackDia;
-                    const spanTarget = parseSegmentSelectionId(resolvedSnap.targetId);
+                    const spanTarget = parsePrefixedSegmentId(resolvedSnap.targetId);
                     if (spanTarget) {
                         const brace = supportState.braces[spanTarget.entityId];
                         if (brace) {
@@ -698,7 +698,7 @@ export function BracePlacementController() {
                 let hostDiameterMm = target?.pathSegment?.radius !== undefined ? target.pathSegment.radius * 2 : undefined;
                 let ownerModelId = segmentMeta.get(resolvedSnap.targetId)?.modelId;
 
-                const spanTarget = parseSegmentSelectionId(resolvedSnap.targetId);
+                const spanTarget = parsePrefixedSegmentId(resolvedSnap.targetId);
                 if (spanTarget) {
                     const brace = supportState.braces[spanTarget.entityId];
                     if (brace) {

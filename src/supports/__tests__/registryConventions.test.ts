@@ -119,7 +119,7 @@ test('every declared id prefix round-trips through its builder and parser', () =
         if (descriptor.segmentSelectionPrefix) {
             const id = registry.segmentSelectionId(descriptor.id, 'entity-1');
             assert.deepEqual(
-                registry.parseSegmentSelectionId(id),
+                registry.parsePrefixedSegmentId(id),
                 { typeId: descriptor.id, entityId: 'entity-1' },
                 `${descriptor.id}: segment selection id does not round-trip`,
             );
@@ -129,7 +129,7 @@ test('every declared id prefix round-trips through its builder and parser', () =
 
 test('a real segment id parses as neither pseudo-shaft kind', () => {
     assert.equal(registry.parseKnotHostId('seg-123'), null);
-    assert.equal(registry.parseSegmentSelectionId('seg-123'), null);
+    assert.equal(registry.parsePrefixedSegmentId('seg-123'), null);
 });
 
 test('a type declaring no prefix refuses to build one', () => {
