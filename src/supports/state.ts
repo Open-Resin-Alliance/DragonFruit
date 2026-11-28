@@ -2659,151 +2659,86 @@ function isolateImportedSupportPayload(data: DragonfruitImportFormat): Dragonfru
         };
     });
 
-    cloned.trunks = cloned.trunks.map((trunk) => {
-        const nextSegments = trunk.segments.map((segment) => {
-            const nextSegmentId = uuidv4();
-            segmentIdMap.set(segment.id, nextSegmentId);
-            return {
-                ...segment,
-                id: nextSegmentId,
-                topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
-                bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
-            };
-        });
+    /** The map an edge's target is re-identified through. */
+    const mapForEdge = (to: string): Map<string, string> | null => {
+        if (to === 'roots') return rootIdMap;
+        if (to === 'knots') return knotIdMap;
+        if (to === 'segment') return segmentIdMap;
+        return null;
+    };
 
-        return {
-            ...trunk,
-            id: uuidv4(),
-            rootId: getOrCreateMappedId(trunk.rootId, rootIdMap),
-            segments: nextSegments,
-            contactCone: trunk.contactCone
-                ? {
-                    ...trunk.contactCone,
-                    id: uuidv4(),
-                    socketJointId: trunk.contactCone.socketJointId
-                        ? getOrCreateMappedId(trunk.contactCone.socketJointId, jointIdMap)
-                        : trunk.contactCone.socketJointId,
-                }
-                : trunk.contactCone,
-        };
-    });
+    /** The map a type's own id is registered in, when a knot can host on it. */
+    const ownIdMapFor = (typeId: SupportTypeId): Map<string, string> | null => {
+        if (CONE_KNOT_HOST_TYPES.includes(typeId)) return leafIdMap;
+        if (SPAN_KNOT_HOST_TYPES.includes(typeId)) return braceIdMap;
+        return null;
+    };
 
-    cloned.branches = cloned.branches.map((branch) => {
-        const nextSegments = branch.segments.map((segment) => {
-            const nextSegmentId = uuidv4();
-            segmentIdMap.set(segment.id, nextSegmentId);
-            return {
-                ...segment,
-                id: nextSegmentId,
-                topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
-                bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
-            };
-        });
-
-        return {
-            ...branch,
-            id: uuidv4(),
-            parentKnotId: getOrCreateMappedId(branch.parentKnotId, knotIdMap),
-            segments: nextSegments,
-            contactCone: branch.contactCone
-                ? {
-                    ...branch.contactCone,
-                    id: uuidv4(),
-                    socketJointId: branch.contactCone.socketJointId
-                        ? getOrCreateMappedId(branch.contactCone.socketJointId, jointIdMap)
-                        : branch.contactCone.socketJointId,
-                }
-                : branch.contactCone,
-        };
-    });
-
-    cloned.leaves = cloned.leaves.map((leaf) => {
+    /**
+     * One entity, re-identified. Everything it touches is declared: `hasSegments`
+     * says whether to walk shafts, `contactFields` names its contacts, and each
+     * edge names an id-bearing field and the collection it points into.
+     */
+    const isolateEntity = (
+        descriptor: SupportTypeDescriptor,
+        entity: Record<string, unknown>,
+    ): Record<string, unknown> => {
         const nextId = uuidv4();
-        leafIdMap.set(leaf.id, nextId);
-        return {
-            ...leaf,
-            id: nextId,
-            parentKnotId: getOrCreateMappedId(leaf.parentKnotId, knotIdMap),
-            contactCone: {
-                ...leaf.contactCone,
-                id: uuidv4(),
-                socketJointId: leaf.contactCone.socketJointId
-                    ? getOrCreateMappedId(leaf.contactCone.socketJointId, jointIdMap)
-                    : leaf.contactCone.socketJointId,
-            },
-        };
-    });
+        const ownIdMap = ownIdMapFor(descriptor.id);
+        if (ownIdMap) ownIdMap.set(entity.id as string, nextId);
 
-    cloned.twigs = (cloned.twigs ?? []).map((twig) => {
-        const nextSegments = twig.segments.map((segment) => {
-            const nextSegmentId = uuidv4();
-            segmentIdMap.set(segment.id, nextSegmentId);
-            return {
-                ...segment,
-                id: nextSegmentId,
-                topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
-                bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
+        const next: Record<string, unknown> = { ...entity, id: nextId };
+
+        if (descriptor.hasSegments) {
+            next.segments = ((entity.segments as Segment[] | undefined) ?? []).map((segment) => {
+                const nextSegmentId = uuidv4();
+                segmentIdMap.set(segment.id, nextSegmentId);
+                return {
+                    ...segment,
+                    id: nextSegmentId,
+                    topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
+                    bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
+                };
+            });
+        }
+
+        // An inline root carries its own joint outside the segments.
+        const ownJoint = entity.joint as { id: string } | undefined;
+        if (ownJoint) next.joint = remapSupportJoint(ownJoint as never, jointIdMap);
+
+        for (const field of descriptor.contactFields) {
+            const contact = entity[field] as { id: string; socketJointId?: string } | undefined;
+            if (!contact) continue;
+            next[field] = {
+                ...contact,
+                id: uuidv4(),
+                ...(contact.socketJointId
+                    ? { socketJointId: getOrCreateMappedId(contact.socketJointId, jointIdMap) }
+                    : {}),
             };
-        });
+        }
 
-        return {
-            ...twig,
-            id: uuidv4(),
-            segments: nextSegments,
-            contactDiskA: {
-                ...twig.contactDiskA,
-                id: uuidv4(),
-            },
-            contactDiskB: {
-                ...twig.contactDiskB,
-                id: uuidv4(),
-            },
-        };
-    });
+        for (const edge of descriptor.edges) {
+            const value = entity[edge.field];
+            if (typeof value !== 'string' || !value) continue;
+            const map = mapForEdge(edge.to);
+            if (map) next[edge.field] = getOrCreateMappedId(value, map);
+        }
 
-    cloned.sticks = (cloned.sticks ?? []).map((stick) => {
-        const nextSegments = stick.segments.map((segment) => {
-            const nextSegmentId = uuidv4();
-            segmentIdMap.set(segment.id, nextSegmentId);
-            return {
-                ...segment,
-                id: nextSegmentId,
-                topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
-                bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
-            };
-        });
+        return next;
+    };
 
-        return {
-            ...stick,
-            id: uuidv4(),
-            segments: nextSegments,
-            contactConeA: {
-                ...stick.contactConeA,
-                id: uuidv4(),
-                socketJointId: stick.contactConeA.socketJointId
-                    ? getOrCreateMappedId(stick.contactConeA.socketJointId, jointIdMap)
-                    : stick.contactConeA.socketJointId,
-            },
-            contactConeB: {
-                ...stick.contactConeB,
-                id: uuidv4(),
-                socketJointId: stick.contactConeB.socketJointId
-                    ? getOrCreateMappedId(stick.contactConeB.socketJointId, jointIdMap)
-                    : stick.contactConeB.socketJointId,
-            },
-        };
-    });
-
-    cloned.braces = cloned.braces.map((brace) => {
-        const nextId = uuidv4();
-        braceIdMap.set(brace.id, nextId);
-        return {
-            ...brace,
-            id: nextId,
-            startKnotId: getOrCreateMappedId(brace.startKnotId, knotIdMap),
-            endKnotId: getOrCreateMappedId(brace.endKnotId, knotIdMap),
-        };
-    });
+    // Every declared type, so a new one is isolated by being declared. The
+    // bundled type is nested, so it keeps its own pass below.
+    for (const descriptor of SUPPORT_TYPES) {
+        if (descriptor.serialisedAsBundle) continue;
+        const key = descriptor.location.key;
+        const incoming = (cloned as unknown as Record<string, Record<string, unknown>[] | undefined>)[key];
+        if (!incoming) continue;
+        (cloned as unknown as Record<string, unknown>)[key] = incoming.map(
+            (entity) => isolateEntity(descriptor, entity),
+        );
+    }
 
     // Kickstands are remapped before knots: a knot hosted on a kickstand segment
     // resolves its parentShaftId through segmentIdMap, and getOrCreateMappedId
