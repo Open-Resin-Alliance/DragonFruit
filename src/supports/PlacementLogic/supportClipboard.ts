@@ -329,7 +329,6 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
   if (!modelId) return null;
 
   const state = getSnapshot();
-  const snapshot = getSnapshot();
   const raftSettings = getRaftSettings();
 
   let minX = Number.POSITIVE_INFINITY;
@@ -413,17 +412,28 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
     .filter(knotBelongsToModel)
     .forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
 
-  const kickstandHostKnotIds = new Set(
-    Object.values(snapshot.kickstands)
-      .filter((kickstand) => kickstand.modelId === modelId)
-      .map((kickstand) => kickstand.hostKnotId),
-  );
+  // A knot named by a declared edge, whichever type declares it: a host knot
+  // sits on the host's shaft, so `knotBelongsToModel` does not reach it.
+  const edgeReferencedKnotIds = new Set<string>();
+  for (const descriptor of SUPPORT_TYPES) {
+    const fields = descriptor.edges.filter((edge) => edge.to === 'knots').map((edge) => edge.field);
+    if (fields.length === 0) continue;
 
-  Object.values(snapshot.knots)
-    .filter((knot) => kickstandHostKnotIds.has(knot.id))
+    const collection = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
+    for (const entity of Object.values(collection ?? {})) {
+      if (entity.modelId !== modelId) continue;
+      for (const field of fields) {
+        const value = entity[field];
+        if (typeof value === 'string' && value) edgeReferencedKnotIds.add(value);
+      }
+    }
+  }
+
+  Object.values(state.knots)
+    .filter((knot) => edgeReferencedKnotIds.has(knot.id))
     .forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
 
-  const expandSegments = (segments: Array<any>) => {
+  const expandSegments = (segments: readonly Segment[]) => {
     segments.forEach((segment) => {
       expand(segment.topJoint?.pos, Math.max(0.001, (segment.topJoint?.diameter ?? segment.diameter) / 2));
       expand(segment.bottomJoint?.pos, Math.max(0.001, (segment.bottomJoint?.diameter ?? segment.diameter) / 2));
@@ -437,7 +447,7 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
 
     for (const entity of Object.values(collection ?? {})) {
       if (entity.modelId !== modelId) continue;
-      if (descriptor.hasSegments) expandSegments((entity.segments ?? []) as any[]);
+      if (descriptor.hasSegments) expandSegments((entity.segments ?? []) as Segment[]);
 
       for (const field of descriptor.contactFields) {
         const contact = entity[field] as {
@@ -452,10 +462,6 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
       }
     }
   }
-
-  Object.values(snapshot.kickstands)
-    .filter((kickstand) => kickstand.modelId === modelId)
-    .forEach((kickstand) => expandSegments(kickstand.segments as any[]));
 
   return hasAny ? { minX, maxX, minY, maxY } : null;
 }
