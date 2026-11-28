@@ -13,6 +13,14 @@ Base contract for format-specific output:
 - `output_format()`
 - capability flags (`requires_*`)
 - bytes/path container output methods
+- `estimate_print_time_sec(metadata_json, layer_height_mm, total_layers) -> Option<u32>`
+
+The estimator is optional and defaults to `None`. It exists so the UI can ask
+the encoder that owns a printer's output format for the vendor's own print-time
+model before slicing, without duplicating that arithmetic in TypeScript. The
+inputs are the slice job's metadata and layer height, and the layer count the
+job would use; `None` means the format has no timing model and the caller keeps
+its own estimate.
 
 ### `RleStreamEncoder`
 
@@ -43,6 +51,8 @@ Common operations:
 
 - find encoder by extension
 - list supported extensions
+- `estimate_print_time_sec(output_format, metadata_json, layer_height_mm, total_layers)`
+  returns the owning encoder's estimate, or `None` when the format has none.
 
 ## Generated wiring
 

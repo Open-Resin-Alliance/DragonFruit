@@ -204,6 +204,19 @@ pub trait FormatEncoder: Send + Sync {
         1
     }
 
+    /// Estimated print duration in whole seconds for `total_layers` of this job,
+    /// using the same metadata and layer height the encoder reads at encode time.
+    ///
+    /// None when this format has no vendor timing model.
+    fn estimate_print_time_sec(
+        &self,
+        _metadata_json: &str,
+        _layer_height_mm: f32,
+        _total_layers: u32,
+    ) -> Option<u32> {
+        None
+    }
+
     /// Optionally decode a single 1-based layer preview image as PNG bytes
     /// from an already-encoded print artifact on disk.
     fn read_layer_preview_png(

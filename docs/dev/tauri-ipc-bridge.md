@@ -1,11 +1,11 @@
 # Tauri IPC and Native Bridge
 
-The desktop app (Tauri) exposes **109** native commands to the frontend
+The desktop app (Tauri) exposes **124** native commands to the frontend
 (`#[tauri::command]` under `src-tauri/src/`, all registered in the single
 `tauri::generate_handler![…]` list in `main.rs`).
 
 `src/features/slicing/tauri/nativeSlicerBridge.ts` is the **intended** seam: it
-holds 26 named wrappers and is where the cross-language conventions below are
+holds 32 named wrappers and is where the cross-language conventions below are
 centralized. It is not yet the only one. Today there are also **84 direct
 `invoke(...)` call sites in 29 other modules**, reaching ~70 distinct commands —
 nine of those modules are React components (`SettingsModal.tsx`,
@@ -57,6 +57,15 @@ grep -rhoE '\binvoke(<[^>]*>)?\(' src plugins --include=*.ts --include=*.tsx \
 3. **Events** — long-running native work streams progress via Tauri events, e.g.
    `listen('slicer://progress', …)`. Wrappers that need progress expose a
    callback or a subscription rather than blocking on the invoke.
+
+## Print-time estimates
+
+`estimate_print_time` (`src-tauri/src/print_time.rs`) forwards to the encoder
+that owns `output_format` via the engine registry's `estimate_print_time_sec`.
+The TS wrapper is `estimateNativePrintTime` in `nativeSlicerBridge.ts`; it takes
+the slice job's `metadataJson`, `layerHeightMm` and `totalLayers`, so the answer
+uses the same timing model the encoder writes into the file. A `null` result
+means the format has no vendor estimator, and the caller keeps its own estimate.
 
 ## Conventions to respect
 

@@ -75,6 +75,7 @@ mod plugin_sideload_encoder;
 #[cfg(test)]
 mod plugin_test_support;
 mod plugin_sideload_runtime;
+mod print_time;
 mod webview_watchdog;
 mod window_state;
 
@@ -4716,6 +4717,7 @@ fn main() {
             fetch_external_text,
             fetch_github_plugin_resource,
             get_slicer_engine_version,
+            print_time::estimate_print_time,
             notify_launch_scene_handoff,
             focus_main_window_command,
             reveal_main_window_command,

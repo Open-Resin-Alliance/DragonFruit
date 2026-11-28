@@ -94,6 +94,20 @@ pub fn find_encoder(output_format: &str) -> Option<&'static dyn FormatEncoder> {
         .map(|encoder| encoder.as_ref())
 }
 
+/// Print-time estimate in whole seconds from the encoder that owns the format.
+pub fn estimate_print_time_sec(
+    output_format: &str,
+    metadata_json: &str,
+    layer_height_mm: f32,
+    total_layers: u32,
+) -> Option<u32> {
+    find_encoder(output_format)?.estimate_print_time_sec(
+        metadata_json,
+        layer_height_mm,
+        total_layers,
+    )
+}
+
 /// Resolve an encoder from a loosely-typed format hint and source path.
 ///
 /// Accepts hints with or without leading '.' and supports variant suffixes
@@ -134,4 +148,23 @@ pub fn supported_output_formats() -> Vec<&'static str> {
         .iter()
         .map(|encoder| encoder.output_format())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn print_time_estimate_dispatches_to_the_format_encoder() {
+        let metadata = r#"{"material":{"normalExposureSec":2,"bottomExposureSec":20,"bottomLayerCount":2,"liftDistanceMm":0,"liftDistance2Mm":0,"bottomLiftDistanceMm":0,"bottomLiftDistance2Mm":0,"liftSpeedMmMin":0,"liftSpeed2MmMin":0,"retractSpeedMmMin":0,"retractSpeed2MmMin":0,"bottomLiftSpeedMmMin":0,"bottomLiftSpeed2MmMin":0,"bottomRetractSpeedMmMin":0,"bottomRetractSpeed2MmMin":0,"retractDistanceMm":0,"bottomRetractDistanceMm":0,"waitTimeBeforeCureSec":0,"waitTimeAfterCureSec":0,"waitTimeAfterLiftSec":0,"bottomWaitTimeBeforeCureSec":0,"bottomWaitTimeAfterCureSec":0,"bottomWaitTimeAfterLiftSec":0}}"#;
+        for format in [".ctb", ".goo", ".aff", ".azf"] {
+            assert_eq!(
+                estimate_print_time_sec(format, metadata, 0.05, 4),
+                Some(44),
+                "{format}",
+            );
+        }
+        assert_eq!(estimate_print_time_sec(".nanodlp", metadata, 0.05, 4), None);
+        assert_eq!(estimate_print_time_sec(".missing", metadata, 0.05, 4), None);
+    }
 }

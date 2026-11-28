@@ -247,6 +247,40 @@ export async function getSlicerEngineVersion(): Promise<string | null> {
   return core.invoke<string>('get_slicer_engine_version');
 }
 
+/**
+ * Print-time estimate in whole seconds from the encoder that owns the printer's
+ * output format. `metadataJson` is the same metadata the slice job sends, so
+ * the estimate uses the timing model the encoder writes into the file.
+ *
+ * `null` when the format has no vendor estimator or the runtime is not Tauri.
+ */
+export async function estimateNativePrintTime(options: {
+  outputFormat: string;
+  metadataJson: string;
+  layerHeightMm: number;
+  totalLayers: number;
+}): Promise<number | null> {
+  const core = await loadTauriCore();
+  if (!core) return null;
+  const rawLayers = Number(options.totalLayers);
+  const totalLayers = Number.isFinite(rawLayers)
+    ? Math.min(0xffff_ffff, Math.max(0, Math.floor(rawLayers)))
+    : 0;
+  const rawLayerHeight = Number(options.layerHeightMm);
+  const layerHeightMm = Number.isFinite(rawLayerHeight) && rawLayerHeight > 0
+    ? rawLayerHeight
+    : 0;
+  const seconds = await core.invoke<number | null>('estimate_print_time', {
+    outputFormat: options.outputFormat,
+    metadataJson: options.metadataJson,
+    layerHeightMm,
+    totalLayers,
+  });
+  return typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0
+    ? Math.floor(seconds)
+    : null;
+}
+
 export type SlicerProgressCallback = (done: number, total: number, phase: string) => void;
 
 export type NativeSliceTempPathArtifact = {
