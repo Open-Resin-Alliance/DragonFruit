@@ -1,4 +1,4 @@
-import { SupportState, SupportEntityAny, DragonfruitImportFormat, Trunk, Roots, Segment, BezierSegment, StraightSegment, Branch, BraceCurve, Joint, Knot, Vec3, Leaf, Brace, Stump } from './types';
+import { SupportState, SupportEntityAny, DragonfruitImportFormat, Trunk, Roots, Segment, BezierSegment, StraightSegment, Branch, BraceCurve, Joint, Knot, Vec3, Leaf, Brace } from './types';
 import { ANCHOR_HEIGHT_THRESHOLD_MM } from './autoSupport/constants';
 import { calculateBezierControlPoints, getBezierPointAtT, toVector3, toVec3 } from './Curves/BezierUtils';
 import { calculateKnotPositionOnSegmentFromT } from './SupportPrimitives/Knot/knotUtils';
@@ -12,7 +12,7 @@ import { collectCascade, groupByCollection, ownedPrimitives, type EntityRef } fr
 import { modelCascadeSeeds } from './PlacementLogic/SupportModelLinker';
 import { pushSupportHistory } from './history/supportHistory';
 import { supportSettleFor } from './settle/seam';
-import { collectOwnedRootIds, hasSupportUpdater, hostKnotFieldsFor, typeIdForCollection, updateSupportEntity, JOINT_REMOVAL_TYPES, MODEL_ID_COLLECTION_KEYS, bundledSupportTypeId, coneKnotHostType, coneKnotHostCollectionKey, spanKnotHostType, spanKnotHostCollectionKey, parseKnotHostId, parsePrefixedSegmentId, isKnotHostId, isConeKnotHost, isSpanKnotHost, knotHostId, CONE_KNOT_HOST_TYPES, SPAN_KNOT_HOST_TYPES, SUPPORT_COLLECTION_KEYS, contactEndpointsFor, EDITABLE_SUPPORT_TYPES, hasSettingsInference, inferSupportSettings, isEditableSupportType, registerCollectionRestore, collectionsMissingRestore, registerSettingsInference, transformExtrasFor, type SupportTypeDescriptor, createEmptySupportCollections, getSupportTypeDescriptor, registerSupportUpdater, registerSupportTypeResolver, resolveKnotDiameter, resolveSupportTypeIdOf, type SupportEntityFor, SUPPORT_STATE_COLLECTIONS, SUPPORT_TYPES, type SupportTypeId, type JointRemovalTypeId } from './supportTypeRegistry';
+import { collectOwnedRootIds, hasSupportUpdater, hostKnotFieldsFor, typeIdForCollection, updateSupportEntity, JOINT_REMOVAL_TYPES, MODEL_ID_COLLECTION_KEYS, bundledSupportTypeId, coneKnotHostType, inlineRootPlacementFor, coneKnotHostCollectionKey, spanKnotHostType, spanKnotHostCollectionKey, parseKnotHostId, parsePrefixedSegmentId, isKnotHostId, isConeKnotHost, isSpanKnotHost, knotHostId, CONE_KNOT_HOST_TYPES, SPAN_KNOT_HOST_TYPES, SUPPORT_COLLECTION_KEYS, contactEndpointsFor, EDITABLE_SUPPORT_TYPES, hasSettingsInference, inferSupportSettings, isEditableSupportType, registerCollectionRestore, collectionsMissingRestore, registerSettingsInference, transformExtrasFor, type SupportTypeDescriptor, createEmptySupportCollections, getSupportTypeDescriptor, registerSupportUpdater, registerSupportTypeResolver, resolveKnotDiameter, resolveSupportTypeIdOf, type SupportEntityFor, SUPPORT_STATE_COLLECTIONS, SUPPORT_TYPES, type SupportTypeId, type JointRemovalTypeId } from './supportTypeRegistry';
 import { typesMissingExportGroupBuilder } from './exportGeometry/seam';
 import { migrateLegacySupportPayload } from './importMigrations';
 import type { SupportCollectionKey } from './supportTypeRegistry';
@@ -1803,20 +1803,33 @@ export function transformSupportRecord(
 }
 
 /**
- * A stump's root is its plate contact, and its joint sits a fixed gap above that
- * root. A model transform moves both, which lifts the root off the plate and
- * leaves the cone's length unchanged; seat them back and stretch the cone so its
- * socket stays on the joint. Only the model-transform paths call this — a paste
- * is a placement delta and must move the whole stump with the copy.
+ * An inline root is the entity's own plate contact, and its joint sits a fixed
+ * gap above it. A model transform moves both, lifting the base off the plate and
+ * leaving the cone's length unchanged; seat them back and stretch the cone so
+ * its socket stays on the joint. Only the model-transform paths call this — a
+ * paste is a placement delta and moves the whole entity with the copy.
  */
-function seatInlineRootAfterTransform(stump: Stump, preserveRootZ: boolean, original: Stump): Stump {
-    const rootPos = preserveRootZ ? { ...stump.rootPos, z: original.rootPos.z } : stump.rootPos;
-    const socketZ = rootPos.z + stump.rootHeight + INLINE_ROOT_SOCKET_CLEARANCE_MM;
+function seatInlineRootAfterTransform(
+    inlineType: SupportTypeDescriptor,
+    entity: Record<string, unknown>,
+    preserveRootZ: boolean,
+    original: Record<string, unknown>,
+): Record<string, unknown> {
+    const base = inlineRootPlacementFor(inlineType.id);
+    const coneField = inlineType.upper.field;
+    if (!base?.heightField || !coneField) return entity;
+
+    const moved = entity[base.posField] as Vec3;
+    const authored = original[base.posField] as Vec3 | undefined;
+    const rootPos = preserveRootZ && authored ? { ...moved, z: authored.z } : moved;
+    const socketZ = rootPos.z + (entity[base.heightField] as number) + INLINE_ROOT_SOCKET_CLEARANCE_MM;
+    const joint = entity.joint as Joint;
+
     return {
-        ...stump,
-        rootPos,
-        joint: { ...stump.joint, pos: { x: rootPos.x, y: rootPos.y, z: socketZ } },
-        contactCone: seatInlineRootCone(stump.contactCone, socketZ),
+        ...entity,
+        [base.posField]: rootPos,
+        joint: { ...joint, pos: { x: rootPos.x, y: rootPos.y, z: socketZ } },
+        [coneField]: seatInlineRootCone(entity[coneField] as ContactCone, socketZ),
     };
 }
 
@@ -1855,29 +1868,49 @@ function hasHostedMembers(
  * real shaft over a plate root. Null when the authored cone already reaches the
  * root, where a trunk would have no shaft to add.
  */
-function convertStumpToTrunk(stump: Stump): { root: Roots; trunk: Trunk } | null {
-    const decoded = stump.settingsCodeHex ? decodeSupportSettingsHex(stump.settingsCodeHex) : null;
-    const authoredLength = decoded?.tip.lengthMm ?? stump.contactCone.profile.lengthMm;
-    const cone = {
-        ...stump.contactCone,
-        profile: { ...stump.contactCone.profile, lengthMm: authoredLength },
-    };
+/** The field the band pair's plate-root side names its `Roots` record in. */
+function plateSideRootField(inlineType: SupportTypeDescriptor): string | undefined {
+    const plateSide = inlineType.convertsAcrossAnchorBandTo
+        ? getSupportTypeDescriptor(inlineType.convertsAcrossAnchorBandTo)
+        : undefined;
+    return plateSide?.edges.find((edge) => edge.to === 'roots' && edge.ownership === 'owns')?.field;
+}
+
+function convertInlineRootToPlateRoot(
+    inlineType: SupportTypeDescriptor,
+    entity: Record<string, unknown>,
+): { root: Roots; shaft: Record<string, unknown> } | null {
+    const base = inlineRootPlacementFor(inlineType.id);
+    const coneField = inlineType.upper.field;
+    if (!base?.topRadiusField || !base.heightField || !coneField) return null;
+
+    const basePos = entity[base.posField] as Vec3;
+    const baseRadius = entity[base.radiusField] as number;
+    const topRadius = entity[base.topRadiusField] as number;
+    const baseHeight = entity[base.heightField] as number;
+    const contactCone = entity[coneField] as ContactCone;
+
+    const settingsCodeHex = entity.settingsCodeHex as string | undefined;
+    const decoded = settingsCodeHex ? decodeSupportSettingsHex(settingsCodeHex) : null;
+    const authoredLength = decoded?.tip.lengthMm ?? contactCone.profile.lengthMm;
+    const cone = { ...contactCone, profile: { ...contactCone.profile, lengthMm: authoredLength } };
+
     const socket = getFinalSocketPosition(cone);
-    const rootTopZ = stump.rootHeight + INLINE_ROOT_SOCKET_CLEARANCE_MM;
+    const rootTopZ = baseHeight + INLINE_ROOT_SOCKET_CLEARANCE_MM;
     if (socket.z <= rootTopZ + 1e-3) return null;
 
     const rootId = uuidv4();
     const topJointId = uuidv4();
     const root: Roots = {
         id: rootId,
-        modelId: stump.modelId,
+        modelId: entity.modelId as string,
         transform: {
-            pos: { x: stump.rootPos.x, y: stump.rootPos.y, z: 0 },
+            pos: { x: basePos.x, y: basePos.y, z: 0 },
             rot: { x: 0, y: 0, z: 0, w: 1 },
         },
-        diameter: stump.rootBaseDiameter,
+        diameter: baseRadius,
         diskHeight: INLINE_ROOT_SOCKET_CLEARANCE_MM,
-        coneHeight: stump.rootHeight,
+        coneHeight: baseHeight,
     };
     // The root is the shaft's bottom, so the segment carries only its top joint.
     // A bottom joint would move with the model on a Z transform and detach from
@@ -1885,19 +1918,23 @@ function convertStumpToTrunk(stump: Stump): { root: Roots; trunk: Trunk } | null
     const segment: Segment = {
         id: uuidv4(),
         type: 'straight',
-        diameter: stump.rootTopDiameter,
-        topJoint: { id: topJointId, pos: socket, diameter: stump.rootTopDiameter },
+        diameter: topRadius,
+        topJoint: { id: topJointId, pos: socket, diameter: topRadius },
     };
-    const trunk: Trunk = {
-        id: stump.id,
-        modelId: stump.modelId,
-        settingsCodeHex: stump.settingsCodeHex,
-        rootId,
+
+    const rootField = plateSideRootField(inlineType);
+    if (!rootField) return null;
+
+    const shaft: Record<string, unknown> = {
+        id: entity.id,
+        modelId: entity.modelId,
+        settingsCodeHex,
+        [rootField]: rootId,
         segments: [segment],
-        contactCone: { ...cone, socketJointId: topJointId },
-        origin: stump.origin,
+        [coneField]: { ...cone, socketJointId: topJointId },
+        origin: entity.origin,
     };
-    return { root, trunk };
+    return { root, shaft };
 }
 
 /**
@@ -1906,14 +1943,26 @@ function convertStumpToTrunk(stump: Stump): { root: Roots; trunk: Trunk } | null
  * carrying members is left alone: a stump's root sits directly under its cone,
  * and it cannot host.
  */
-function convertTrunkToStump(trunk: Trunk, root: Roots | undefined): Stump | null {
-    if (!root || !trunk.contactCone || trunk.segments.length !== 1) return null;
-    const segment = trunk.segments[0];
+function convertPlateRootToInlineRoot(
+    inlineType: SupportTypeDescriptor,
+    entity: Record<string, unknown>,
+    root: Roots | undefined,
+): Record<string, unknown> | null {
+    const base = inlineRootPlacementFor(inlineType.id);
+    const coneField = inlineType.upper.field;
+    if (!base?.topRadiusField || !base.heightField || !coneField) return null;
+
+    const contactCone = entity[coneField] as ContactCone | undefined;
+    const segments = (entity.segments as Segment[] | undefined) ?? [];
+    if (!root || !contactCone || segments.length !== 1) return null;
+
+    const segment = segments[0];
     if (segment.type === 'bezier') return null;
     const top = segment.topJoint;
     if (!top) return null;
-    // The first segment may leave its bottom to the root, which is the shape a
-    // stump-to-trunk conversion writes.
+
+    // The first segment may leave its bottom to the root, which is the shape the
+    // other direction writes.
     const bottomPos = segment.bottomJoint?.pos ?? root.transform.pos;
     if (Math.abs(bottomPos.x - root.transform.pos.x) > 0.01
         || Math.abs(bottomPos.y - root.transform.pos.y) > 0.01
@@ -1924,33 +1973,35 @@ function convertTrunkToStump(trunk: Trunk, root: Roots | undefined): Stump | nul
     const rootTopZ = root.transform.pos.z + root.diskHeight + root.coneHeight;
     // What matters is whether the tip is above the root, not whether the
     // authored cone reaches it: a short gap is served by stretching the cone.
-    if (trunk.contactCone.pos.z <= rootTopZ + 1e-3) return null;
+    if (contactCone.pos.z <= rootTopZ + 1e-3) return null;
+
     return {
-        id: trunk.id,
-        modelId: trunk.modelId,
-        settingsCodeHex: trunk.settingsCodeHex,
-        rootPos: { x: root.transform.pos.x, y: root.transform.pos.y, z: 0 },
-        rootBaseDiameter: root.diameter,
-        rootTopDiameter: segment.diameter,
-        rootHeight: root.coneHeight,
+        id: entity.id,
+        modelId: entity.modelId,
+        settingsCodeHex: entity.settingsCodeHex,
+        [base.posField]: { x: root.transform.pos.x, y: root.transform.pos.y, z: 0 },
+        [base.radiusField]: root.diameter,
+        [base.topRadiusField]: segment.diameter,
+        [base.heightField]: root.coneHeight,
         joint: {
             id: top.id,
             pos: { x: root.transform.pos.x, y: root.transform.pos.y, z: rootTopZ },
             diameter: top.diameter,
         },
         segments: [],
-        contactCone: seatInlineRootCone(trunk.contactCone, rootTopZ),
-        origin: trunk.origin,
+        [coneField]: seatInlineRootCone(contactCone, rootTopZ),
+        origin: entity.origin,
     };
 }
 
 /**
- * Moves supports across the stump/trunk boundary after a Z move: a stump whose
- * tip is above the near-plate band becomes a trunk, and a bare vertical trunk
- * whose tip has dropped into the band becomes a stump. Runs on the transformed
- * collections, so the conversion lands in the same history step as the move.
+ * Moves supports across the near-plate band after a Z move: an inline-root
+ * support whose tip is above the band takes a shared root, and a bare vertical
+ * one on a shared root whose tip has dropped into it takes an inline root
+ * again. Runs on the transformed collections, so the conversion lands in the
+ * same history step as the move.
  */
-function convertSupportsAcrossStumpBand(
+function convertSupportsAcrossAnchorBand(
     collections: Record<string, unknown>,
     knots: Record<string, Knot>,
     modelId?: string,
@@ -1961,37 +2012,44 @@ function convertSupportsAcrossStumpBand(
     if (!inlineSide) return false;
     const plateSide = getSupportTypeDescriptor(inlineSide.convertsAcrossAnchorBandTo!);
 
-    const stumps = { ...(collections[inlineSide.location.key] as Record<string, Stump> | undefined) };
-    const trunks = { ...(collections[plateSide.location.key] as Record<string, Trunk> | undefined) };
+    const inlineRooted = { ...(collections[inlineSide.location.key] as Record<string, unknown> | undefined) };
+    const plateRooted = { ...(collections[plateSide.location.key] as Record<string, unknown> | undefined) };
     const roots = { ...(collections.roots as Record<string, Roots> | undefined) };
     let changed = false;
 
-    for (const stump of Object.values(stumps)) {
-        if (modelId && stump.modelId !== modelId) continue;
-        if (stump.contactCone.pos.z <= ANCHOR_HEIGHT_THRESHOLD_MM) continue;
-        const converted = convertStumpToTrunk(stump);
+    const inlineConeField = inlineSide.upper.field!;
+    const plateConeField = plateSide.upper.field!;
+    const plateRootField = plateSideRootField(inlineSide)!;
+
+    for (const entity of Object.values(inlineRooted) as unknown as Record<string, unknown>[]) {
+        if (modelId && entity.modelId !== modelId) continue;
+        const cone = entity[inlineConeField] as ContactCone;
+        if (cone.pos.z <= ANCHOR_HEIGHT_THRESHOLD_MM) continue;
+        const converted = convertInlineRootToPlateRoot(inlineSide, entity);
         if (!converted) continue;
-        delete stumps[stump.id];
+        delete inlineRooted[entity.id as string];
         roots[converted.root.id] = converted.root;
-        trunks[converted.trunk.id] = converted.trunk;
+        plateRooted[converted.shaft.id as string] = converted.shaft;
         changed = true;
     }
 
-    for (const trunk of Object.values(trunks)) {
-        if (modelId && trunk.modelId !== modelId) continue;
-        if (!trunk.contactCone || trunk.contactCone.pos.z >= ANCHOR_HEIGHT_THRESHOLD_MM) continue;
-        if (hasHostedMembers(trunk, knots, collections)) continue;
-        const converted = convertTrunkToStump(trunk, roots[trunk.rootId]);
+    for (const entity of Object.values(plateRooted) as unknown as Record<string, unknown>[]) {
+        if (modelId && entity.modelId !== modelId) continue;
+        const cone = entity[plateConeField] as ContactCone | undefined;
+        if (!cone || cone.pos.z >= ANCHOR_HEIGHT_THRESHOLD_MM) continue;
+        if (hasHostedMembers(entity as unknown as { segments: Segment[] }, knots, collections)) continue;
+        const rootId = entity[plateRootField] as string;
+        const converted = convertPlateRootToInlineRoot(inlineSide, entity, roots[rootId]);
         if (!converted) continue;
-        delete trunks[trunk.id];
-        delete roots[trunk.rootId];
-        stumps[converted.id] = converted;
+        delete plateRooted[entity.id as string];
+        delete roots[rootId];
+        inlineRooted[converted.id as string] = converted;
         changed = true;
     }
 
     if (changed) {
-        collections.stumps = stumps;
-        collections.trunks = trunks;
+        collections[inlineSide.location.key] = inlineRooted;
+        collections[plateSide.location.key] = plateRooted;
         collections.roots = roots;
     }
     return changed;
@@ -2274,7 +2332,7 @@ export function transformSupportsForModel(
             // An inline root is the entity's own plate contact, so it has to be
             // reseated after the move rather than carried by a `Roots` record.
             target[id] = descriptor.lower.kind === 'inlineRoot'
-                ? seatInlineRootAfterTransform(transformed as unknown as Stump, delta.preserveRootZ, entity as unknown as Stump)
+                ? seatInlineRootAfterTransform(descriptor, transformed, delta.preserveRootZ, entity)
                 : transformed;
         }
     }
@@ -2318,7 +2376,7 @@ export function transformSupportsForModel(
 
         // A pure Z move is what changes the gap a near-plate support spans.
         if (delta.preserveRootZ) {
-            convertSupportsAcrossStumpBand(nextCollections, nextKnots, modelId);
+            convertSupportsAcrossAnchorBand(nextCollections, nextKnots, modelId);
         }
 
         setState({ ...state, ...nextCollections } as SupportState);
@@ -2356,12 +2414,12 @@ export function transformAllSupportsForSingleModel(
     for (const descriptor of SUPPORT_TYPES) {
         if (descriptor.lower.kind !== 'inlineRoot') continue;
         const key = descriptor.location.key;
-        const before = state[key] as unknown as Record<string, Stump>;
-        const after = transformed[key] as unknown as Record<string, Stump>;
+        const before = state[key] as unknown as Record<string, Record<string, unknown>>;
+        const after = transformed[key] as unknown as Record<string, Record<string, unknown>>;
         (transformed as unknown as Record<string, unknown>)[key] = Object.fromEntries(
             Object.entries(after).map(([id, entity]) => [
                 id,
-                seatInlineRootAfterTransform(entity, delta.preserveRootZ, before[id] ?? entity),
+                seatInlineRootAfterTransform(descriptor, entity, delta.preserveRootZ, before[id] ?? entity),
             ]),
         );
     }
@@ -2376,7 +2434,7 @@ export function transformAllSupportsForSingleModel(
     }
 
     if (delta.preserveRootZ) {
-        convertSupportsAcrossStumpBand(transformed as unknown as Record<string, unknown>, nextKnots);
+        convertSupportsAcrossAnchorBand(transformed as unknown as Record<string, unknown>, nextKnots);
     }
 
     setState({

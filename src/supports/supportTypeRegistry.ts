@@ -2563,6 +2563,10 @@ export interface InlineRootPlacement {
     posField: string;
     /** The field holding the base radius. */
     radiusField: string;
+    /** The field holding the radius where the shaft leaves the base. */
+    topRadiusField?: string;
+    /** The field holding the base's own height. */
+    heightField?: string;
 }
 
 export const INLINE_ROOT_TYPES: readonly InlineRootPlacement[] = SUPPORT_TYPES
@@ -2580,8 +2584,15 @@ export const INLINE_ROOT_TYPES: readonly InlineRootPlacement[] = SUPPORT_TYPES
             collectionKey: descriptor.location.key,
             posField: field,
             radiusField,
+            topRadiusField: descriptor.lower.topRadiusField,
+            heightField: descriptor.lower.heightField,
         };
     });
+
+/** The declared inline-root fields for one type, or null when it has none. */
+export function inlineRootPlacementFor(typeId: SupportTypeId): InlineRootPlacement | null {
+    return INLINE_ROOT_TYPES.find((placement) => placement.typeId === typeId) ?? null;
+}
 
 /**
  * The fields through which a type hangs off a host knot: its `hostedBy` edges
