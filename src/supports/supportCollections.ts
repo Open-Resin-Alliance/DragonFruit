@@ -44,11 +44,26 @@ export function* describedEntities<E = Record<string, unknown>>(
     }
 }
 
+/** Every entity of every type matching `where`, without the descriptor. */
+export function* entitiesOfTypes<E = Record<string, unknown>>(
+    collections: Partial<Record<SupportCollectionKey, Record<string, unknown>>>,
+    where: (descriptor: SupportTypeDescriptor) => boolean,
+): Generator<E> {
+    for (const { entity } of describedEntities<E>(collections, where)) yield entity;
+}
+
+/** Every support entity, of every type. */
+export function* allSupportEntities<E = Record<string, unknown>>(
+    collections: Partial<Record<SupportCollectionKey, Record<string, unknown>>>,
+): Generator<E> {
+    yield* entitiesOfTypes<E>(collections, () => true);
+}
+
 /** Every entity standing on a `Roots` record of its own. */
 export function* rootOwnerEntities<E = Record<string, unknown>>(
     collections: Partial<Record<SupportCollectionKey, Record<string, unknown>>>,
 ): Generator<E> {
-    for (const { entity } of describedEntities<E>(collections, (d) => d.ownsRoot)) yield entity;
+    yield* entitiesOfTypes<E>(collections, (descriptor) => descriptor.ownsRoot);
 }
 
 /**

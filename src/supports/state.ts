@@ -22,7 +22,7 @@ import { resolveSegmentEndpoints, type ShaftEntity } from './SupportPrimitives/K
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { emitSupportInteractionReset } from './interaction/supportInteractionReset';
 import { getJointDiameter, JOINT_DIAMETER_OFFSET_MM } from './constants';
-import { describedEntities, mapImportPayloadEntities, mapSupportEntities } from './supportCollections';
+import { allSupportEntities, describedEntities, entitiesOfTypes, mapImportPayloadEntities, mapSupportEntities } from './supportCollections';
 import type { Kickstand, KickstandBuildResult } from './SupportTypes/Kickstand/types';
 import * as THREE from 'three';
 import { quaternionFromGlobalEuler } from '@/utils/rotation';
@@ -601,14 +601,12 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, Support
     // Segment -> its owning entity and type, so a host can be asked how it sizes
     // knots without this function knowing which types answer.
     const shaftHostBySegmentId = new Map<string, { typeId: SupportTypeId; entity: unknown }>();
-    for (const descriptor of SUPPORT_TYPES) {
-        if (!descriptor.hasSegments) continue;
-        const record = snapshot[descriptor.location.key as SupportCollectionKey] as Record<string, { segments: Segment[] }> | undefined;
-        if (!record) continue;
-        for (const entity of Object.values(record)) {
-            for (const segment of entity.segments) {
-                shaftHostBySegmentId.set(segment.id, { typeId: descriptor.id, entity });
-            }
+    for (const { descriptor, entity } of describedEntities<{ segments: Segment[] }>(
+        snapshot,
+        (candidate) => candidate.hasSegments,
+    )) {
+        for (const segment of entity.segments) {
+            shaftHostBySegmentId.set(segment.id, { typeId: descriptor.id, entity });
         }
     }
 
@@ -2078,12 +2076,9 @@ export function transformSupportsForModel(
     }
 
     const segmentModelIdById = new Map<string, string | undefined>();
-    for (const descriptor of SUPPORT_TYPES) {
-        if (!descriptor.hasSegments) continue;
-        const collection = state[descriptor.location.key] as Record<string, { modelId: string; segments?: Segment[] }>;
-        for (const entity of Object.values(collection)) {
-            for (const segment of entity.segments ?? []) segmentModelIdById.set(segment.id, entity.modelId);
-        }
+    type Shafted = { modelId: string; segments?: Segment[] };
+    for (const entity of entitiesOfTypes<Shafted>(state, (descriptor) => descriptor.hasSegments)) {
+        for (const segment of entity.segments ?? []) segmentModelIdById.set(segment.id, entity.modelId);
     }
 
     const resolveModelIdFromParentShaft = (parentShaftId: string, visitedBraceIds?: Set<string>): string | undefined => {
@@ -3540,23 +3535,19 @@ export function getModelIdForSupportEntityId(id: string | null | undefined): str
     // segment or joint id, versus
     // the knot id an edge points at -- so no id can satisfy both. Walked by
     // collection, not through the derived union.
-    for (const descriptor of SUPPORT_TYPES) {
-        const view = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
-        for (const entityId in view) {
-            const entity = view[entityId];
-            // A primitive on a shaft: segment, or either of its joints.
-            if (descriptor.hasSegments) {
-                const segments = (entity.segments as Segment[] | undefined) ?? [];
-                if (segments.some((segment) =>
-                    segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
-                    return modelIdOf(entity);
-                }
-            }
-
-            // Or the entity points at the id through one of its declared edges.
-            if (descriptor.edges.some((edge) => edge.to === 'knots' && entity[edge.field] === id)) {
+    for (const { descriptor, entity } of describedEntities(state, () => true)) {
+        // A primitive on a shaft: segment, or either of its joints.
+        if (descriptor.hasSegments) {
+            const segments = (entity.segments as Segment[] | undefined) ?? [];
+            if (segments.some((segment) =>
+                segment.id === id || segment.topJoint?.id === id || segment.bottomJoint?.id === id)) {
                 return modelIdOf(entity);
             }
+        }
+
+        // Or the entity points at the id through one of its declared edges.
+        if (descriptor.edges.some((edge) => edge.to === 'knots' && entity[edge.field] === id)) {
+            return modelIdOf(entity);
         }
     }
 
@@ -3616,12 +3607,8 @@ export function getSupportTypeOf(id: string): SupportTypeId | null {
 function findSupportEntityWhere(
     predicate: (entity: Record<string, unknown>) => boolean,
 ): Record<string, unknown> | null {
-    for (const descriptor of SUPPORT_TYPES) {
-        const view = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
-        for (const id in view) {
-            const entity = view[id];
-            if (predicate(entity)) return entity;
-        }
+    for (const entity of allSupportEntities(state)) {
+        if (predicate(entity)) return entity;
     }
     return null;
 }

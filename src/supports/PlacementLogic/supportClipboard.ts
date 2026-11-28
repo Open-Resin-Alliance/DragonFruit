@@ -10,6 +10,7 @@ import type { SupportBaseCircle } from '@/supports/Rafts/Crenelated/RaftTypes';
 import { v4 as uuidv4 } from 'uuid';
 import { clonePlainData } from '@/utils/plainDataClone';
 import { MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, type SupportCollectionKey, type SupportTypeDescriptor } from '@/supports/supportTypeRegistry';
+import { describedEntities, entitiesOfTypes } from '@/supports/supportCollections';
 import { PASTE_SUPPORTS_LABEL } from '@/supports/history/supportHistoryLabels';
 
 /** One array per collection, keyed off the registry. */
@@ -395,14 +396,10 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
     }
 
     // Every shafted type, so a knot riding a stump or kickstand resolves too.
-    for (const descriptor of SUPPORT_TYPES) {
-      if (!descriptor.hasSegments) continue;
-      const collection = state[descriptor.location.key] as unknown as Record<string, { modelId: string; segments?: Segment[] }>;
-
-      for (const entity of Object.values(collection ?? {})) {
-        if (entity.modelId !== modelId) continue;
-        if (entity.segments?.some((segment) => segment.id === parentShaftId)) return true;
-      }
+    type Shafted = { modelId: string; segments?: Segment[] };
+    for (const entity of entitiesOfTypes<Shafted>(state, (descriptor) => descriptor.hasSegments)) {
+      if (entity.modelId !== modelId) continue;
+      if (entity.segments?.some((segment) => segment.id === parentShaftId)) return true;
     }
 
     return false;
@@ -415,17 +412,12 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
   // A knot named by a declared edge, whichever type declares it: a host knot
   // sits on the host's shaft, so `knotBelongsToModel` does not reach it.
   const edgeReferencedKnotIds = new Set<string>();
-  for (const descriptor of SUPPORT_TYPES) {
-    const fields = descriptor.edges.filter((edge) => edge.to === 'knots').map((edge) => edge.field);
-    if (fields.length === 0) continue;
-
-    const collection = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
-    for (const entity of Object.values(collection ?? {})) {
-      if (entity.modelId !== modelId) continue;
-      for (const field of fields) {
-        const value = entity[field];
-        if (typeof value === 'string' && value) edgeReferencedKnotIds.add(value);
-      }
+  for (const { descriptor, entity } of describedEntities(state, (descriptor) => descriptor.edges.some((edge) => edge.to === 'knots'))) {
+    if (entity.modelId !== modelId) continue;
+    for (const edge of descriptor.edges) {
+      if (edge.to !== 'knots') continue;
+      const value = entity[edge.field];
+      if (typeof value === 'string' && value) edgeReferencedKnotIds.add(value);
     }
   }
 
@@ -442,24 +434,20 @@ export function estimateSupportBoundsForModel(modelId: string): SupportModelBoun
 
   // Every type's shafts and declared contacts. A cone carries its contact
   // diameter on its profile, a disk directly on itself.
-  for (const descriptor of SUPPORT_TYPES) {
-    const collection = state[descriptor.location.key] as unknown as Record<string, Record<string, unknown>>;
+  for (const { descriptor, entity } of describedEntities(state, () => true)) {
+    if (entity.modelId !== modelId) continue;
+    if (descriptor.hasSegments) expandSegments((entity.segments ?? []) as Segment[]);
 
-    for (const entity of Object.values(collection ?? {})) {
-      if (entity.modelId !== modelId) continue;
-      if (descriptor.hasSegments) expandSegments((entity.segments ?? []) as Segment[]);
+    for (const field of descriptor.contactFields) {
+      const contact = entity[field] as {
+        pos: Vec3;
+        contactDiameterMm?: number;
+        profile?: { contactDiameterMm: number };
+      } | undefined;
+      if (!contact) continue;
 
-      for (const field of descriptor.contactFields) {
-        const contact = entity[field] as {
-          pos: Vec3;
-          contactDiameterMm?: number;
-          profile?: { contactDiameterMm: number };
-        } | undefined;
-        if (!contact) continue;
-
-        const diameter = contact.contactDiameterMm ?? contact.profile?.contactDiameterMm ?? 0;
-        expand(contact.pos, Math.max(0.001, diameter / 2));
-      }
+      const diameter = contact.contactDiameterMm ?? contact.profile?.contactDiameterMm ?? 0;
+      expand(contact.pos, Math.max(0.001, diameter / 2));
     }
   }
 
