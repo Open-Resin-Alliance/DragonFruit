@@ -34,26 +34,36 @@ import {
   pasteModelSupportsFromClipboard,
   type SupportClipboardPayload,
 } from '../src/supports/PlacementLogic/supportClipboard';
-import type { Knot, Roots, SupportState, Trunk } from '../src/supports/types';
+import { SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES } from '../src/supports/supportTypeRegistry';
+import type { Knot, Roots, SupportState } from '../src/supports/types';
 
 const MODELS = Number(process.env.MODELS ?? 20);
 const SUPPORTS_PER_MODEL = Number(process.env.SUPPORTS ?? 150);
 const DUP_COUNTS = (process.env.DUPS ?? '1,2,4,8,16').split(',').map(Number);
 const SOURCE_MODEL_ID = 'model-0';
-const COLLECTION_KEYS = [
-  'roots', 'knots', 'trunks', 'branches', 'leaves',
-  'twigs', 'sticks', 'braces', 'stumps', 'kickstands',
-];
+const COLLECTION_KEYS = SUPPORT_COLLECTION_KEYS;
+
+// The benchmark needs an entity with a plate root, a shaft and a contact cone;
+// which type that is comes from the registry.
+function entityShape() {
+  const found = SUPPORT_TYPES.find(
+    (d) => d.lower.kind === 'plateRoot' && d.upper.kind === 'cone' && d.hasSegments,
+  );
+  if (!found) throw new Error('no registered type is a plate root with a shaft and a contact cone');
+  return found;
+}
+const SHAPE = entityShape();
+const ENTITY_KEY = SHAPE.location.key;
 
 function buildSceneState(): SupportState {
   const roots: Record<string, Roots> = {};
   const knots: Record<string, Knot> = {};
-  const trunks: Record<string, Trunk> = {};
+  const entities: Record<string, unknown> = {};
 
   for (let m = 0; m < MODELS; m += 1) {
     const modelId = `model-${m}`;
     for (let i = 0; i < SUPPORTS_PER_MODEL; i += 1) {
-      const id = `trunk-${m}-${i}`;
+      const id = `${SHAPE.singular}-${m}-${i}`;
       const segmentId = `${id}-s`;
       const x = i * 0.5;
       const y = m * 0.5;
@@ -67,7 +77,7 @@ function buildSceneState(): SupportState {
         coneHeight: 1.2,
       };
 
-      trunks[id] = {
+      entities[id] = {
         id,
         modelId,
         rootId: `root-${m}-${i}`,
@@ -103,7 +113,7 @@ function buildSceneState(): SupportState {
     }
   }
 
-  return { roots, knots, trunks } as unknown as SupportState;
+  return { roots, knots, [ENTITY_KEY]: entities } as unknown as SupportState;
 }
 
 function timed<T>(fn: () => T): { ms: number; value: T } {
@@ -240,7 +250,7 @@ function bestOf(dups: number): RunResult {
 }
 
 function main() {
-  console.log(`scene: ${MODELS} models × ${SUPPORTS_PER_MODEL} supports (trunk+root+knot each), best of ${RUNS}`);
+  console.log(`scene: ${MODELS} models × ${SUPPORTS_PER_MODEL} supports (${SHAPE.singular}+root+knot each), best of ${RUNS}`);
   console.log('');
 
   const baseline = bestOf(0);

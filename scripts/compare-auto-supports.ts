@@ -15,7 +15,7 @@
 import { readFileSync } from 'node:fs';
 import { parseVoxlAuto } from '../src/features/scene/voxl/codec';
 import type { DragonfruitImportFormat } from '../src/supports/types';
-import { SUPPORT_TYPES } from '../src/supports/supportTypeRegistry';
+import { SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES } from '../src/supports/supportTypeRegistry';
 
 type XY = { x: number; y: number };
 type XYZ = XY & { z: number };
@@ -33,11 +33,12 @@ async function load(path: string): Promise<DragonfruitImportFormat> {
     const supports = (parsed.document as { supports?: DragonfruitImportFormat }).supports;
     if (!supports) {
         // A bare model file carries no supports payload — treat as empty.
+        const empty = Object.fromEntries(SUPPORT_COLLECTION_KEYS.map((key) => [key, []]));
         return {
             version: 1,
             meta: { source: '', objectCenter: { x: 0, y: 0, z: 0 } },
-            roots: [], trunks: [], branches: [], leaves: [], braces: [], knots: [],
-        };
+            ...empty,
+        } as DragonfruitImportFormat;
     }
     return supports;
 }
