@@ -549,6 +549,9 @@ export function buildNativeSliceJob(assembled: AssembledSliceJob, options: {
     zaaPattern: antiAliasing.zaaPattern,
     zaaDuplicateZ: antiAliasing.zaaDuplicateZ,
     aaOnSupports: antiAliasing.aaOnSupports ?? options.aaOnSupportsFallback,
+    ...(antiAliasing.aaPreserveMaterialBoundaries !== undefined
+      ? { aaPreserveMaterialBoundaries: antiAliasing.aaPreserveMaterialBoundaries }
+      : {}),
     minimumAaAlphaPercent: antiAliasing.minimumAaAlphaPercent,
     mirrorX: assembled.mirrorX,
     mirrorY: assembled.mirrorY,

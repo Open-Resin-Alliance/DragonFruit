@@ -53,3 +53,31 @@ test('Compensation Distance is editable only for Manual with Override Auto enabl
   assert.ok(manual.includes('Compensation Distance (mm)'));
   assert.ok(manual.includes('value="0.125"'), 'manual input shows the saved distance');
 });
+
+test('Multi-Material Boundaries card renders only for multi-tank printers and stays available in Auto mode', () => {
+  const draft = {
+    antiAliasingSettings: {
+      ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+      enableCustomSettings: false,
+      enableOverride: false,
+      aaPreserveMaterialBoundaries: true,
+    },
+    layerHeightMm: 0.05,
+  } as MaterialDraft;
+
+  const singleHtml = renderToStaticMarkup(
+    <I18nProvider i18n={i18n}>
+      <MaterialAntiAliasingSection draft={draft} onChange={() => {}} />
+    </I18nProvider>,
+  );
+  assert.ok(!singleHtml.includes('Multi-Material Boundaries'));
+  assert.ok(!singleHtml.includes('Preserve Material Boundaries'));
+
+  const multiHtml = renderToStaticMarkup(
+    <I18nProvider i18n={i18n}>
+      <MaterialAntiAliasingSection draft={draft} onChange={() => {}} isMultiTankPrinter />
+    </I18nProvider>,
+  );
+  assert.ok(multiHtml.includes('Multi-Material Boundaries'));
+  assert.ok(multiHtml.includes('Preserve Material Boundaries'));
+});

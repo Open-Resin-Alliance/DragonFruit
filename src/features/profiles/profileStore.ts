@@ -292,6 +292,7 @@ export type MaterialAntiAliasingSettings = {
     zBlendResinType: 'opaque' | 'clear' | 'custom';
     selectedLutCurveId: string;
     aaOnSupports: boolean;
+    aaPreserveMaterialBoundaries: boolean;
     ditherEnabled: boolean;
     ditherBitDepth: number;
     ditherDeviceGamma: number;
@@ -325,6 +326,7 @@ export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettin
     zBlendResinType: 'opaque',
     selectedLutCurveId: 'default',
     aaOnSupports: false,
+    aaPreserveMaterialBoundaries: true,
     ditherEnabled: false,
     ditherBitDepth: 8,
     ditherDeviceGamma: 2.2,
@@ -471,6 +473,7 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
         zBlendResinType,
         selectedLutCurveId,
         aaOnSupports: typeof source.aaOnSupports === 'boolean' ? source.aaOnSupports : defaults.aaOnSupports,
+        aaPreserveMaterialBoundaries: typeof source.aaPreserveMaterialBoundaries === 'boolean' ? source.aaPreserveMaterialBoundaries : defaults.aaPreserveMaterialBoundaries,
         ditherEnabled: typeof source.ditherEnabled === 'boolean' ? source.ditherEnabled : defaults.ditherEnabled,
         ditherBitDepth: Math.round(clampNumber(source.ditherBitDepth, defaults.ditherBitDepth, 2, 7)),
         ditherDeviceGamma: clampNumber(source.ditherDeviceGamma, defaults.ditherDeviceGamma, 0.5, 4.0),

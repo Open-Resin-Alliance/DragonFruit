@@ -61,6 +61,7 @@ export type AutoAaResolvedConfig = {
 /** The anti-aliasing options the panel hands the slice export orchestrator. */
 export type SliceAntiAliasingOptions = {
   aaOnSupports: boolean;
+  aaPreserveMaterialBoundaries?: boolean;
   antiAliasingLevel: AntiAliasingLevel;
   antiAliasingMode: 'Blur' | '3DAA' | 'Vertical2' | 'Coverage';
   supportTipShrinkPercent: number;
@@ -320,6 +321,9 @@ export function resolveSliceAntiAliasing(input: SliceAntiAliasingInput): SliceAn
   return {
     options: {
       aaOnSupports: settings.aaOnSupports === true,
+      ...(printerProfile?.materialMode === 'multiTank'
+        ? { aaPreserveMaterialBoundaries: settings.aaPreserveMaterialBoundaries !== false }
+        : {}),
       antiAliasingLevel,
       antiAliasingMode,
       supportTipShrinkPercent: settings.supportTipShrinkPercent,
@@ -389,6 +393,7 @@ export type SliceJobAntiAliasing = {
   zaaDuplicateZ: boolean | undefined;
   /** Undefined when nothing was requested; the export falls back to the performance setting. */
   aaOnSupports: boolean | undefined;
+  aaPreserveMaterialBoundaries?: boolean;
   minimumAaAlphaPercent: number;
   /**
    * How much support contact tips shrink before slicing. Geometry, applied

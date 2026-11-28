@@ -5443,6 +5443,7 @@ export function ProfileSettingsModal({
                     onDraftChange={setEditMaterialDraft}
                     printerDitherBitDepth={printerDitherBitDepth}
                     printerPanelBitDepth={printerPanelBitDepth}
+                    isMultiTankPrinter={selectedPrinter?.materialMode === 'multiTank'}
                     outputFormat={selectedPrinter?.display.outputFormat ?? '.lys'}
                     settingsMode={selectedResolvedSettingsMode}
                     adapter={selectedLocalMaterialSettingsAdapter}
@@ -5466,6 +5467,7 @@ export function ProfileSettingsModal({
                       onChange={setEditMaterialDraft}
                       printerDitherBitDepth={printerDitherBitDepth}
                       printerPanelBitDepth={printerPanelBitDepth}
+                      isMultiTankPrinter={selectedPrinter?.materialMode === 'multiTank'}
                     />
                     <PluginLocalMaterialSettingsSections
                       outputFormat={selectedPrinter?.display.outputFormat ?? '.lys'}
@@ -6362,6 +6364,7 @@ export function ProfileSettingsModal({
                     onDraftChange={setNewMaterialDraft}
                     printerDitherBitDepth={printerDitherBitDepth}
                     printerPanelBitDepth={printerPanelBitDepth}
+                    isMultiTankPrinter={selectedPrinter?.materialMode === 'multiTank'}
                     outputFormat={selectedPrinter.display.outputFormat}
                     settingsMode={selectedResolvedSettingsMode}
                     adapter={selectedLocalMaterialSettingsAdapter}
@@ -6385,6 +6388,7 @@ export function ProfileSettingsModal({
                       onChange={setNewMaterialDraft}
                       printerDitherBitDepth={printerDitherBitDepth}
                       printerPanelBitDepth={printerPanelBitDepth}
+                      isMultiTankPrinter={selectedPrinter?.materialMode === 'multiTank'}
                     />
                     <PluginLocalMaterialSettingsSections
                       outputFormat={selectedPrinter.display.outputFormat}

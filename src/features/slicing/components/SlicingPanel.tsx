@@ -2817,6 +2817,7 @@ export function SlicingPanel({
                 draft={materialAaEditorDraft}
                 printerDitherBitDepth={printerDitherBitDepth}
                 printerPanelBitDepth={printerPanelBitDepth}
+                isMultiTankPrinter={activePrinterProfile?.materialMode === 'multiTank'}
                 onChange={(next) => {
                   setMaterialAaEditorDraft((current) => {
                     if (!current) return current;
@@ -2890,6 +2891,7 @@ export function SlicingPanel({
                 lockActivationToggles
                 printerDitherBitDepth={printerDitherBitDepth}
                 printerPanelBitDepth={printerPanelBitDepth}
+                isMultiTankPrinter={activePrinterProfile?.materialMode === 'multiTank'}
                 onChange={(next) => {
                   setEditingSessionAaOverrideDraft((current) => {
                     if (!current) return current;

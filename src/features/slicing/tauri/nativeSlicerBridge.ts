@@ -32,6 +32,7 @@ export type NativeSolidSliceJobEnvelope = {
   zBlurKernel?: 'box' | 'gaussian';
   zBlurSigma?: number;
   aaOnSupports: boolean;
+  aaPreserveMaterialBoundaries?: boolean;
   minimumAaAlphaPercent: number;
   mirrorX: boolean;
   mirrorY: boolean;
@@ -90,6 +91,7 @@ type NativeSolidSliceMetadataPayload = {
   z_blur_kernel: 'box' | 'gaussian';
   z_blur_sigma: number;
   aa_on_supports: boolean;
+  aa_preserve_material_boundaries?: boolean;
   minimum_aa_alpha_percent: number;
   mirror_x: boolean;
   mirror_y: boolean;
@@ -210,6 +212,7 @@ export function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): Nativ
       ? {
         tank_count: job.tankCount,
         triangle_tank_index: job.triangleTankIndex ? Array.from(job.triangleTankIndex) : [],
+        aa_preserve_material_boundaries: job.aaPreserveMaterialBoundaries ?? true,
       }
       : {}),
     container_compression_level: clampSliceJobNumber('containerCompressionLevel', job.containerCompressionLevel),

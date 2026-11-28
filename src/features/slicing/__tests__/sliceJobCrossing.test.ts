@@ -156,3 +156,22 @@ test('the struct parser actually found the crossing', () => {
     'serde aliases are not being parsed',
   );
 });
+
+test('multi-tank envelope emits tank and boundary preservation fields declared by Rust', () => {
+  const rustFields = parseRustMetadataStruct();
+  const known = new Set(rustFields.flatMap((f) => [f.name, ...f.aliases]));
+
+  const emitted = toNativeMetadataPayload({
+    ...completeEnvelope(),
+    tankCount: 2,
+    triangleTankIndex: [0],
+    aaPreserveMaterialBoundaries: true,
+  });
+
+  assert.equal(emitted.tank_count, 2);
+  assert.deepEqual(emitted.triangle_tank_index, [0]);
+  assert.equal(emitted.aa_preserve_material_boundaries, true);
+
+  const orphans = Object.keys(emitted).filter((key) => !known.has(key));
+  assert.deepEqual(orphans, [], `multi-tank mapper emitted undeclared fields: ${orphans.join(', ')}`);
+});

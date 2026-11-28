@@ -238,3 +238,30 @@ test('LUT plus Blur zeroes the minimum alpha the engine is sent', () => {
   })).options;
   assert.equal(minimum.minimumAaAlphaPercentOverride, 40);
 });
+
+test('multi-tank printer plumbs aaPreserveMaterialBoundaries (default true) and omits it for single-material', () => {
+  const { printer, material: baseMaterial } = fixtureFor(SATURN_4);
+  const single = resolveSliceAntiAliasing(input());
+  assert.equal('aaPreserveMaterialBoundaries' in single.options, false);
+
+  const multiPrinter: PrinterProfile = { ...printer, materialMode: 'multiTank', tankCount: 2 };
+  const multiDefault = resolveSliceAntiAliasing(input({ printerProfile: multiPrinter }));
+  assert.equal(multiDefault.options.aaPreserveMaterialBoundaries, true);
+
+  const materialDisabled: MaterialProfile = {
+    ...baseMaterial,
+    antiAliasingSettings: { ...baseMaterial.antiAliasingSettings, aaPreserveMaterialBoundaries: false },
+  };
+  const fromMaterial = resolveSliceAntiAliasing(input({
+    printerProfile: multiPrinter,
+    materialProfile: materialDisabled,
+  }));
+  assert.equal(fromMaterial.options.aaPreserveMaterialBoundaries, false);
+
+  const fromOverride = resolveSliceAntiAliasing(input({
+    printerProfile: multiPrinter,
+    materialProfile: materialDisabled,
+    override: override({ aaPreserveMaterialBoundaries: true }),
+  }));
+  assert.equal(fromOverride.options.aaPreserveMaterialBoundaries, true);
+});

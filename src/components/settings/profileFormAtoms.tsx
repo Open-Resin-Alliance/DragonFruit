@@ -1093,6 +1093,7 @@ type MaterialAntiAliasingSectionProps = {
     printerDitherBitDepth?: number | null;
     /** Raw bit depth declared by the printer profile, before the 2..7 dither clamp. */
     printerPanelBitDepth?: number | null;
+    isMultiTankPrinter?: boolean;
 };
 
 const AA_STRENGTH_PRESETS = [4, 8, 16, 32] as const;
@@ -1250,7 +1251,7 @@ function AaInlineHelp({ children }: { children: React.ReactNode }) {
     return <p className="text-xs leading-snug" style={{ color: 'var(--text-muted)' }}>{children}</p>;
 }
 
-export function MaterialAntiAliasingSection({ draft, onChange, lockActivationToggles = false, printerDitherBitDepth = null, printerPanelBitDepth = null }: MaterialAntiAliasingSectionProps) {
+export function MaterialAntiAliasingSection({ draft, onChange, lockActivationToggles = false, printerDitherBitDepth = null, printerPanelBitDepth = null, isMultiTankPrinter = false }: MaterialAntiAliasingSectionProps) {
     const settings = {
         ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
         ...(draft.antiAliasingSettings ?? {}),
@@ -1840,6 +1841,22 @@ export function MaterialAntiAliasingSection({ draft, onChange, lockActivationTog
                     )}
                 </div>
             </AaCard>
+            {isMultiTankPrinter && (
+                <AaCard
+                    className="md:col-span-2"
+                    title="Multi-Material Boundaries"
+                    description="Controls how anti-aliasing behaves where different materials touch."
+                >
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 items-end">
+                        <LabeledToggleInput
+                            label="Preserve Material Boundaries"
+                            helpText="Enabled applies anti-aliasing only on outside edges while keeping boundaries between touching materials crisp. Disabled anti-aliases each material independently."
+                            checked={settings.aaPreserveMaterialBoundaries}
+                            onChange={(value) => updateAaSettings({ aaPreserveMaterialBoundaries: value })}
+                        />
+                    </div>
+                </AaCard>
+            )}
         </div>
     );
 }
@@ -2907,6 +2924,7 @@ type ReplacementMaterialEditorShellProps = {
     onDraftChange: React.Dispatch<React.SetStateAction<MaterialDraft>>;
     printerDitherBitDepth?: number | null;
     printerPanelBitDepth?: number | null;
+    isMultiTankPrinter?: boolean;
     activeTabStyle?: React.CSSProperties;
     outputFormat: string;
     settingsMode?: string;
@@ -2926,6 +2944,7 @@ export function ReplacementMaterialEditorShell({
     onDraftChange,
     printerDitherBitDepth = null,
     printerPanelBitDepth = null,
+    isMultiTankPrinter = false,
     outputFormat,
     activeTabStyle,
     settingsMode,
@@ -2968,6 +2987,7 @@ export function ReplacementMaterialEditorShell({
                     onChange={onDraftChange}
                     printerDitherBitDepth={printerDitherBitDepth}
                     printerPanelBitDepth={printerPanelBitDepth}
+                    isMultiTankPrinter={isMultiTankPrinter}
                 />
             );
         }
@@ -2984,7 +3004,7 @@ export function ReplacementMaterialEditorShell({
                 showTabBar={false}
             />
         );
-    }, [adapter, draft, localSettingsByOutput, onDraftChange, onLocalSettingsByOutputChange, outputFormat, ownerPrinterId, printerDitherBitDepth, printerPanelBitDepth, printerProfiles, settingsMode, shareablePrinterIds]);
+    }, [adapter, draft, isMultiTankPrinter, localSettingsByOutput, onDraftChange, onLocalSettingsByOutputChange, outputFormat, ownerPrinterId, printerDitherBitDepth, printerPanelBitDepth, printerProfiles, settingsMode, shareablePrinterIds]);
 
     React.useLayoutEffect(() => {
         const root = measureRootRef.current;
