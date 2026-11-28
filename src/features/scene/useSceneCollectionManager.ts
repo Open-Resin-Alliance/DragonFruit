@@ -3822,7 +3822,6 @@ export function useSceneCollectionManager(options?: {
       return {
         updated: false,
         supportsChanged: false,
-        kickstandsChanged: false,
         supportLocalFramePreserved: false,
       };
     }
@@ -3830,7 +3829,6 @@ export function useSceneCollectionManager(options?: {
       return {
         updated: false,
         supportsChanged: false,
-        kickstandsChanged: false,
         supportLocalFramePreserved: false,
       };
     }
@@ -3844,7 +3842,6 @@ export function useSceneCollectionManager(options?: {
       return {
         updated: false,
         supportsChanged: false,
-        kickstandsChanged: false,
         supportLocalFramePreserved: false,
       };
     }
@@ -3867,11 +3864,9 @@ export function useSceneCollectionManager(options?: {
       && Math.abs(beforeTransform.position.z - transform.position.z) <= 1e-8;
 
     let supportsChanged = false;
-    let kickstandsChanged = false;
 
     let transformCommit = {
       supportsChanged: false,
-      kickstandsChanged: false,
     };
 
     if (previousTransformOverride && modelsRef.current.length === 1) {
@@ -3881,7 +3876,6 @@ export function useSceneCollectionManager(options?: {
     }
 
     supportsChanged = supportsChanged || transformCommit.supportsChanged;
-    kickstandsChanged = kickstandsChanged || transformCommit.kickstandsChanged;
 
     const updateMap = new Map<string, ModelTransform>();
     updateMap.set(id, transform);
@@ -3913,7 +3907,6 @@ export function useSceneCollectionManager(options?: {
 
         const peerCommit = transformSupportsForModel(peer.id, peerBefore, peerNextTransform);
         supportsChanged = supportsChanged || peerCommit.supportsChanged;
-        kickstandsChanged = kickstandsChanged || peerCommit.kickstandsChanged;
       }
     }
 
@@ -3955,7 +3948,6 @@ export function useSceneCollectionManager(options?: {
     return {
       updated: true,
       supportsChanged,
-      kickstandsChanged,
       supportLocalFramePreserved,
     };
   }, []);
@@ -4136,7 +4128,6 @@ export function useSceneCollectionManager(options?: {
       return {
         updated: false,
         supportsChanged: false,
-        kickstandsChanged: false,
         supportLocalFramePreserved: false,
       };
     }
@@ -4144,7 +4135,6 @@ export function useSceneCollectionManager(options?: {
       return {
         updated: false,
         supportsChanged: false,
-        kickstandsChanged: false,
         supportLocalFramePreserved: false,
       };
     }
@@ -4209,7 +4199,6 @@ export function useSceneCollectionManager(options?: {
       : null;
 
     let supportsChanged = false;
-    let kickstandsChanged = false;
     let updated = false;
     let supportLocalFramePreserved = true;
     const perfStoreStart = perfMark();
@@ -4238,7 +4227,6 @@ export function useSceneCollectionManager(options?: {
       }
       const commit = transformSupportsForModel(id, before, nextTransform);
       supportsChanged = supportsChanged || commit.supportsChanged;
-      kickstandsChanged = kickstandsChanged || commit.kickstandsChanged;
       updated = true;
     });
 
@@ -4248,7 +4236,6 @@ export function useSceneCollectionManager(options?: {
       return {
         updated: false,
         supportsChanged,
-        kickstandsChanged,
         supportLocalFramePreserved: false,
       };
     }
@@ -4311,7 +4298,6 @@ export function useSceneCollectionManager(options?: {
     return {
       updated,
       supportsChanged,
-      kickstandsChanged,
       supportLocalFramePreserved,
     };
   }, [pushSceneSnapshotHistory]);

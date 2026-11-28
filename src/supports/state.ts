@@ -2038,7 +2038,6 @@ function reassignAllKickstandModelIdsInState(modelId: string): boolean {
 
 export type SupportTransformCommitResult = {
     supportsChanged: boolean;
-    kickstandsChanged: boolean;
 };
 
 export function transformSupportsForModel(
@@ -2049,7 +2048,6 @@ export function transformSupportsForModel(
     if (!modelId) {
         return {
             supportsChanged: false,
-            kickstandsChanged: false,
         };
     }
 
@@ -2057,7 +2055,6 @@ export function transformSupportsForModel(
     if (!delta) {
         return {
             supportsChanged: false,
-            kickstandsChanged: false,
         };
     }
 
@@ -2336,9 +2333,6 @@ export function transformSupportsForModel(
         ) as unknown as Knot;
     }
 
-    // Read before `setState` replaces `state`.
-    const kickstandsChanged = nextKickstands !== state.kickstands;
-
     if (changed) {
         // One entry per collection the loop touched; the rest carry through.
         const nextCollections: Record<string, unknown> = {};
@@ -2363,7 +2357,6 @@ export function transformSupportsForModel(
 
     return {
         supportsChanged: changed,
-        kickstandsChanged,
     };
 }
 
@@ -2375,7 +2368,6 @@ export function transformAllSupportsForSingleModel(
     if (!delta) {
         return {
             supportsChanged: false,
-            kickstandsChanged: false,
         };
     }
 
@@ -2409,9 +2401,6 @@ export function transformAllSupportsForSingleModel(
         convertSupportsAcrossStumpBand(transformed as unknown as Record<string, unknown>, nextKnots);
     }
 
-    // Read before `setState` replaces `state`.
-    const kickstandsChanged = transformed.kickstands !== state.kickstands;
-
     setState({
         ...state,
         ...transformed,
@@ -2421,7 +2410,6 @@ export function transformAllSupportsForSingleModel(
 
     return {
         supportsChanged: true,
-        kickstandsChanged,
     };
 }
 

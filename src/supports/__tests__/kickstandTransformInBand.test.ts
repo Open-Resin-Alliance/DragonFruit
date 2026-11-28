@@ -8,9 +8,9 @@ import type { Segment } from '../types';
 /**
  * A kickstand stands on its own root and is reached by no edge, so it has to be
  * transformed by the same walk as every other type. These fix the behaviour that
- * walk owes: a kickstand on the moved model follows it, one hosted on the moved
- * model's graph follows it even when it names another model, and the whole
- * transform reaches subscribers as a single notification.
+ * walk owes: a kickstand on the moved model follows it, one on a root the model
+ * owns follows it even when it names another model, an untouched one is left
+ * alone, and the whole transform reaches subscribers as a single notification.
  */
 
 const MODEL = 'model-1';
@@ -70,12 +70,13 @@ test('a kickstand on the moved model follows it', () => {
     addHostTrunk();
     addKickstand('probe', 6, MODEL);
 
-    const result = transformSupportsForModel(MODEL, MIRROR_X.before, MIRROR_X.after);
+    const before = getSnapshot().kickstands;
+    transformSupportsForModel(MODEL, MIRROR_X.before, MIRROR_X.after);
 
     const moved = getSnapshot().kickstands.probe;
     assert.equal(moved.segments[0]?.bottomJoint?.pos.x, -6, 'the shaft follows the mirror');
     assert.equal(getSnapshot().knots['knot-probe'].pos.x, -6, 'the knot on that shaft follows too');
-    assert.equal(result.kickstandsChanged, true, 'the commit reports the kickstand moved');
+    assert.notEqual(getSnapshot().kickstands, before, 'the collection is replaced when one of its own moved');
 });
 
 test('a kickstand on a moved root follows it while naming another model', () => {
@@ -95,17 +96,18 @@ test('a kickstand on a moved root follows it while naming another model', () => 
         pos: { x: 6, y: 0, z: 18 }, diameter: 1.3,
     } as never);
 
-    const result = transformSupportsForModel(MODEL, MIRROR_X.before, MIRROR_X.after);
+    const before = getSnapshot().kickstands;
+    transformSupportsForModel(MODEL, MIRROR_X.before, MIRROR_X.after);
 
     assert.equal(
         getSnapshot().kickstands.probe.segments[0]?.bottomJoint?.pos.x,
         -6,
         'a kickstand on the moved model\'s root follows it whatever its own modelId says',
     );
-    assert.equal(result.kickstandsChanged, true, 'the commit reports the kickstand moved');
+    assert.notEqual(getSnapshot().kickstands, before, 'the collection is replaced when one of its own moved');
 });
 
-test('a kickstand untouched by the transform stays put and is not reported', () => {
+test('a kickstand untouched by the transform stays put', () => {
     resetStore();
     addHostTrunk();
 
@@ -122,10 +124,9 @@ test('a kickstand untouched by the transform stays put and is not reported', () 
     } as never);
 
     const before = getSnapshot().kickstands;
-    const result = transformSupportsForModel(MODEL, MIRROR_X.before, MIRROR_X.after);
+    transformSupportsForModel(MODEL, MIRROR_X.before, MIRROR_X.after);
 
     assert.equal(getSnapshot().kickstands, before, 'the collection is not copied when nothing in it moved');
-    assert.equal(result.kickstandsChanged, false, 'the commit reports no kickstand moved');
 });
 
 test('transforming a model with a kickstand notifies subscribers once', () => {

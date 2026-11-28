@@ -219,9 +219,7 @@ import {
 } from '@/features/printing/printingMonitorTypes';
 import {
   EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT,
-  EMPTY_HOME_KICKSTAND_COLLECTIONS_SNAPSHOT,
   getHomeSupportCollectionsSnapshot,
-  getHomeKickstandCollectionsSnapshot,
   type HomeSupportCollectionsSnapshot,
 } from '@/features/supports/supportSnapshotHelpers';
 import {
@@ -712,7 +710,6 @@ function readRemoteOfflineLayerHeightSnapshotMm(): number | null {
 type TransformStoreCommitResult = {
   updated: boolean;
   supportsChanged: boolean;
-  kickstandsChanged: boolean;
   supportLocalFramePreserved: boolean;
 };
 
@@ -720,7 +717,6 @@ type PendingSupportDragSyncTransaction = {
   transactionId: number;
   expectedModelTransformKeys: Map<string, string>;
   expectedSupportStoreVersion: number;
-  expectedKickstandStoreVersion: number;
 };
 
 function createModelTransformKey(modelId: string, transform: ModelTransform): string {
@@ -1338,7 +1334,6 @@ export default function Home() {
   const supportDragTransactionIdRef = React.useRef(0);
   const pendingSupportDragSyncRef = React.useRef<PendingSupportDragSyncTransaction | null>(null);
   const supportStoreVersionRef = React.useRef(0);
-  const kickstandStoreVersionRef = React.useRef(0);
   const supportSyncFallbackTimeoutRef = React.useRef<number | null>(null);
   const transformDebugTimelineRef = React.useRef<{
     lastOperation: 'move' | 'rotate' | 'scale' | null;
@@ -1347,7 +1342,6 @@ export default function Home() {
     storeUpdateStartedAt: { perfMs: number; epochMs: number } | null;
     storeUpdatedAt: { perfMs: number; epochMs: number } | null;
     supportStoreUpdatedAt: { perfMs: number; epochMs: number } | null;
-    kickstandStoreUpdatedAt: { perfMs: number; epochMs: number } | null;
     activeModelStoreObservedAt: { perfMs: number; epochMs: number } | null;
   }>({
     lastOperation: null,
@@ -1356,7 +1350,6 @@ export default function Home() {
     storeUpdateStartedAt: null,
     storeUpdatedAt: null,
     supportStoreUpdatedAt: null,
-    kickstandStoreUpdatedAt: null,
     activeModelStoreObservedAt: null,
   });
   const activeModelStoreTransformKeyRef = React.useRef<string | null>(null);
@@ -2278,17 +2271,11 @@ export default function Home() {
   
   // Stable snapshot functions for useSyncExternalStore
   const getEmptySupportSnapshot = React.useCallback(() => EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT, []);
-  const getEmptyKickstandSnapshot = React.useCallback(() => EMPTY_HOME_KICKSTAND_COLLECTIONS_SNAPSHOT, []);
   
   const supportStateSnapshot = React.useSyncExternalStore(
     subscribeSupportState,
     trackSupportCollectionsInHome ? getHomeSupportCollectionsSnapshot : getEmptySupportSnapshot,
     trackSupportCollectionsInHome ? getHomeSupportCollectionsSnapshot : getEmptySupportSnapshot,
-  );
-  const kickstandStateSnapshot = React.useSyncExternalStore(
-    subscribeSupportState,
-    trackSupportCollectionsInHome ? getHomeKickstandCollectionsSnapshot : getEmptyKickstandSnapshot,
-    trackSupportCollectionsInHome ? getHomeKickstandCollectionsSnapshot : getEmptyKickstandSnapshot,
   );
   const raftSettingsSnapshot = React.useSyncExternalStore(subscribeToRaftStore, getRaftSettings, getRaftSettings);
   // The rail's View entry reads and writes this, so the rail and the scene agree
@@ -2340,12 +2327,8 @@ export default function Home() {
     });
 
     const expectedSupportStoreVersion = supportStoreVersionRef.current + (commitResult.supportsChanged ? 1 : 0);
-    const expectedKickstandStoreVersion = kickstandStoreVersionRef.current + (commitResult.kickstandsChanged ? 1 : 0);
-    const needsHold = (
-      expectedModelTransformKeys.size > 0
-      || expectedSupportStoreVersion > supportStoreVersionRef.current
-      || expectedKickstandStoreVersion > kickstandStoreVersionRef.current
-    );
+    const needsHold = expectedModelTransformKeys.size > 0
+      || expectedSupportStoreVersion > supportStoreVersionRef.current;
 
     if (!needsHold) {
       finalizeSupportDragSyncTransaction();
@@ -2356,14 +2339,12 @@ export default function Home() {
       transactionId: nextTransactionId,
       expectedModelTransformKeys,
       expectedSupportStoreVersion,
-      expectedKickstandStoreVersion,
     };
     setHoldSupportDragDeltaUntilSupportSync(true);
 
     if (typeof window !== 'undefined') {
       clearSupportSyncFallbackTimeout();
-      const requiresSupportSync = commitResult.supportsChanged || commitResult.kickstandsChanged;
-      const fallbackMs = requiresSupportSync
+      const fallbackMs = commitResult.supportsChanged
         ? Math.max(SUPPORT_DRAG_HOLD_FALLBACK_MS, 520)
         : SUPPORT_DRAG_HOLD_FALLBACK_MS;
       supportSyncFallbackTimeoutRef.current = window.setTimeout(() => {
@@ -2387,14 +2368,6 @@ export default function Home() {
   }, [supportStateSnapshot]);
 
   React.useEffect(() => {
-    transformDebugTimelineRef.current.kickstandStoreUpdatedAt = {
-      perfMs: performance.now(),
-      epochMs: Date.now(),
-    };
-    kickstandStoreVersionRef.current += 1;
-  }, [kickstandStateSnapshot]);
-
-  React.useEffect(() => {
     if (!holdSupportDragDeltaUntilSupportSync) return;
 
     const pendingTransaction = pendingSupportDragSyncRef.current;
@@ -2416,13 +2389,11 @@ export default function Home() {
     if (!modelTransformsSynced) return;
 
     if (supportStoreVersionRef.current < pendingTransaction.expectedSupportStoreVersion) return;
-    if (kickstandStoreVersionRef.current < pendingTransaction.expectedKickstandStoreVersion) return;
 
     finalizeSupportDragSyncTransaction(pendingTransaction.transactionId);
   }, [
     finalizeSupportDragSyncTransaction,
     holdSupportDragDeltaUntilSupportSync,
-    kickstandStateSnapshot,
     scene.models,
     supportDragTransactionId,
     supportStateSnapshot,
@@ -2560,7 +2531,6 @@ export default function Home() {
           storeUpdateStartedAt: timeline.storeUpdateStartedAt,
           storeUpdatedAt: timeline.storeUpdatedAt,
           supportStoreUpdatedAt: timeline.supportStoreUpdatedAt,
-          kickstandStoreUpdatedAt: timeline.kickstandStoreUpdatedAt,
           activeModelStoreObservedAt: timeline.activeModelStoreObservedAt,
           nowPerfMs: performance.now(),
         },
@@ -8766,7 +8736,6 @@ export default function Home() {
     let transformCommitResult: TransformStoreCommitResult = {
       updated: false,
       supportsChanged: false,
-      kickstandsChanged: false,
       supportLocalFramePreserved: false,
     };
     const expectedModelTransforms: Array<{ modelId: string; transform: ModelTransform }> = [];
@@ -9147,7 +9116,6 @@ export default function Home() {
       beginSupportDragSyncTransaction([], {
         updated: false,
         supportsChanged: false,
-        kickstandsChanged: false,
         supportLocalFramePreserved: false,
       });
       return;

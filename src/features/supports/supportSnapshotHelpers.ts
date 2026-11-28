@@ -6,25 +6,13 @@ export type HomeSupportSnapshot = ReturnType<typeof getSupportSnapshot>;
 /** Every entity collection, derived from the registry. */
 export type HomeSupportCollectionsSnapshot = Pick<HomeSupportSnapshot, SupportCollectionKey>;
 
-export type HomeKickstandCollectionsSnapshot = Pick<
-  HomeSupportSnapshot,
-  'kickstands' | 'roots' | 'knots'
->;
-
 export const EMPTY_HOME_SUPPORT_COLLECTIONS_SNAPSHOT: HomeSupportCollectionsSnapshot = (() => {
   const empty = {} as Record<SupportCollectionKey, Record<string, never>>;
   for (const key of SUPPORT_COLLECTION_KEYS) empty[key] = {};
   return empty as HomeSupportCollectionsSnapshot;
 })();
 
-export const EMPTY_HOME_KICKSTAND_COLLECTIONS_SNAPSHOT: HomeKickstandCollectionsSnapshot = {
-  kickstands: {},
-  roots: {},
-  knots: {},
-};
-
 let cachedHomeSupportCollectionsSnapshot: HomeSupportCollectionsSnapshot | null = null;
-let cachedHomeKickstandCollectionsSnapshot: HomeKickstandCollectionsSnapshot | null = null;
 
 export function getHomeSupportCollectionsSnapshot(): HomeSupportCollectionsSnapshot {
   const snapshot = getSupportSnapshot();
@@ -41,27 +29,4 @@ export function getHomeSupportCollectionsSnapshot(): HomeSupportCollectionsSnaps
 
   cachedHomeSupportCollectionsSnapshot = next as HomeSupportCollectionsSnapshot;
   return cachedHomeSupportCollectionsSnapshot;
-}
-
-export function getHomeKickstandCollectionsSnapshot(): HomeKickstandCollectionsSnapshot {
-  const snapshot = getSupportSnapshot();
-  const cached = cachedHomeKickstandCollectionsSnapshot;
-
-  if (
-    cached
-    && cached.kickstands === snapshot.kickstands
-    && cached.roots === snapshot.roots
-    && cached.knots === snapshot.knots
-  ) {
-    return cached;
-  }
-
-  const next: HomeKickstandCollectionsSnapshot = {
-    kickstands: snapshot.kickstands,
-    roots: snapshot.roots,
-    knots: snapshot.knots,
-  };
-
-  cachedHomeKickstandCollectionsSnapshot = next;
-  return next;
 }
