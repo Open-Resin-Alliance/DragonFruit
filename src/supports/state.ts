@@ -12,7 +12,7 @@ import { collectCascade, groupByCollection, ownedPrimitives, type EntityRef } fr
 import { modelCascadeSeeds } from './PlacementLogic/SupportModelLinker';
 import { pushSupportHistory } from './history/supportHistory';
 import { supportSettleFor } from './settle/seam';
-import { collectOwnedRootIds, hasSupportUpdater, hostKnotFieldsFor, typeIdForCollection, updateSupportEntity, JOINT_REMOVAL_TYPES, MODEL_ID_COLLECTION_KEYS, bundledSupportTypeId, coneKnotHostType, coneKnotHostCollectionKey, spanKnotHostCollectionKey, parseKnotHostId, parsePrefixedSegmentId, isKnotHostId, isConeKnotHost, isSpanKnotHost, knotHostId, CONE_KNOT_HOST_TYPES, SPAN_KNOT_HOST_TYPES, SUPPORT_COLLECTION_KEYS, contactEndpointsFor, EDITABLE_SUPPORT_TYPES, hasSettingsInference, inferSupportSettings, isEditableSupportType, registerCollectionRestore, collectionsMissingRestore, registerSettingsInference, transformExtrasFor, type SupportTypeDescriptor, createEmptySupportCollections, getSupportTypeDescriptor, registerSupportUpdater, registerSupportTypeResolver, resolveKnotDiameter, resolveSupportTypeIdOf, type SupportEntityFor, SUPPORT_STATE_COLLECTIONS, SUPPORT_TYPES, type SupportTypeId, type JointRemovalTypeId } from './supportTypeRegistry';
+import { collectOwnedRootIds, hasSupportUpdater, hostKnotFieldsFor, typeIdForCollection, updateSupportEntity, JOINT_REMOVAL_TYPES, MODEL_ID_COLLECTION_KEYS, bundledSupportTypeId, coneKnotHostType, coneKnotHostCollectionKey, spanKnotHostType, spanKnotHostCollectionKey, parseKnotHostId, parsePrefixedSegmentId, isKnotHostId, isConeKnotHost, isSpanKnotHost, knotHostId, CONE_KNOT_HOST_TYPES, SPAN_KNOT_HOST_TYPES, SUPPORT_COLLECTION_KEYS, contactEndpointsFor, EDITABLE_SUPPORT_TYPES, hasSettingsInference, inferSupportSettings, isEditableSupportType, registerCollectionRestore, collectionsMissingRestore, registerSettingsInference, transformExtrasFor, type SupportTypeDescriptor, createEmptySupportCollections, getSupportTypeDescriptor, registerSupportUpdater, registerSupportTypeResolver, resolveKnotDiameter, resolveSupportTypeIdOf, type SupportEntityFor, SUPPORT_STATE_COLLECTIONS, SUPPORT_TYPES, type SupportTypeId, type JointRemovalTypeId } from './supportTypeRegistry';
 import { typesMissingExportGroupBuilder } from './exportGeometry/seam';
 import { migrateLegacySupportPayload } from './importMigrations';
 import type { SupportCollectionKey } from './supportTypeRegistry';
@@ -636,29 +636,53 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, Support
         branchHostKnotIdsWithChildren.add(hostBranchRef.branch.parentKnotId);
     }
 
-    const branchParentKnotIds = new Set<string>();
-    for (const branch of Object.values(snapshot.branches)) {
-        branchParentKnotIds.add(branch.parentKnotId);
+    // Each host type keeps its own projection tolerance below, so the sets stay
+    // separate; which collection fills each comes from the registry.
+    const hostKnotIdsByType = new Map<SupportTypeId, Set<string>>();
+    for (const { descriptor, entity } of describedEntities(
+        snapshot,
+        (candidate) => candidate.edges.some((edge) => edge.to === 'knots' && edge.ownership === 'hostedBy'),
+    )) {
+        let ids = hostKnotIdsByType.get(descriptor.id);
+        if (!ids) {
+            ids = new Set<string>();
+            hostKnotIdsByType.set(descriptor.id, ids);
+        }
+        for (const edge of descriptor.edges) {
+            if (edge.to !== 'knots' || edge.ownership !== 'hostedBy') continue;
+            const knotId = entity[edge.field];
+            if (typeof knotId === 'string' && knotId) ids.add(knotId);
+        }
     }
+    /** Knots hosting a type whose top is a cone, split by whether it has a shaft. */
+    const coneHostKnotIds = (shafted: boolean): Set<string> => {
+        const ids = new Set<string>();
+        for (const descriptor of SUPPORT_TYPES) {
+            if (descriptor.lower.kind !== 'knot' || descriptor.upper.kind !== 'cone') continue;
+            if (descriptor.hasSegments !== shafted) continue;
+            for (const id of hostKnotIdsByType.get(descriptor.id) ?? []) ids.add(id);
+        }
+        return ids;
+    };
+    const branchParentKnotIds = coneHostKnotIds(true);
+    const leafParentKnotIds = coneHostKnotIds(false);
 
-    const leafParentKnotIds = new Set<string>();
-    for (const leaf of Object.values(snapshot.leaves)) {
-        leafParentKnotIds.add(leaf.parentKnotId);
-    }
-
+    // Every knot some entity hangs from, by the edges each type declares. A
+    // type left out here keeps the authored position its file carried.
     const braceHostKnotIds = new Set<string>();
     const targetHostKnotIds = new Set<string>();
-    for (const brace of Object.values(snapshot.braces)) {
-        braceHostKnotIds.add(brace.startKnotId);
-        braceHostKnotIds.add(brace.endKnotId);
-        targetHostKnotIds.add(brace.startKnotId);
-        targetHostKnotIds.add(brace.endKnotId);
-    }
-    for (const leaf of Object.values(snapshot.leaves)) {
-        targetHostKnotIds.add(leaf.parentKnotId);
-    }
-    for (const branch of Object.values(snapshot.branches)) {
-        targetHostKnotIds.add(branch.parentKnotId);
+    const spanHostTypeId = spanKnotHostType();
+    for (const { descriptor, entity } of describedEntities(
+        snapshot,
+        (candidate) => candidate.edges.some((edge) => edge.to === 'knots' && edge.ownership === 'hostedBy'),
+    )) {
+        for (const edge of descriptor.edges) {
+            if (edge.to !== 'knots' || edge.ownership !== 'hostedBy') continue;
+            const knotId = entity[edge.field];
+            if (typeof knotId !== 'string' || !knotId) continue;
+            targetHostKnotIds.add(knotId);
+            if (descriptor.id === spanHostTypeId) braceHostKnotIds.add(knotId);
+        }
     }
 
     const nextKnots = { ...snapshot.knots };
@@ -2028,8 +2052,6 @@ export function transformSupportsForModel(
     // Computed here; the rest come from `nextByCollection`. Each copies on its
     // own first write, so a caller holding the earlier snapshot keeps it.
     let nextRoots = state.roots;
-    let nextTrunks = state.trunks;
-    let nextKickstands = state.kickstands;
     let nextKnots = state.knots;
 
     const touchedRootIds = new Set<string>();
@@ -2096,36 +2118,27 @@ export function transformSupportsForModel(
         ) as unknown as Roots;
     }
 
-    for (const trunk of Object.values(state.trunks)) {
-        if (trunk.modelId !== modelId) continue;
-        if (nextTrunks === state.trunks) nextTrunks = { ...state.trunks };
+    // The walk below skips root-owning types, so they move here: on the model
+    // they name, or on the graph this move already touched.
+    const nextRootOwners = new Map<SupportCollectionKey, Record<string, unknown>>();
+    for (const { descriptor, entity } of describedEntities(state, (candidate) => candidate.ownsRoot)) {
+        const key = descriptor.location.key;
+        const ridesTouchedGraph = descriptor.edges.some((edge) => {
+            const value = entity[edge.field];
+            if (typeof value !== 'string') return false;
+            if (edge.to === 'roots') return touchedRootIds.has(value);
+            if (edge.to === 'knots') return touchedKnotIds.has(value);
+            return false;
+        }) || ((entity.segments as Segment[] | undefined) ?? []).some(
+            (segment) => touchedSegmentIds.has(segment.id),
+        );
+        if (entity.modelId !== modelId && !ridesTouchedGraph) continue;
+
+        const target = nextRootOwners.get(key)
+            ?? { ...(state[key] as unknown as Record<string, unknown>) };
+        nextRootOwners.set(key, target);
         changed = true;
-
-        const nextTrunk = transformSupportRecord(
-            'trunk',
-            trunk as unknown as Record<string, unknown>,
-            delta,
-        ) as unknown as Trunk;
-
-        nextTrunks[trunk.id] = nextTrunk;
-    }
-
-    // The walk below skips root-owning types; trunk has its own loop above.
-    // In band so one commit carries it and the stump band sees it moved.
-    for (const kickstand of Object.values(state.kickstands)) {
-        const ridesTouchedGraph = touchedRootIds.has(kickstand.rootId)
-            || touchedKnotIds.has(kickstand.hostKnotId)
-            || kickstand.segments.some((segment) => touchedSegmentIds.has(segment.id));
-        if (kickstand.modelId !== modelId && !ridesTouchedGraph) continue;
-
-        if (nextKickstands === state.kickstands) nextKickstands = { ...state.kickstands };
-        changed = true;
-
-        nextKickstands[kickstand.id] = transformSupportRecord(
-            'kickstand',
-            kickstand as unknown as Record<string, unknown>,
-            delta,
-        ) as unknown as Kickstand;
+        target[entity.id as string] = transformSupportRecord(descriptor.id, entity, delta);
     }
 
     // Which entities the transform reaches. Two declared rules cover every
@@ -2298,10 +2311,9 @@ export function transformSupportsForModel(
             const key = descriptor.location.key;
             nextCollections[key] = nextByCollection[key] ?? state[key];
         }
-        // The four this function computes itself win over the generic pass.
+        // What this function computes itself wins over the generic pass.
+        for (const [key, record] of nextRootOwners) nextCollections[key] = record;
         nextCollections.roots = nextRoots;
-        nextCollections.trunks = nextTrunks;
-        nextCollections.kickstands = nextKickstands;
         nextCollections.knots = nextKnots;
 
         // A pure Z move is what changes the gap a near-plate support spans.
