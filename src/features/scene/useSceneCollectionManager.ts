@@ -5992,7 +5992,6 @@ export function useSceneCollectionManager(options?: {
       }
 
       payload.knots.forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
-      payload.kickstandKnots.forEach((knot) => expand(knot.pos, Math.max(0.001, (knot.diameter ?? 1.2) / 2)));
 
       const expandSegments = (segments: FootprintSegment[]) => {
         segments.forEach((segment) => {

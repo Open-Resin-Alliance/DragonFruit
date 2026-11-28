@@ -51,7 +51,7 @@ export function collectionEntries(source: object): Array<[SupportCollectionKey, 
  * `setCollection`.
  */
 export function emptyPayload(): SupportClipboardPayload {
-    const payload = { kickstandRoots: [], kickstandKnots: [] } as unknown as SupportClipboardPayload;
+    const payload = {} as SupportClipboardPayload;
     for (const key of ALL_COLLECTION_KEYS) {
         (payload as Record<string, unknown>)[key] = [];
     }

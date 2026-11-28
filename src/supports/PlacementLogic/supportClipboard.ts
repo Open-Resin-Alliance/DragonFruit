@@ -2,7 +2,6 @@ import type { MessageDescriptor } from '@lingui/core';
 import * as THREE from 'three';
 import { buildSupportDeltaTransform, getSnapshot, setSnapshot, transformSupportRecord, type SupportDeltaTransform } from '@/supports/state';
 import type { Knot, Roots, Segment, SupportState, Vec3 } from '@/supports/types';
-import type { Kickstand } from '@/supports/SupportTypes/Kickstand/types';
 import { captureSupportEditSnapshot, pushSupportEditHistory } from '@/supports/history/supportEditHistory';
 import { getRaftSettings } from '@/supports/Rafts/Crenelated/RaftState';
 import { computeFootprint } from '@/supports/Rafts/Crenelated/geometry/computeFootprint';
@@ -13,17 +12,9 @@ import { clonePlainData } from '@/utils/plainDataClone';
 import { MODEL_ID_COLLECTION_KEYS, SUPPORT_COLLECTION_KEYS, SUPPORT_TYPES, type SupportCollectionKey, type SupportTypeDescriptor } from '@/supports/supportTypeRegistry';
 import { PASTE_SUPPORTS_LABEL } from '@/supports/history/supportHistoryLabels';
 
-/**
- * One array per collection, keyed off the registry.
- *
- * `kickstandRoots`/`kickstandKnots` stay separate because a kickstand owns its
- * root and host knot, and paste remaps those as a unit.
- */
+/** One array per collection, keyed off the registry. */
 type SupportClipboardPayload = {
   [K in SupportCollectionKey]: SupportState[K][string][];
-} & {
-  kickstandRoots: Roots[];
-  kickstandKnots: Knot[];
 };
 
 export type SupportModelBounds2D = {
@@ -55,7 +46,6 @@ function remapSupportJoint<T extends { id: string; pos: { x: number; y: number; 
 
 function extractSupportClipboardPayload(modelId: string): SupportClipboardPayload | null {
   const state = getSnapshot();
-  const snapshot = getSnapshot();
 
   // Every modelId-bearing collection, so a new type is copied unnamed.
   const owned = {} as { [K in SupportCollectionKey]: SupportState[K][string][] };
@@ -68,17 +58,6 @@ function extractSupportClipboardPayload(modelId: string): SupportClipboardPayloa
       .filter((item) => item.modelId === modelId)
       .map((item) => clonePlainData(item));
   }
-  const kickstands = Object.values(snapshot.kickstands)
-    .filter((item) => item.modelId === modelId)
-    .map((item) => clonePlainData(item));
-  const kickstandRootIds = new Set(kickstands.map((item) => item.rootId));
-  const kickstandKnotIds = new Set(kickstands.map((item) => item.hostKnotId));
-  const kickstandRoots = Object.values(snapshot.roots)
-    .filter((item) => kickstandRootIds.has(item.id))
-    .map((item) => clonePlainData(item));
-  const kickstandKnots = Object.values(snapshot.knots)
-    .filter((item) => kickstandKnotIds.has(item.id))
-    .map((item) => clonePlainData(item));
 
   // Every type's segments, by what the registry declares: a shafted type
   // contributes its segment ids, a prefixed one its own id under that prefix.
@@ -133,18 +112,13 @@ function extractSupportClipboardPayload(modelId: string): SupportClipboardPayloa
     })
     .map((item) => clonePlainData(item));
 
-  const hasData = SUPPORT_COLLECTION_KEYS.some((key) => owned[key].length > 0)
-    || knots.length > 0
-    || kickstandRoots.length > 0
-    || kickstandKnots.length > 0;
+  const hasData = SUPPORT_COLLECTION_KEYS.some((key) => owned[key].length > 0) || knots.length > 0;
 
   if (!hasData) return null;
 
   return {
     ...owned,
     knots,
-    kickstandRoots,
-    kickstandKnots,
   };
 }
 
@@ -171,9 +145,6 @@ function mergeSupportClipboardPayload(
   const knotIdMap = mapFor('knots');
   const segmentIdMap = new Map<string, string>();
   const jointIdMap = new Map<string, string>();
-  const kickstandRootIdMap = new Map<string, string>();
-  const kickstandKnotIdMap = new Map<string, string>();
-  const kickstandIdMap = new Map<string, string>();
 
   const clonedRoots = payload.roots.map((root) => {
     const id = uuidv4();
@@ -278,62 +249,14 @@ function mergeSupportClipboardPayload(
     return (delta ? transformSupportRecord('knots', cloned, delta) : cloned) as Knot;
   });
 
-  const clonedKickstandRoots = payload.kickstandRoots.map((root) => {
-    const id = uuidv4();
-    kickstandRootIdMap.set(root.id, id);
-    const cloned = { ...clonePlainData(root), id, modelId: targetModelId };
-    return (delta ? transformSupportRecord('roots', cloned, delta) : cloned) as Roots;
-  });
-
-  const clonedKickstandKnots = payload.kickstandKnots.map((knot) => {
-    const id = uuidv4();
-    kickstandKnotIdMap.set(knot.id, id);
-    const cloned = {
-      ...clonePlainData(knot),
-      id,
-      parentShaftId: getOrCreateMappedId(knot.parentShaftId, segmentIdMap),
-    };
-    return (delta ? transformSupportRecord('knots', cloned, delta) : cloned) as Knot;
-  });
-
-  const clonedKickstands = payload.kickstands.map((kickstand) => {
-    const id = uuidv4();
-    kickstandIdMap.set(kickstand.id, id);
-
-    const clonedSegments = kickstand.segments.map((segment) => {
-      const segmentId = getOrCreateMappedId(segment.id, segmentIdMap);
-      return {
-        ...clonePlainData(segment),
-        id: segmentId,
-        topJoint: remapSupportJoint(segment.topJoint, jointIdMap),
-        bottomJoint: remapSupportJoint(segment.bottomJoint, jointIdMap),
-      };
-    });
-
-    const cloned = {
-      ...clonePlainData(kickstand),
-      id,
-      modelId: targetModelId,
-      rootId: getOrCreateMappedId(kickstand.rootId, kickstandRootIdMap),
-      hostKnotId: getOrCreateMappedId(kickstand.hostKnotId, kickstandKnotIdMap),
-      hostSegmentId: getOrCreateMappedId(kickstand.hostSegmentId, segmentIdMap),
-      segments: clonedSegments,
-    };
-    return (delta ? transformSupportRecord('kickstand', cloned, delta) : cloned) as Kickstand;
-  });
-
   // Every entity collection, from the registry.
   const mergedState: SupportState = { ...state };
   for (const key of SUPPORT_COLLECTION_KEYS) {
-    // Kickstands remap through their own root/knot maps, so they arrive
-    // already cloned rather than through the generic entity clone.
     const cloned = key === 'roots'
       ? clonedRoots
       : key === 'knots'
         ? clonedKnots
-        : key === 'kickstands'
-          ? clonedKickstands
-          : clonedByCollection.get(key) ?? [];
+        : clonedByCollection.get(key) ?? [];
     if (cloned.length === 0) continue;
 
     (mergedState as unknown as Record<string, Record<string, unknown>>)[key] = {
@@ -341,17 +264,6 @@ function mergeSupportClipboardPayload(
       ...Object.fromEntries((cloned as { id: string }[]).map((item) => [item.id, item])),
     };
   }
-
-  // A kickstand's root and host knot live in the shared collections, so they
-  // merge alongside every other primitive rather than through a second write.
-  mergedState.roots = {
-    ...mergedState.roots,
-    ...Object.fromEntries(clonedKickstandRoots.map((item) => [item.id, item])),
-  };
-  mergedState.knots = {
-    ...mergedState.knots,
-    ...Object.fromEntries(clonedKickstandKnots.map((item) => [item.id, item])),
-  };
 
   return { mergedState };
 }

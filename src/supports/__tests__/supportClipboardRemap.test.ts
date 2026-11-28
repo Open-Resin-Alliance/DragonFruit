@@ -166,27 +166,20 @@ function makePayload(): SupportClipboardPayload {
   const payload = emptyPayload();
   const roots: Roots[] = [];
   const knots: Knot[] = [];
-  const kickstandRoots: Roots[] = [];
-  const kickstandKnots: Knot[] = [];
 
   let rootX = 0;
 
   for (const descriptor of SUPPORT_TYPES) {
     setCollection(payload, descriptor.id, [sourceEntityFor(descriptor) as never]);
 
-    // A type riding another's shaft brings its root and host knot through the
-    // payload's dedicated channels as well as the shared ones.
-    const ridesHostShaft = descriptor.edges.some((edge) => edge.to === 'segment');
-
+    // Every declared edge's primitive, in the shared collection it points
+    // into. A type standing on its own root is no different here: the root is
+    // a `roots` member like any other.
     for (const edge of descriptor.edges) {
       if (edge.to === 'roots') {
-        const root = sourceRoot(sourceRootIdFor(descriptor), (rootX += 3));
-        roots.push(root);
-        if (ridesHostShaft) kickstandRoots.push(root);
+        roots.push(sourceRoot(sourceRootIdFor(descriptor), (rootX += 3)));
       } else if (edge.to === 'knots') {
-        const knot = sourceKnot(sourceKnotIdFor(descriptor, edge), HOST_SEGMENT_ID, 0.2);
-        knots.push(knot);
-        if (ridesHostShaft) kickstandKnots.push(knot);
+        knots.push(sourceKnot(sourceKnotIdFor(descriptor, edge), HOST_SEGMENT_ID, 0.2));
       }
     }
 
@@ -204,8 +197,6 @@ function makePayload(): SupportClipboardPayload {
 
   payload.roots = roots;
   payload.knots = knots;
-  payload.kickstandRoots = kickstandRoots;
-  payload.kickstandKnots = kickstandKnots;
 
   return payload;
 }
@@ -260,9 +251,6 @@ describe('support clipboard remap isolation', () => {
         }
       }
     }
-    for (const item of payload.kickstandRoots) sourceIds.add(item.id);
-    for (const item of payload.kickstandKnots) sourceIds.add(item.id);
-
     /** A pasted id must be one the paste minted, never one the source handed over. */
     const freshId = (id: unknown, what: string) => {
       assert.equal(typeof id, 'string', `${what}: expected an id, found ${String(id)}`);
@@ -431,16 +419,17 @@ describe('support clipboard remap isolation', () => {
       }
     }
 
-    // Roots and knots are compared as multisets: a payload carries the same
-    // root through both its own channel and its kickstand's.
+    // One pasted primitive per primitive the payload carried: a root or knot
+    // reached by two types is still one record, so a second clone would show
+    // up here as an extra position.
     assert.deepEqual(
       sorted(Object.values(state.roots).map((root) => at(root.transform.pos))),
-      sorted([...payload.roots, ...payload.kickstandRoots].map((root) => moved(root.transform.pos))),
+      sorted(payload.roots.map((root) => moved(root.transform.pos))),
       'root positions',
     );
     assert.deepEqual(
       sorted(Object.values(state.knots).map((knot) => at(knot.pos))),
-      sorted([...payload.knots, ...payload.kickstandKnots].map((knot) => moved(knot.pos))),
+      sorted(payload.knots.map((knot) => moved(knot.pos))),
       'knot positions',
     );
   });
