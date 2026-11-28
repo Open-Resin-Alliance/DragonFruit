@@ -1,4 +1,4 @@
-import type { MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
+import type { MaterialProfile, PrinterProfile, RemoteMaterialProcessField } from '@/features/profiles/profileStore';
 import { getProfileLocalMaterialSettingsAdapter } from '@/features/plugins/pluginRegistry';
 import {
   resolveOutputFormatVersion,
@@ -257,8 +257,23 @@ export function mergeMetadataOverridesIntoMetadata(
         ?? materialProfile.localSettingsByOutput?.[outputFormat]
         ?? {};
 
+      // Fields a remote material supplied keep the material's value: the printer's material, not the
+      // local per-format setting or its default, is what the file is sliced with.
+      const remoteFields = new Set<string>(materialProfile.remoteProcessFields ?? []);
+
       fieldSchema.forEach((field) => {
         if (field.kind === 'spacer') return;
+
+        const targetPath = (field.metadataPath?.trim() || `material.${field.key}`);
+        const remoteField = targetPath.startsWith('material.') ? targetPath.slice('material.'.length) : '';
+        if (remoteFields.has(remoteField)) {
+          setMetadataPathValue(
+            parsed,
+            targetPath,
+            coerceLocalMaterialSettingValue(materialProfile[remoteField as RemoteMaterialProcessField], field.kind),
+          );
+          return;
+        }
 
         const fieldValue = Object.prototype.hasOwnProperty.call(localForOutput, field.key)
           ? localForOutput[field.key]
@@ -269,7 +284,6 @@ export function mergeMetadataOverridesIntoMetadata(
           field.kind,
         );
 
-        const targetPath = (field.metadataPath?.trim() || `material.${field.key}`);
         setMetadataPathValue(parsed, targetPath, coercedValue);
       });
     }

@@ -382,7 +382,17 @@ export type MaterialProfile = {
     localSettingsByOutput?: Record<string, LocalMaterialSettingsMap>;
     /** Other printers this profile is shared with. The owner remains `printerProfileId`. */
     compatiblePrinterProfileIds?: string[];
+    /**
+     * The fields above that a remote material, selected on a network printer, supplied. Set only on the
+     * effective profile the slicing panel builds, never stored. These fields then win over the output's
+     * local material settings that write the same `material.*` metadata path (see
+     * `mergeMetadataOverridesIntoMetadata`), so the printer's material is what the file is sliced with.
+     */
+    remoteProcessFields?: ReadonlyArray<RemoteMaterialProcessField>;
 };
+
+/** The material fields a remote material's process values can supply. */
+export type RemoteMaterialProcessField = 'layerHeightMm' | 'normalExposureSec' | 'bottomExposureSec' | 'bottomLayerCount';
 
 function sanitizeCompatiblePrinterIds(value: unknown, ownerPrinterId?: string): string[] | undefined {
     if (!Array.isArray(value)) return undefined;
