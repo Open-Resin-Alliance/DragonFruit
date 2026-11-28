@@ -42,6 +42,7 @@ import {
     type SupportEndpoint,
     type SupportTypeId,
 } from './supportTypeRegistry';
+import { describedEntities, entitiesOfTypes } from './supportCollections';
 import { buildKnotIndex, selectedIdsForType, type CollectionLookup, type SelectionInputs } from './interaction/shared/selection/selectedIdsByType';
 import { resolveSegmentEndpoints, type EndpointHosts } from './SupportPrimitives/Knot/segmentEndpoints';
 import './detailRenderer/registerBuiltinDetailRenderers';
@@ -833,14 +834,14 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
 
         // Every shafted type, by its declared contacts.
         const directSegmentInteriorById = new Map<string, boolean>();
-        for (const descriptor of SUPPORT_TYPES) {
-            if (!descriptor.hasSegments) continue;
-            const collection = state[descriptor.location.key] as unknown as Record<string, { modelId: string; segments?: Segment[] }>;
-            for (const entity of Object.values(collection ?? {})) {
-                const isInterior = anyContactMatches(descriptor.id, entity, (contact: unknown) =>
-                    matchesInteriorContact(contact as Parameters<typeof matchesInteriorContact>[0], entity.modelId));
-                for (const segment of entity.segments ?? []) directSegmentInteriorById.set(segment.id, isInterior);
-            }
+        type Shafted = { modelId: string; segments?: Segment[] };
+        for (const { descriptor, entity } of describedEntities<Shafted>(
+            state,
+            (candidate) => candidate.hasSegments,
+        )) {
+            const isInterior = anyContactMatches(descriptor.id, entity, (contact: unknown) =>
+                matchesInteriorContact(contact as Parameters<typeof matchesInteriorContact>[0], entity.modelId));
+            for (const segment of entity.segments ?? []) directSegmentInteriorById.set(segment.id, isInterior);
         }
 
         const resolveKnotInterior = (knotId?: string, visitedBraceIds?: Set<string>): boolean => {
@@ -1399,12 +1400,9 @@ export const SupportRenderer = forwardRef<THREE.Group, SupportRendererProps>(({ 
     const originById = useMemo(() => {
         // Every type that records an origin, declared as `hasOrigin`.
         const map = new Map<string, SupportOrigin>();
-        for (const descriptor of SUPPORT_TYPES) {
-            if (!descriptor.hasOrigin) continue;
-            const collection = state[descriptor.location.key] as unknown as Record<string, { id: string; origin?: SupportOrigin }>;
-            for (const entity of Object.values(collection ?? {})) {
-                if (entity.origin) map.set(entity.id, entity.origin);
-            }
+        type Originated = { id: string; origin?: SupportOrigin };
+        for (const entity of entitiesOfTypes<Originated>(state, (descriptor) => descriptor.hasOrigin)) {
+            if (entity.origin) map.set(entity.id, entity.origin);
         }
         return map;
     }, [state]);
