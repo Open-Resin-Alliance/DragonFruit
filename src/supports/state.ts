@@ -1,4 +1,4 @@
-import { SupportState, SupportEntityAny, DragonfruitImportFormat, Trunk, Roots, Segment, BezierSegment, StraightSegment, Branch, BraceCurve, Joint, Knot, Vec3, Leaf, Brace } from './types';
+import { SupportState, SupportEntityAny, DragonfruitImportFormat, Trunk, Roots, Segment, BezierSegment, StraightSegment, BraceCurve, Joint, Knot, Vec3, Leaf, Brace } from './types';
 import { ANCHOR_HEIGHT_THRESHOLD_MM } from './autoSupport/constants';
 import { calculateBezierControlPoints, getBezierPointAtT, toVector3, toVec3 } from './Curves/BezierUtils';
 import { calculateKnotPositionOnSegmentFromT } from './SupportPrimitives/Knot/knotUtils';
@@ -18,7 +18,7 @@ import { migrateLegacySupportPayload } from './importMigrations';
 import type { SupportCollectionKey } from './supportTypeRegistry';
 import type { ContactCone, SupportTipProfile } from './SupportPrimitives/ContactCone/types';
 import { getFinalSocketPosition } from './SupportPrimitives/ContactCone/contactConeUtils';
-import { resolveSegmentEndpoints, type ShaftEntity } from './SupportPrimitives/Knot/segmentEndpoints';
+import { resolveSegmentEndpoints, type EndpointHosts, type SegmentEndpoints, type ShaftEntity } from './SupportPrimitives/Knot/segmentEndpoints';
 import { calculateDiskThickness } from './SupportPrimitives/ContactDisk/contactDiskUtils';
 import { emitSupportInteractionReset } from './interaction/supportInteractionReset';
 import { getJointDiameter, JOINT_DIAMETER_OFFSET_MM } from './constants';
@@ -589,25 +589,26 @@ function pruneUnclaimedRoots(roots: Record<string, Roots>, claimedBy: Pick<Suppo
     return kept;
 }
 
+/** A shafted entity with the descriptor that found it. */
+interface ShaftHost {
+    descriptor: SupportTypeDescriptor;
+    entity: ShaftEntity;
+}
+
+/** How well a segment binding fits an authored position. */
+type BindingScorer = (
+    segment: Segment,
+    endpoints: SegmentEndpoints,
+    segmentIndex: number,
+    segmentCount: number,
+    axisStart: Vec3,
+    axisEnd: Vec3,
+) => { score: number };
+
 function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, SupportCollectionKey>): {
     knots: Record<string, Knot>;
     leaves: Record<string, Leaf>;
 } {
-    const trunkSegmentMap = new Map<string, { trunk: Trunk; segment: Segment; segmentIndex: number; root: Roots | undefined }>();
-    for (const trunk of Object.values(snapshot.trunks)) {
-        const root = snapshot.roots[trunk.rootId];
-        trunk.segments.forEach((segment, segmentIndex) => {
-            trunkSegmentMap.set(segment.id, { trunk, segment, segmentIndex, root });
-        });
-    }
-
-    const branchSegmentMap = new Map<string, { branch: Branch; segment: Segment; segmentIndex: number }>();
-    for (const branch of Object.values(snapshot.branches)) {
-        branch.segments.forEach((segment, segmentIndex) => {
-            branchSegmentMap.set(segment.id, { branch, segment, segmentIndex });
-        });
-    }
-
     // Twig hosts: a leaf/brace knot can attach to a twig segment (LYS import, PR #156).
     // Without this map the knot's host segment is unresolved during normalization, so
     // its diameter degenerates to the renderer default (oversized) and its position is
@@ -616,25 +617,80 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, Support
 
     // Segment -> its owning entity and type, so a host can be asked how it sizes
     // knots without this function knowing which types answer.
-    const shaftHostBySegmentId = new Map<string, { typeId: SupportTypeId; entity: unknown }>();
-    for (const { descriptor, entity } of describedEntities<{ segments: Segment[] }>(
+    const shaftHostBySegmentId = new Map<string, ShaftHost>();
+    for (const { descriptor, entity } of describedEntities<ShaftEntity>(
         snapshot,
         (candidate) => candidate.hasSegments,
     )) {
         for (const segment of entity.segments) {
-            shaftHostBySegmentId.set(segment.id, { typeId: descriptor.id, entity });
+            shaftHostBySegmentId.set(segment.id, { descriptor, entity });
         }
     }
 
-    // Track branch parent knots that currently host descendants.
-    // If a branch parent knot is hosting descendants, keep it projected to ensure
-    // downstream branch/leaf attachments stay segment-legal and connected.
-    const branchHostKnotIdsWithChildren = new Set<string>();
-    for (const knot of Object.values(snapshot.knots)) {
-        const hostBranchRef = branchSegmentMap.get(knot.parentShaftId);
-        if (!hostBranchRef) continue;
-        branchHostKnotIdsWithChildren.add(hostBranchRef.branch.parentKnotId);
-    }
+    /** The hosts a shaft's declared endpoints need, read off the entity. */
+    const hostsOf = (host: ShaftHost): EndpointHosts => {
+        const owner = host.entity as ShaftEntity & Record<string, unknown>;
+        const rootField = host.descriptor.edges.find(
+            (edge) => edge.to === 'roots' && edge.ownership === 'owns',
+        )?.field;
+        const knotField = host.descriptor.edges.find(
+            (edge) => edge.to === 'knots' && edge.ownership === 'hostedBy',
+        )?.field;
+        const rootId = rootField ? owner[rootField] : undefined;
+        const knotId = knotField ? owner[knotField] : undefined;
+        return {
+            root: typeof rootId === 'string' ? snapshot.roots[rootId] : undefined,
+            hostKnot: typeof knotId === 'string'
+                ? nextKnots[knotId] ?? snapshot.knots[knotId]
+                : undefined,
+        };
+    };
+
+    /**
+     * The segment of `host` whose endpoints sit closest to `authoredPos`, when a
+     * better one than the authored binding exists.
+     */
+    const rebindToBestSegment = (
+        host: ShaftHost,
+        currentSegment: Segment,
+        currentEndpoints: SegmentEndpoints,
+        currentShaftId: string,
+        score: BindingScorer,
+    ): { segment: Segment; endpoints: SegmentEndpoints } | null => {
+        const owner = host.entity;
+        const segments = owner.segments;
+        if (segments.length === 0) return null;
+
+        const hosts = hostsOf(host);
+        const firstEndpoints = resolveSegmentEndpoints(owner, segments[0], 0, hosts);
+        const lastEndpoints = resolveSegmentEndpoints(owner, segments[segments.length - 1], segments.length - 1, hosts);
+        if (!firstEndpoints || !lastEndpoints) return null;
+
+        const axisStart = firstEndpoints.start;
+        const axisEnd = lastEndpoints.end;
+        const currentIndex = Math.max(0, segments.findIndex((seg) => seg.id === currentShaftId));
+
+        let best = score(currentSegment, currentEndpoints, currentIndex, segments.length, axisStart, axisEnd);
+        let bestSegment = currentSegment;
+        let bestEndpoints = currentEndpoints;
+
+        for (let idx = 0; idx < segments.length; idx++) {
+            const candidateSeg = segments[idx];
+            const candidateEndpoints = resolveSegmentEndpoints(owner, candidateSeg, idx, hosts);
+            if (!candidateEndpoints) continue;
+
+            const candidate = score(candidateSeg, candidateEndpoints, idx, segments.length, axisStart, axisEnd);
+            if (candidate.score + 0.05 < best.score) {
+                best = candidate;
+                bestSegment = candidateSeg;
+                bestEndpoints = candidateEndpoints;
+            }
+        }
+
+        if (bestSegment.id === currentShaftId) return null;
+        return { segment: bestSegment, endpoints: bestEndpoints };
+    };
+
 
     // Each host type keeps its own projection tolerance below, so the sets stay
     // separate; which collection fills each comes from the registry.
@@ -690,6 +746,16 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, Support
     for (const [knotId, authoredKnot] of Object.entries(snapshot.knots)) {
         authoredKnotPosById.set(knotId, authoredKnot.pos);
     }
+    // A host knot carrying descendants stays projected, so downstream
+    // attachments remain segment-legal and connected.
+    const hostKnotIdsWithChildren = new Set<string>();
+    for (const knot of Object.values(snapshot.knots)) {
+        const host = shaftHostBySegmentId.get(knot.parentShaftId);
+        if (!host || !host.descriptor.hasSegments) continue;
+        const hostKnot = hostsOf(host).hostKnot;
+        if (hostKnot) hostKnotIdsWithChildren.add(hostKnot.id);
+    }
+
     const changedHostPosById: Record<string, Vec3> = {};
     const unresolvedBraceHostWarned = new Set<string>();
 
@@ -709,21 +775,10 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, Support
             // declared endpoints rather than a per-type fallback chain.
             const host = shaftHostBySegmentId.get(knot.parentShaftId);
             if (host) {
-                const owner = host.entity as ShaftEntity & { rootId?: string; parentKnotId?: string; hostKnotId?: string };
+                const owner = host.entity;
                 const index = owner.segments.findIndex((seg) => seg.id === knot.parentShaftId);
                 if (index !== -1) {
-                    const descriptor = getSupportTypeDescriptor(host.typeId);
-                    const knotField = descriptor.edges.find(
-                        (edge) => edge.to === 'knots' && edge.ownership === 'hostedBy',
-                    )?.field as keyof typeof owner | undefined;
-                    const hostKnotId = knotField ? owner[knotField] : undefined;
-
-                    const resolved = resolveSegmentEndpoints(owner, owner.segments[index], index, {
-                        root: owner.rootId ? snapshot.roots[owner.rootId] : undefined,
-                        hostKnot: typeof hostKnotId === 'string'
-                            ? nextKnots[hostKnotId] ?? snapshot.knots[hostKnotId]
-                            : undefined,
-                    });
+                    const resolved = resolveSegmentEndpoints(owner, owner.segments[index], index, hostsOf(host));
                     if (resolved) {
                         segment = owner.segments[index];
                         endpoints = resolved;
@@ -756,7 +811,7 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, Support
                     segmentCount: number,
                     axisStart: Vec3,
                     axisEnd: Vec3,
-                ): { score: number; t: number; pos: Vec3; distance: number; isEndpoint: boolean } => {
+                ): { score: number } => {
                     const tVal = computeClosestTOnSegmentFromPoint(authoredPos, targetEndpoints.start, targetEndpoints.end, targetSegment);
                     const posVal = calculateKnotPositionOnSegmentFromT(targetEndpoints.start, targetEndpoints.end, targetSegment, tVal);
 
@@ -782,94 +837,20 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, Support
                     const indexPenalty = Math.abs(segmentIndex - desiredIndex) * 0.25;
                     const score = distanceVal + endpointPenalty + indexPenalty;
 
-                    return {
-                        score,
-                        t: tVal,
-                        pos: posVal,
-                        distance: distanceVal,
-                        isEndpoint: isEndpointVal,
-                    };
+                    return { score };
                 };
 
-                const trunkRef = trunkSegmentMap.get(knot.parentShaftId);
-                if (trunkRef?.root) {
-                    const segments = trunkRef.trunk.segments;
-                    const firstSeg = segments[0];
-                    const lastSeg = segments[segments.length - 1];
-                    const firstEndpoints = firstSeg
-                        ? resolveSegmentEndpoints(trunkRef.trunk, firstSeg, 0, { root: trunkRef.root })
-                        : null;
-                    const lastEndpoints = lastSeg
-                        ? resolveSegmentEndpoints(trunkRef.trunk, lastSeg, segments.length - 1, { root: trunkRef.root })
-                        : null;
-
-                    if (segments.length > 0 && firstEndpoints && lastEndpoints) {
-                        const currentIndex = Math.max(0, segments.findIndex((seg) => seg.id === knot.parentShaftId));
-                        let best = scoreBinding(activeSegment, activeEndpoints, currentIndex, segments.length, firstEndpoints.start, lastEndpoints.end);
-                        let bestSegment = activeSegment;
-                        let bestEndpoints = activeEndpoints;
-
-                        for (let idx = 0; idx < segments.length; idx++) {
-                            const candidateSeg = segments[idx];
-                            const candidateEndpoints = resolveSegmentEndpoints(trunkRef.trunk, candidateSeg, idx, { root: trunkRef.root });
-                            if (!candidateEndpoints) continue;
-
-                            const candidate = scoreBinding(candidateSeg, candidateEndpoints, idx, segments.length, firstEndpoints.start, lastEndpoints.end);
-                            if (candidate.score + 0.05 < best.score) {
-                                best = candidate;
-                                bestSegment = candidateSeg;
-                                bestEndpoints = candidateEndpoints;
-                            }
-                        }
-
-                        if (bestSegment.id !== knot.parentShaftId) {
-                            activeSegment = bestSegment;
-                            activeEndpoints = bestEndpoints;
-                            nextParentShaftId = bestSegment.id;
-                        }
-                    }
-                } else {
-                    const branchRef = branchSegmentMap.get(knot.parentShaftId);
-                    if (branchRef) {
-                        const parentKnot = nextKnots[branchRef.branch.parentKnotId] ?? snapshot.knots[branchRef.branch.parentKnotId];
-                        if (parentKnot) {
-                            const segments = branchRef.branch.segments;
-                            const firstSeg = segments[0];
-                            const lastSeg = segments[segments.length - 1];
-                            const firstEndpoints = firstSeg
-                                ? resolveSegmentEndpoints(branchRef.branch, firstSeg, 0, { hostKnot: parentKnot })
-                                : null;
-                            const lastEndpoints = lastSeg
-                                ? resolveSegmentEndpoints(branchRef.branch, lastSeg, segments.length - 1, { hostKnot: parentKnot })
-                                : null;
-
-                            if (segments.length > 0 && firstEndpoints && lastEndpoints) {
-                                const currentIndex = Math.max(0, segments.findIndex((seg) => seg.id === knot.parentShaftId));
-                                let best = scoreBinding(activeSegment, activeEndpoints, currentIndex, segments.length, firstEndpoints.start, lastEndpoints.end);
-                                let bestSegment = activeSegment;
-                                let bestEndpoints = activeEndpoints;
-
-                                for (let idx = 0; idx < segments.length; idx++) {
-                                    const candidateSeg = segments[idx];
-                                    const candidateEndpoints = resolveSegmentEndpoints(branchRef.branch, candidateSeg, idx, { hostKnot: parentKnot });
-                                    if (!candidateEndpoints) continue;
-
-                                    const candidate = scoreBinding(candidateSeg, candidateEndpoints, idx, segments.length, firstEndpoints.start, lastEndpoints.end);
-                                    if (candidate.score + 0.05 < best.score) {
-                                        best = candidate;
-                                        bestSegment = candidateSeg;
-                                        bestEndpoints = candidateEndpoints;
-                                    }
-                                }
-
-                                if (bestSegment.id !== knot.parentShaftId) {
-                                    activeSegment = bestSegment;
-                                    activeEndpoints = bestEndpoints;
-                                    nextParentShaftId = bestSegment.id;
-                                }
-                            }
-                        }
-                    }
+                const rebound = host ? rebindToBestSegment(
+                    host,
+                    activeSegment,
+                    activeEndpoints,
+                    knot.parentShaftId,
+                    scoreBinding,
+                ) : null;
+                if (rebound) {
+                    activeSegment = rebound.segment;
+                    activeEndpoints = rebound.endpoints;
+                    nextParentShaftId = rebound.segment.id;
                 }
             }
 
@@ -885,7 +866,7 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, Support
             // rather than the generic segment-diameter rule below.
             const shaftHost = shaftHostBySegmentId.get(nextParentShaftId);
             const twigKnotDiameter = shaftHost
-                ? resolveKnotDiameter(shaftHost.typeId, shaftHost.entity, nextParentShaftId, t)
+                ? resolveKnotDiameter(shaftHost.descriptor.id, shaftHost.entity, nextParentShaftId, t)
                 : null;
             const computedDiameter = preserveImportedBraceUniformDiameter
                 ? (knot.diameter as number)
@@ -945,7 +926,7 @@ function normalizeLoadedKnotAndLeafGeometry(snapshot: Pick<SupportState, Support
                 isEndpointProjection &&
                 reprojectionDistance > 0.5;
 
-            const isDescendantHostKnot = branchHostKnotIdsWithChildren.has(knot.id);
+            const isDescendantHostKnot = hostKnotIdsWithChildren.has(knot.id);
             const preserveAuthoredTerminalBranchHostPos =
                 !braceHostKnotIds.has(knot.id) &&
                 branchParentKnotIds.has(knot.id) &&
