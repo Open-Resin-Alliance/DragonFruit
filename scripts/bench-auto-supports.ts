@@ -40,7 +40,7 @@ import { initializeBVH, accelerateGeometry } from '../src/utils/bvh';
 import { createDefaultSettings } from '../src/supports/Settings/types';
 import { setSettings } from '../src/supports/Settings/state';
 import { clearHistory } from '../src/history/historyStore';
-import { getSnapshot, resetKickstandsInState, resetStore } from '../src/supports/state';
+import { getSnapshot, resetSupportCollection, resetStore } from '../src/supports/state';
 import { registerSupportHistoryHandlers } from '../src/supports/history/useSupportHistoryHandlers';
 import { setModelMesh } from '../src/supports/autoSupport/meshStore';
 import {
@@ -441,7 +441,7 @@ async function runModel(
     const { islands, source } = await resolveIslands(entry, geometry, options);
 
     resetStore();
-    resetKickstandsInState();
+    resetSupportCollection('kickstands');
     clearHistory();
     const dispose = registerSupportHistoryHandlers();
     initializeBVH();

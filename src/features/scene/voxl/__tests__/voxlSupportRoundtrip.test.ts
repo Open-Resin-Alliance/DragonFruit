@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { buildSupportExportFromStores } from '../codec';
 import { parseVoxlBinaryV2, serializeVoxlDocumentV2 } from '../codec-v2';
-import { getSnapshot, loadFromImportFormat, resetStore, resetKickstandsInState} from '@/supports/state';
+import { getSnapshot, loadFromImportFormat, resetStore, resetSupportCollection} from '@/supports/state';
 import { readKickstands } from '@/supports/__tests__/helpers/kickstandFixture';
 import {
     getSupportTypeDescriptor,
@@ -39,7 +39,7 @@ function almostEqual(a: number, b: number, epsilon = 1e-6): boolean {
 
 test('VOXL support roundtrip preserves imported leaf and brace normalization intent', async () => {
     resetStore();
-    resetKickstandsInState();
+    resetSupportCollection('kickstands');
 
     const imported: DragonfruitImportFormat = {
         ...emptyWireCollections(),
@@ -214,7 +214,7 @@ test('VOXL support roundtrip preserves imported leaf and brace normalization int
     const parsed = (await parseVoxlBinaryV2(binary)).document;
 
     resetStore();
-    resetKickstandsInState();
+    resetSupportCollection('kickstands');
     loadFromImportFormat(parsed.supports);
 
     const roundTripped = getSnapshot();
@@ -236,5 +236,5 @@ test('VOXL support roundtrip preserves imported leaf and brace normalization int
     assert.ok(almostEqual(rightBraceKnot.diameter ?? 0, 1.1), 'Brace end knot diameter should stay uniform after VOXL roundtrip');
 
     resetStore();
-    resetKickstandsInState();
+    resetSupportCollection('kickstands');
 });

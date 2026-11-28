@@ -7,7 +7,7 @@ import { createDefaultAutoSupportSettings } from '../autoSupport/settings';
 import { MINIMA_RING_COUNT, MINIMA_RING_RADIUS_MM } from '../autoSupport/constants';
 import { collectContactPositions, runAutoPlace } from '../autoSupport/autoPlace';
 import { setModelMesh } from '../autoSupport/meshStore';
-import { getSnapshot, resetKickstandsInState, resetStore } from '../state';
+import { getSnapshot, resetSupportCollection, resetStore } from '../state';
 import { clearHistory } from '../../history/historyStore';
 import { accelerateGeometry, initializeBVH } from '@/utils/bvh';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
@@ -106,7 +106,7 @@ test('only minima the voxel mask missed are reinforced', () => {
 
 test('a minima tip ends up held by its own tip plus a ring of contacts', () => {
     resetStore();
-    resetKickstandsInState();
+    resetSupportCollection('kickstands');
     clearHistory();
 
     // 20 mm tip hanging from a 30°-from-horizontal cone, so the ring lands on

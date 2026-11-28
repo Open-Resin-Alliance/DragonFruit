@@ -3,7 +3,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 
 import { runAutoPlace } from '../autoSupport/autoPlace';
-import { getSnapshot, resetStore, resetKickstandsInState, setSnapshot } from '../state';
+import { getSnapshot, resetStore, resetSupportCollection, setSnapshot } from '../state';
 import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
 import { initializeBVH } from '@/utils/bvh';
@@ -62,7 +62,7 @@ function runAgainstHost(
     minBranchAngleDeg: number,
 ) {
     resetStore();
-    resetKickstandsInState();
+    resetSupportCollection('kickstands');
     initializeBVH();
     const settings = createDefaultSettings();
     settings.grid.enabled = false;

@@ -3,7 +3,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 
 import { collectFanShaftPoints, fanLeafToHost } from '../autoSupport/autoPlace';
-import { getSnapshot, resetStore, resetKickstandsInState } from '../state';
+import { getSnapshot, resetStore, resetSupportCollection } from '../state';
 import { setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
 import { initializeBVH } from '@/utils/bvh';
@@ -16,7 +16,7 @@ const MODEL = 'model-a';
 /** A real built trunk plus the shaft-sample pool the loop would hand the fan. */
 function scenario() {
     resetStore();
-    resetKickstandsInState();
+    resetSupportCollection('kickstands');
     initializeBVH();
     const settings = createDefaultSettings();
     settings.grid.enabled = false;

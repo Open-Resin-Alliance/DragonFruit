@@ -20,7 +20,7 @@ import { computeAutoSupportPlan } from '../autoSupport/autoPlace';
 import { setModelMesh } from '../autoSupport/meshStore';
 import { createDefaultSettings } from '../Settings/types';
 import { setSettings } from '../Settings/state';
-import { resetKickstandsInState, resetStore } from '../state';
+import { resetSupportCollection, resetStore } from '../state';
 import { footprintFromPoints } from '../../volumeAnalysis/Islands/voxelFootprint';
 import type { DetectedIsland } from '../../volumeAnalysis/Islands/types';
 
@@ -69,7 +69,7 @@ test('a tip whose lattice node cannot take it is placed without the grid', () =>
     settings.grid.spacingMm = GRID_SPACING_MM;
 
     resetStore();
-    resetKickstandsInState();
+    resetSupportCollection('kickstands');
     setSettings(settings);
     setModelMesh(MODEL_ID, mesh);
     try {
@@ -98,6 +98,6 @@ test('a tip whose lattice node cannot take it is placed without the grid', () =>
     } finally {
         setModelMesh(MODEL_ID, null);
         resetStore();
-        resetKickstandsInState();
+        resetSupportCollection('kickstands');
     }
 });

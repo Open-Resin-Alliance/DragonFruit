@@ -9,7 +9,7 @@ import type { AutoSupportSettings } from '../autoSupport/settings';
 import { getSettings, setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
 import { clearHistory } from '../../history/historyStore';
-import { getSnapshot, resetKickstandsInState, resetStore } from '../state';
+import { getSnapshot, resetSupportCollection, resetStore } from '../state';
 import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
 import { computeAutoSupportPlan, runAutoPlace } from '../autoSupport/autoPlace';
 import { setModelMesh } from '../autoSupport/meshStore';
@@ -79,7 +79,7 @@ function rotatedUnderside(): { mesh: THREE.Mesh; island: DetectedIsland } {
 
 function withStore<T>(mesh: THREE.Mesh | null, body: () => T): T {
     resetStore();
-    resetKickstandsInState();
+    resetSupportCollection('kickstands');
     clearHistory();
     const dispose = registerSupportHistoryHandlers();
     initializeBVH();
@@ -254,7 +254,7 @@ test('a worker that never starts falls back to the in-process run', async (t) =>
 
     try {
         resetStore();
-        resetKickstandsInState();
+        resetSupportCollection('kickstands');
         clearHistory();
         const dispose = registerSupportHistoryHandlers();
         initializeBVH();
@@ -309,7 +309,7 @@ test('a worker error falls back and surfaces the worker stack', async (t) => {
 
     try {
         resetStore();
-        resetKickstandsInState();
+        resetSupportCollection('kickstands');
         clearHistory();
         const dispose = registerSupportHistoryHandlers();
         initializeBVH();
@@ -386,7 +386,7 @@ test('the worker classifies an internal island from the cavity mesh payload', ()
     cavityMesh.updateMatrixWorld(true);
 
     resetStore();
-    resetKickstandsInState();
+    resetSupportCollection('kickstands');
     clearHistory();
     const payload: AutoPlaceWorkerPayload = {
         modelId: MODEL,
@@ -433,7 +433,7 @@ test('the worker fallback poses the cavity geometry with the model mesh', async 
     accelerateGeometry(shell);
 
     resetStore();
-    resetKickstandsInState();
+    resetSupportCollection('kickstands');
     clearHistory();
     const dispose = registerSupportHistoryHandlers();
     initializeBVH();

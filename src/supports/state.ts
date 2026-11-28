@@ -12,7 +12,7 @@ import { collectCascade, groupByCollection, ownedPrimitives, type EntityRef } fr
 import { modelCascadeSeeds } from './PlacementLogic/SupportModelLinker';
 import { pushSupportHistory } from './history/supportHistory';
 import { supportSettleFor } from './settle/seam';
-import { collectOwnedRootIds, hasSupportUpdater, hostKnotFieldsFor, typeIdForCollection, updateSupportEntity, JOINT_REMOVAL_TYPES, MODEL_ID_COLLECTION_KEYS, bundledSupportTypeId, parseKnotHostId, parsePrefixedSegmentId, isKnotHostId, isConeKnotHost, isSpanKnotHost, knotHostId, CONE_KNOT_HOST_TYPES, SPAN_KNOT_HOST_TYPES, SUPPORT_COLLECTION_KEYS, contactEndpointsFor, EDITABLE_SUPPORT_TYPES, hasSettingsInference, inferSupportSettings, isEditableSupportType, registerCollectionRestore, collectionsMissingRestore, registerSettingsInference, transformExtrasFor, type SupportTypeDescriptor, createEmptySupportCollections, getSupportTypeDescriptor, registerKnotDiameterRule, registerSupportUpdater, registerSupportTypeResolver, resolveKnotDiameter, resolveSupportTypeIdOf, type SupportEntityFor, SUPPORT_STATE_COLLECTIONS, SUPPORT_TYPES, type SupportTypeId, type JointRemovalTypeId } from './supportTypeRegistry';
+import { collectOwnedRootIds, hasSupportUpdater, hostKnotFieldsFor, typeIdForCollection, updateSupportEntity, JOINT_REMOVAL_TYPES, MODEL_ID_COLLECTION_KEYS, bundledSupportTypeId, parseKnotHostId, parsePrefixedSegmentId, isKnotHostId, isConeKnotHost, isSpanKnotHost, knotHostId, CONE_KNOT_HOST_TYPES, SPAN_KNOT_HOST_TYPES, SUPPORT_COLLECTION_KEYS, contactEndpointsFor, EDITABLE_SUPPORT_TYPES, hasSettingsInference, inferSupportSettings, isEditableSupportType, registerCollectionRestore, collectionsMissingRestore, registerSettingsInference, transformExtrasFor, type SupportTypeDescriptor, createEmptySupportCollections, getSupportTypeDescriptor, registerSupportUpdater, registerSupportTypeResolver, resolveKnotDiameter, resolveSupportTypeIdOf, type SupportEntityFor, SUPPORT_STATE_COLLECTIONS, SUPPORT_TYPES, type SupportTypeId, type JointRemovalTypeId } from './supportTypeRegistry';
 import { typesMissingExportGroupBuilder } from './exportGeometry/seam';
 import { migrateLegacySupportPayload } from './importMigrations';
 import type { SupportCollectionKey } from './supportTypeRegistry';
@@ -29,9 +29,7 @@ import { quaternionFromGlobalEuler } from '@/utils/rotation';
 import { v4 as uuidv4 } from 'uuid';
 import { applyImportDefaultsToSupportPayload, getSavedImportDefaultsSettings } from '@/features/scene/importDefaultsPreferences';
 import { mergeSettingsWithDefaults, type SupportSettings } from './Settings/types';
-import { createDefaultSettings } from './Settings/types';
 import { decodeSupportSettingsHex, encodeSupportSettingsHex } from './Settings/supportSettingsCodec';
-import { resolveTwigDiameterAtSegmentT, twigJointDiameterForLocalDiameter } from './SupportTypes/Twig/twigTaper';
 import { hasWindow } from '@/utils/dom';
 import { clonePlainData } from '@/utils/plainDataClone';
 
@@ -1370,8 +1368,7 @@ export function countSupportEntities(source: SupportState): number {
     let count = 0;
     for (const descriptor of SUPPORT_TYPES) {
         const view = source[descriptor.location.key] as Record<string, unknown> | undefined;
-        if (!view) continue;
-        for (const _id in view) count += 1;
+        if (view) count += Object.keys(view).length;
     }
     return count;
 }
@@ -1389,8 +1386,7 @@ export function reassignAllSupportModelIds(modelId: string): boolean {
         notify();
     }
 
-    const kickstandChanged = reassignAllKickstandModelIdsInState(modelId);
-    return changed || kickstandChanged;
+    return changed;
 }
 
 
@@ -1768,14 +1764,14 @@ export function transformSupportRecord(
  * socket stays on the joint. Only the model-transform paths call this — a paste
  * is a placement delta and must move the whole stump with the copy.
  */
-function seatStumpAfterTransform(stump: Stump, preserveRootZ: boolean, original: Stump): Stump {
+function seatInlineRootAfterTransform(stump: Stump, preserveRootZ: boolean, original: Stump): Stump {
     const rootPos = preserveRootZ ? { ...stump.rootPos, z: original.rootPos.z } : stump.rootPos;
     const socketZ = rootPos.z + stump.rootHeight + INLINE_ROOT_SOCKET_CLEARANCE_MM;
     return {
         ...stump,
         rootPos,
         joint: { ...stump.joint, pos: { x: rootPos.x, y: rootPos.y, z: socketZ } },
-        contactCone: seatStumpCone(stump.contactCone, socketZ),
+        contactCone: seatInlineRootCone(stump.contactCone, socketZ),
     };
 }
 
@@ -1885,7 +1881,7 @@ function convertTrunkToStump(trunk: Trunk, root: Roots | undefined): Stump | nul
             diameter: top.diameter,
         },
         segments: [],
-        contactCone: seatStumpCone(trunk.contactCone, rootTopZ),
+        contactCone: seatInlineRootCone(trunk.contactCone, rootTopZ),
         origin: trunk.origin,
     };
 }
@@ -1960,78 +1956,11 @@ function eulersRoughlyEqual(a: THREE.Euler, b: THREE.Euler, epsilon = 1e-8) {
         && a.order === b.order;
 }
 
-/* --- Kickstands: a SupportState collection; their root and host knot live in
- * the shared `roots`/`knots`. --- */
-
-/** Kickstand plus the root and host knot it owns, as callers still expect it. */
-function buildKickstandResult(kickstand: Kickstand): KickstandBuildResult | null {
-    const root = state.roots[kickstand.rootId];
-    const hostKnot = state.knots[kickstand.hostKnotId];
-    if (!root || !hostKnot) return null;
-    return { kickstand, root, hostKnot };
-}
-
-function removeKickstandFromState(id: string): KickstandBuildResult | null {
-    const kickstand = state.kickstands[id];
-    if (!kickstand) return null;
-
-    const result = buildKickstandResult(kickstand);
-    if (!result) return null;
-
-    const kickstands = { ...state.kickstands };
-    delete kickstands[kickstand.id];
-    const roots = { ...state.roots };
-    delete roots[result.root.id];
-    const knots = { ...state.knots };
-    delete knots[result.hostKnot.id];
-
-    setState({
-        ...state,
-        kickstands,
-        roots,
-        knots,
-        selectedId: state.selectedId === id ? null : state.selectedId,
-    });
+/** Empties one entity collection, leaving the primitives it pointed at. */
+export function resetSupportCollection(key: SupportCollectionKey) {
+    if (Object.keys(state[key]).length === 0) return;
+    setState({ ...state, [key]: {} });
     notify();
-
-    return result;
-}
-
-export function resetKickstandsInState() {
-    if (Object.keys(state.kickstands).length === 0) return;
-    setState({ ...state, kickstands: {} });
-    notify();
-}
-
-function reassignAllKickstandModelIdsInState(modelId: string): boolean {
-    if (!modelId) return false;
-
-    let changed = false;
-    let nextKickstands = state.kickstands;
-    let nextRoots = state.roots;
-
-    for (const kickstand of Object.values(state.kickstands)) {
-        if (kickstand.modelId === modelId) continue;
-
-        if (!changed) {
-            nextKickstands = { ...state.kickstands };
-            nextRoots = { ...state.roots };
-            changed = true;
-        }
-
-        nextKickstands[kickstand.id] = { ...kickstand, modelId };
-
-        const root = state.roots[kickstand.rootId];
-        if (root && root.modelId !== modelId) {
-            nextRoots[root.id] = { ...root, modelId };
-        }
-    }
-
-    if (!changed) return false;
-
-    setState({ ...state, kickstands: nextKickstands, roots: nextRoots });
-    notify();
-    return true;
 }
 
 export type SupportTransformCommitResult = {
@@ -2290,8 +2219,10 @@ export function transformSupportsForModel(
             }
 
             const transformed = transformSupportRecord(descriptor.id, entity, delta);
-            target[id] = descriptor.id === 'stump'
-                ? seatStumpAfterTransform(transformed as unknown as Stump, delta.preserveRootZ, entity as unknown as Stump)
+            // An inline root is the entity's own plate contact, so it has to be
+            // reseated after the move rather than carried by a `Roots` record.
+            target[id] = descriptor.lower.kind === 'inlineRoot'
+                ? seatInlineRootAfterTransform(transformed as unknown as Stump, delta.preserveRootZ, entity as unknown as Stump)
                 : transformed;
         }
     }
@@ -2369,12 +2300,20 @@ export function transformAllSupportsForSingleModel(
             : transformSupportRecord(typeIdForCollection(collection), record, delta)) as unknown as typeof entity;
     });
 
-    transformed.stumps = Object.fromEntries(
-        Object.entries(transformed.stumps).map(([id, stump]) => [
-            id,
-            seatStumpAfterTransform(stump, delta.preserveRootZ, state.stumps[id] ?? stump),
-        ]),
-    );
+    // An inline root is the entity's own plate contact, so it is reseated after
+    // the move rather than carried by a `Roots` record.
+    for (const descriptor of SUPPORT_TYPES) {
+        if (descriptor.lower.kind !== 'inlineRoot') continue;
+        const key = descriptor.location.key;
+        const before = state[key] as unknown as Record<string, Stump>;
+        const after = transformed[key] as unknown as Record<string, Stump>;
+        (transformed as unknown as Record<string, unknown>)[key] = Object.fromEntries(
+            Object.entries(after).map(([id, entity]) => [
+                id,
+                seatInlineRootAfterTransform(entity, delta.preserveRootZ, before[id] ?? entity),
+            ]),
+        );
+    }
 
     const nextKnots: Record<string, Knot> = {};
     for (const knot of Object.values(state.knots)) {
@@ -3913,7 +3852,7 @@ function stretchConeToSocketZ<T extends { pos: Vec3; normal: Vec3; profile: { le
  * generic helper this measures from the socket `getFinalSocketPosition` reports,
  * so the contact disk's own offset is part of the answer.
  */
-function seatStumpCone(cone: ContactCone, socketZ: number): ContactCone {
+function seatInlineRootCone(cone: ContactCone, socketZ: number): ContactCone {
     const dz = cone.normal.z;
     if (!(Math.abs(dz) > 1e-6)) return cone;
     const current = getFinalSocketPosition(cone);

@@ -7,7 +7,7 @@ import { DEFAULT_FILTER_TOGGLES, annotateFilterFlags, applyFilter } from '@/volu
 import type { DetectedIsland } from '@/volumeAnalysis/Islands/types';
 import type { AutoPlaceResult } from '../autoSupport/types';
 import { runAutoPlace } from '../autoSupport/autoPlace';
-import { resetStore, resetKickstandsInState } from '../state';
+import { resetStore, resetSupportCollection } from '../state';
 import { clearHistory } from '../../history/historyStore';
 import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
 
@@ -64,7 +64,7 @@ function placedTotal(result: AutoPlaceResult): number {
 
 test('a domed underside on the plate reaches placement and gets supports', () => {
   resetStore();
-  resetKickstandsInState();
+  resetSupportCollection('kickstands');
   clearHistory();
   const disposeHandlers = registerSupportHistoryHandlers();
 
@@ -81,7 +81,7 @@ test('a domed underside on the plate reaches placement and gets supports', () =>
 
 test('the same dome lifted clear of the plate also places supports', () => {
   resetStore();
-  resetKickstandsInState();
+  resetSupportCollection('kickstands');
   clearHistory();
   const disposeHandlers = registerSupportHistoryHandlers();
 

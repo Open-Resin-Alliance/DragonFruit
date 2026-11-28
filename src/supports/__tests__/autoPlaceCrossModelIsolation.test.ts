@@ -9,7 +9,7 @@ import { collectFanShaftPoints, computeAutoSupportPlan, fanLeafToHost, runAutoPl
 import { setModelMesh } from '../autoSupport/meshStore';
 import { registerSupportHistoryHandlers } from '../history/useSupportHistoryHandlers';
 import { modelIdOfParentShaft } from '../PlacementLogic/SupportModelLinker';
-import { getSnapshot, resetKickstandsInState, resetStore } from '../state';
+import { getSnapshot, resetSupportCollection, resetStore } from '../state';
 import type { SupportState } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -244,7 +244,7 @@ test('consolidation never converts another model\'s trunk into one of our leaves
 
 test('a second model rebuilding the same island ids does not steal the first model\'s knots', () => {
     resetStore();
-    resetKickstandsInState();
+    resetSupportCollection('kickstands');
     clearHistory();
     const disposeHandlers = registerSupportHistoryHandlers();
 

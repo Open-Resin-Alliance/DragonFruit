@@ -6,7 +6,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { runAutoPlace } from '../autoSupport/autoPlace';
 import { setModelMesh } from '../autoSupport/meshStore';
 import type { AutoPlaceResult } from '../autoSupport/types';
-import { getSnapshot, resetStore, resetKickstandsInState } from '../state';
+import { getSnapshot, resetStore, resetSupportCollection } from '../state';
 import { getSettings, setSettings } from '../Settings/state';
 import { createDefaultSettings } from '../Settings/types';
 import { initializeBVH, accelerateGeometry } from '@/utils/bvh';
@@ -159,7 +159,7 @@ interface RunSignature {
 
 function runSignature(gridEnabled: boolean): RunSignature {
     resetStore();
-    resetKickstandsInState();
+    resetSupportCollection('kickstands');
     initializeBVH();
     setModelMesh(MODEL, cavityMesh());
 
