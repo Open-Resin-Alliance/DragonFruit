@@ -965,6 +965,7 @@ function sanitizeMaterialTemplate(input: unknown): Omit<MaterialProfile, 'id' | 
         supportTipShrinkPercent: 10,
         selectedLutCurveId: 'default',
         aaOnSupports: false,
+        aaPreserveMaterialBoundaries: true,
         ditherEnabled: false,
         ditherBitDepth: 3,
         ditherDeviceGamma: 3.0,
